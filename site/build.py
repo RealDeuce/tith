@@ -16,7 +16,13 @@ import subprocess
 ROOT = Path(__file__).resolve().parent.parent
 SITE = ROOT / "site"
 STANDARDS = ROOT / "standards"
-STATIC_FILES = ("index.html", "styles.css", "app.js")
+STATIC_FILES = (
+    "index.html",
+    "document.html",
+    "styles.css",
+    "app.js",
+    "document.js",
+)
 HEADER_PATTERN = re.compile(r"^(Publication|Revision|Title|Date):\s*(.+?)\s*$")
 DISPLAY_HYPHENS = str.maketrans({"‑": "-", "‐": "-", "–": "-"})
 

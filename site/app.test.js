@@ -97,4 +97,8 @@ test("renders document tables from the generated archive", async () => {
     "1 standards · 1 proposals · 1 references"
   );
   assert.equal(nodes["#document-search"].disabled, false);
+  const firstGroup = nodes["#document-groups"].children[0];
+  const firstTable = firstGroup.children[1].children[0];
+  const firstLink = firstTable.children[1].children[0].children[0].children[0];
+  assert.equal(firstLink.href, "document.html?name=TTS-0002.txt");
 });

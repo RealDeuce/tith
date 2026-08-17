@@ -47,7 +47,7 @@
       const row = document.createElement("tr");
       const nameCell = document.createElement("td");
       const link = document.createElement("a");
-      link.href = `standards/${encodeURIComponent(entry.filename)}`;
+      link.href = `document.html?name=${encodeURIComponent(entry.filename)}`;
       link.textContent = entry.publication;
       nameCell.append(link);
       row.append(nameCell);
