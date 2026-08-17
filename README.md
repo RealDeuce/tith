@@ -1,3 +1,9 @@
+This repository contains the TITH protocol standards and a proof-of-concept
+implementation.  The implementation lives in `poc/` and is not currently
+intended to be consumed as a portable library.
+
+Build the proof of concept with `gmake -C poc`.
+
 Goals:
 - Simple to implement
 - Easily extensible
