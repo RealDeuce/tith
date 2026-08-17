@@ -57,8 +57,8 @@ Contents
   Legacy FTN software commonly exposes a NetMail .MSG directory and a
   Binkley‐style outbound containing control files which refer to files
   for transfer.  Door games often use both interfaces to create a
-  NetMail with an attached packet.  FTS‑0001 revision 16 describes the
-  stored Message and its overloaded Subject file list; FTS‑5005
+  NetMail with an attached packet.  FTS‑0001.016 revision 16 describes
+  the stored Message and its overloaded Subject file list; FTS‑5005.003
   revision 3 describes the BinkleyTerm‐style outbound.
 
   The Submit operation performs both roles without exposing a spool
@@ -891,28 +891,28 @@ Contents
 
   In legacy FTN, exported EchoMail and FDN transfers are NetMail
   traffic.  They use individual NetMail messages, packets, file
-  attaches, and TIC machinery described by FTS‑0004 version 3.31,
-  FTS‑5006 revision 1, and FSC‑0028.  Submit-Items records a distinct
-  native semantic Kind after conversion so the legacy NetMail carriage
-  fact does not accidentally select TITH Destination routing instead
-  of the area's explicit links.
+  attaches, and TIC machinery described by FTS‑0004.001 version 3.31,
+  FTS‑5006.001 revision 1, and FSC‑0028.001.  Submit-Items records a
+  distinct native semantic Kind after conversion so the legacy NetMail
+  carriage fact does not accidentally select TITH Destination routing
+  instead of the area's explicit links.
 
 
 A. References
 ─────────────
 
-  [FTS‑0001] Revision 16, "A Basic FidoNet Technical Standard", FTSC,
+  [FTS‑0001.016] Revision 16, "A Basic FidoNet Technical Standard", FTSC,
   1995‑09‑30.
 
-  [FTS‑0004] Version 3.31, "EchoMail Specification", FTSC,
+  [FTS‑0004.001] Version 3.31, "EchoMail Specification", FTSC,
   1987‑12‑12.
 
-  [FTS‑5005] Revision 3, "Advanced BinkleyTerm Style Outbound flow and
+  [FTS‑5005.003] Revision 3, "Advanced BinkleyTerm Style Outbound flow and
   control files", FTSC, 2016‑10‑31.
 
-  [FTS‑5006] Revision 1, "TIC file format", FTSC, 2016‑11‑07.
+  [FTS‑5006.001] Revision 1, "TIC file format", FTSC, 2016‑11‑07.
 
-  [FSC‑0028] "FwdSpec — A Collection of Notes on Moving Files in
+  [FSC‑0028.001] "FwdSpec — A Collection of Notes on Moving Files in
   FidoNet", FTSC, 1988‑12‑02.
 
   [Libhydrogen] Version 1,

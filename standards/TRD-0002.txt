@@ -163,7 +163,7 @@ Contents
   traditional negative‐one address for applications.  Those provisions
   are useful background for FidoNet, but do not govern other domains.
 
-  FSP‑1016 attempted automated point enrollment using temporary
+  FSP‑1016.003 attempted automated point enrollment using temporary
   addresses, passwords, control files, and later polling.  The useful
   general concepts are an applicant identity, an asynchronous
   decision, and a retrievable response.  TITH obtains those properties
@@ -175,10 +175,10 @@ Contents
 A. References
 ─────────────
 
-  [FSP‑1004] "Standard Fidonet Addressing", Lee Kindness,
+  [FSP‑1004.001] "Standard Fidonet Addressing", Lee Kindness,
   1997‑05‑15.
 
-  [FSP‑1016] "Automatic configuration of Points in FidoNet",
+  [FSP‑1016.003] "Automatic configuration of Points in FidoNet",
   Christian von Busse, 2003‑06‑20.
 
   [Policy 4] "FidoNet Policy Document", version 4.07, 1989‑06‑09.

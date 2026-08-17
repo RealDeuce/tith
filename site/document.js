@@ -29,11 +29,11 @@
       return `document.html?name=${encodeURIComponent(local.filename)}`;
     }
 
-    if (match[3]) {
-      return `http://ftsc.org/docs/${normalized.toLocaleLowerCase()}`;
+    if (!match[3]) {
+      return null;
     }
-    const searchTerm = encodeURIComponent(localId);
-    return `http://ftsc.org/docs/search.cgi?look4=${searchTerm}&case=Yes`;
+    const archiveDirectory = match[1] === "FSP" ? "old/" : "";
+    return `http://ftsc.org/docs/${archiveDirectory}${normalized.toLocaleLowerCase()}`;
   }
 
   function renderLinkedText(text, documents) {

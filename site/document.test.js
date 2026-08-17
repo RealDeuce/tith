@@ -49,6 +49,7 @@ const archive = {
 const source = [
   "See TTS‑0002.",
   "See [FTS‑5000.005].",
+  "See [FSP‑1016.003].",
   "See [FTS‑0001].",
   "See https://example.com/reference"
 ].join("\n");
@@ -84,7 +85,13 @@ test("links local, FTSC, and URL references in document text", async () => {
   assert.deepEqual(targets, [
     "document.html?name=TTS-0002.txt",
     "http://ftsc.org/docs/fts-5000.005",
-    "http://ftsc.org/docs/search.cgi?look4=FTS-0001&case=Yes",
+    "http://ftsc.org/docs/old/fsp-1016.003",
     "https://example.com/reference"
   ]);
+  assert.equal(
+    nodes["#document-text"].children.some(
+      (child) => child.tagName === "a" && child.textContent === "FTS‑0001"
+    ),
+    false
+  );
 });

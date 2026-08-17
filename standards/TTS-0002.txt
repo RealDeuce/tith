@@ -149,7 +149,7 @@ Contents
 A. References
 ─────────────
 
-  [FTA‑1006] "Keywords to indicate requirement levels"
+  [FTA‑1006.002] "Keywords to indicate requirement levels"
   FTSC, 2000‑01‑17.
 
 

@@ -266,7 +266,8 @@ Contents
   At the legacy FTN boundary, exported EchoMail and file distribution
   network (FDN) transfers are NetMail traffic.  They use individual
   NetMail messages, packets, file attaches, and TIC conventions
-  described by FTS‑0004 version 3.31, FTS‑5006 revision 1, and FSC‑0028.
+  described by FTS‑0004.001 version 3.31, FTS‑5006.001 revision 1, and
+  FSC‑0028.001.
   The adapter classifies what that legacy NetMail carriage represents.
   Ordinary NetMail uses TSP‑0006 Submit or a Submit-Items NetMail Job;
   EchoMail and FDN use the corresponding Submit-Items Kind.  This
@@ -317,18 +318,18 @@ Contents
 A. References
 ─────────────
 
-  [FTS‑0001] Revision 16, "A Basic FidoNet Technical Standard", FTSC,
+  [FTS‑0001.016] Revision 16, "A Basic FidoNet Technical Standard", FTSC,
   1995‑09‑30.
 
-  [FTS‑0004] Version 3.31, "EchoMail Specification", FTSC,
+  [FTS‑0004.001] Version 3.31, "EchoMail Specification", FTSC,
   1987‑12‑12.
 
-  [FTS‑5005] Revision 3, "Advanced BinkleyTerm Style Outbound flow and
+  [FTS‑5005.003] Revision 3, "Advanced BinkleyTerm Style Outbound flow and
   control files", FTSC, 2016‑10‑31.
 
-  [FTS‑5006] Revision 1, "TIC file format", FTSC, 2016‑11‑07.
+  [FTS‑5006.001] Revision 1, "TIC file format", FTSC, 2016‑11‑07.
 
-  [FSC‑0028] "FwdSpec — A Collection of Notes on Moving Files in
+  [FSC‑0028.001] "FwdSpec — A Collection of Notes on Moving Files in
   FidoNet", FTSC, 1988‑12‑02.
 
   [TSP‑0002] "Routing and Distribution Configuration", TITH,
