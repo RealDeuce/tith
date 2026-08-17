@@ -70,8 +70,17 @@ def build(output: Path) -> None:
         shutil.rmtree(output)
     output.mkdir(parents=True)
 
+    source_commit = os.environ.get("GITHUB_SHA") or git_value("rev-parse", "HEAD")
     for filename in STATIC_FILES:
-        shutil.copy2(SITE / filename, output / filename)
+        source = SITE / filename
+        destination = output / filename
+        if source.suffix == ".html":
+            rendered = source.read_text(encoding="utf-8").replace(
+                "{{SOURCE_COMMIT}}", source_commit
+            )
+            destination.write_text(rendered, encoding="utf-8")
+        else:
+            shutil.copy2(source, destination)
 
     output_standards = output / "standards"
     output_standards.mkdir()
@@ -80,7 +89,6 @@ def build(output: Path) -> None:
         documents.append(document_metadata(source))
         shutil.copy2(source, output_standards / source.name)
 
-    source_commit = os.environ.get("GITHUB_SHA") or git_value("rev-parse", "HEAD")
     standards_updated_at = git_value("log", "-1", "--format=%cI", "--", "standards")
     archive = {
         "sourceCommit": source_commit,

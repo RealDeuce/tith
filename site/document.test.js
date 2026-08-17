@@ -48,6 +48,7 @@ const archive = {
 };
 const source = [
   "See TTS‑0002.",
+  "See [FTA‑1006.002].",
   "See [FTS‑5000.005].",
   "See [FSP‑1016.003].",
   "See [FTS‑0001].",
@@ -84,6 +85,7 @@ test("links local, FTSC, and URL references in document text", async () => {
     .map((link) => link.href);
   assert.deepEqual(targets, [
     "document.html?name=TTS-0002.txt",
+    "http://ftsc.org/docs/fta-1006.002",
     "http://ftsc.org/docs/fts-5000.005",
     "http://ftsc.org/docs/old/fsp-1016.003",
     "https://example.com/reference"
