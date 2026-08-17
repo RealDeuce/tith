@@ -43,17 +43,17 @@
     table.append(head);
 
     const body = document.createElement("tbody");
-    for (const document of documents) {
+    for (const entry of documents) {
       const row = document.createElement("tr");
       const nameCell = document.createElement("td");
       const link = document.createElement("a");
-      link.href = `standards/${encodeURIComponent(document.filename)}`;
-      link.textContent = document.publication;
+      link.href = `standards/${encodeURIComponent(entry.filename)}`;
+      link.textContent = entry.publication;
       nameCell.append(link);
       row.append(nameCell);
-      makeCell(row, document.title);
-      makeCell(row, document.revision);
-      makeCell(row, document.date);
+      makeCell(row, entry.title);
+      makeCell(row, entry.revision);
+      makeCell(row, entry.date);
       body.append(row);
     }
     table.append(body);

@@ -32,6 +32,9 @@ jobs:
       - name: Build standards archive
         run: python3 site/build.py --output _site
 
+      - name: Test archive rendering
+        run: node --test site/app.test.js
+
       - name: Upload GitHub Pages artifact
         uses: actions/upload-pages-artifact@v5
         with:
