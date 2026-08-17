@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="TITH technical standards: this really isn't that hard.">
+  <title>TITH — This Isn't That Hard</title>
+  <link rel="stylesheet" href="styles.css">
+  <script src="app.js" defer></script>
+</head>
+<body>
+  <aside class="sidebar" aria-label="Site navigation">
+    <div class="mascot" role="img" aria-label="A dog presenting a TITH packet">
+      <pre aria-hidden="true"> /\_/\
+( ·.· )  ┌──────┐
+ / &gt;▣    │ TITH │
+         └──────┘</pre>
+      <span>Good protocol.</span>
+    </div>
+
+    <div class="ipv6-badge" title="No remote tracking pixel was harmed">
+      <b>IPv6?</b> MUST.
+    </div>
+
+    <nav>
+      <p class="nav-title">Site Map</p>
+      <ul>
+        <li><a href="#home">Home</a></li>
+        <li><a href="#documents">Documents</a></li>
+        <li><a href="#old-docs">Old Docs</a></li>
+        <li><a href="#search">Doc Search</a></li>
+        <li><a href="https://github.com/RealDeuce/tith/commits/master/standards">TITH News</a></li>
+      </ul>
+    </nav>
+
+    <nav>
+      <p class="nav-title">Contents</p>
+      <ul>
+        <li><a href="#tts">Standards</a></li>
+        <li><a href="#tsp">Proposals</a></li>
+        <li><a href="#trd">Reference</a></li>
+      </ul>
+    </nav>
+
+    <p class="sidebar-note">Best viewed with any browser made this century.</p>
+  </aside>
+
+  <main id="home">
+    <header class="masthead">
+      <p class="eyebrow">A worldwide amateur refusal to overcomplicate things</p>
+      <h1>TITH</h1>
+      <h2>This Isn't That Hard</h2>
+      <span class="stamp">Unapproved by every committee</span>
+    </header>
+
+    <section class="intro">
+      <p>
+        TITH is an unelected non-body of developers and sysops who document how
+        a protocol should work <em>before</em> current practice gets a chance to
+        become sacred. It promotes technical innovation by specifying one clear
+        way to do a thing and then stopping.
+      </p>
+      <p>
+        Technical standards, standards proposals, and documents explaining why
+        none of this needed seventeen mutually corrective memos have been
+        <a href="#documents">archived and indexed</a>.
+      </p>
+    </section>
+
+    <section class="submission">
+      <h3>Proposal submission</h3>
+      <ol>
+        <li>Write down exactly what the bytes mean.</li>
+        <li>Check that two implementers could independently agree.</li>
+        <li><a href="https://github.com/RealDeuce/tith/pulls">Open a pull request.</a></li>
+      </ol>
+      <p class="fine-print">No election, netmail, point address, or ceremonial modem handshake required.</p>
+    </section>
+
+    <section id="documents" class="archive" aria-labelledby="archive-title">
+      <div class="archive-heading">
+        <div>
+          <p class="kicker">Automatically generated document archive</p>
+          <h2 id="archive-title">TITH Documents</h2>
+        </div>
+        <div id="archive-stats" class="archive-stats" aria-live="polite">Dialing index…</div>
+      </div>
+
+      <div id="search" class="search-box">
+        <label for="document-search">Doc Search</label>
+        <input id="document-search" type="search" placeholder="Try “bundle”, “nodelist”, or “0004”" autocomplete="off">
+        <span id="search-count" aria-live="polite"></span>
+      </div>
+
+      <div id="document-groups" aria-live="polite">
+        <p class="loading">Negotiating a carrier-independent table format…</p>
+      </div>
+
+      <noscript>
+        <p class="notice">The archive index needs JavaScript. The raw documents remain available in the
+          <a href="https://github.com/RealDeuce/tith/tree/master/standards">standards directory</a>.
+        </p>
+      </noscript>
+    </section>
+
+    <section id="old-docs" class="old-docs">
+      <h3>Old Documents</h3>
+      <p>There aren't any. Git remembers revisions so filenames don't have to.</p>
+    </section>
+
+    <footer>
+      <p>All standards are released to the public domain unless otherwise specified.</p>
+      <p id="build-note">Generated whenever somebody pushes the standards too far.</p>
+      <p class="disclaimer">This site is a parody and is not affiliated with the FidoNet Technical Standards Committee.</p>
+    </footer>
+  </main>
+</body>
+</html>

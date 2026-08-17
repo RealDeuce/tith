@@ -2,6 +2,9 @@ This repository contains the TITH protocol standards and a proof-of-concept
 implementation.  The implementation lives in `poc/` and is not currently
 intended to be consumed as a portable library.
 
+The generated standards archive is published at
+<https://realdeuce.github.io/tith/>.
+
 Build the proof of concept with `gmake -C poc`.
 
 Goals:

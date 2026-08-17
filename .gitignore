@@ -4,3 +4,5 @@ tith.cfg
 tith
 nodelist
 TITH-*
+_site/
+__pycache__/
