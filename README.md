@@ -140,6 +140,17 @@ cargo run -p tithd -- serve-tcp 127.0.0.1:24556 \
     SERVER-PUBLIC-KEY /secure/path/server-ipc.secret CLIENT-PUBLIC-KEY
 ```
 
+The full mailer form adds the same submission configuration used by the Unix
+binding:
+
+```sh
+cargo run -p tithd -- serve-tcp-mailer 127.0.0.1:24556 \
+    /var/db/tith/state.redb /var/db/tith/exports mailer \
+    SERVER-PUBLIC-KEY /secure/path/server-ipc.secret CLIENT-PUBLIC-KEY \
+    /usr/local/etc/tith fidonet /var/db/tith/nodelist.txt \
+    fidonet#1:123/45 /secure/path/node.secret
+```
+
 To exercise native TTS-0006 receipt, generate a dedicated node signing key and
 place its printed public key in the applicable nodelist IIH entry or unlisted
 Peer configuration:

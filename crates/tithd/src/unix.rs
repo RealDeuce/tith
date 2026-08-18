@@ -10,6 +10,7 @@ use nix::unistd::{Uid, geteuid};
 
 use crate::ipc::{IpcService, Principal};
 use crate::submission::SubmissionEngine;
+use tith_ipc::{Document, DocumentFramer, EnvelopeKind};
 
 pub fn serve(
 	socket: &Path,
@@ -96,15 +97,22 @@ fn peer_uid(_: &UnixStream) -> Result<Uid, Box<dyn Error>> {
 
 pub(crate) fn read_request(stream: &mut &UnixStream) -> Result<Vec<u8>, Box<dyn Error>> {
 	let mut request = Vec::new();
+	let mut line = Vec::new();
 	let mut byte = [0_u8; 1];
+	let mut framer = DocumentFramer::new(EnvelopeKind::Request);
 	loop {
 		let count = stream.read(&mut byte)?;
 		if count == 0 {
 			return Err("connection ended before final End".into());
 		}
 		request.push(byte[0]);
-		if request.ends_with(b"\nEnd\n") {
+		line.push(byte[0]);
+		if byte[0] == b'\n' && framer.push(&line)? {
+			Document::parse(&request, EnvelopeKind::Request)?;
 			return Ok(request);
+		}
+		if byte[0] == b'\n' {
+			line.clear();
 		}
 	}
 }

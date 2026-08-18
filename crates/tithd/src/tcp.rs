@@ -7,6 +7,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use crate::ipc::{IpcService, Principal};
+use crate::submission::SubmissionEngine;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD_NO_PAD;
 use tith_crypto::{KX_SECRET_KEY_BYTES, KxKeyPair, KxPublicKey, KxSecretKey};
@@ -43,6 +44,7 @@ pub fn serve(
 	application: String,
 	server_keys: KxKeyPair,
 	client_public: KxPublicKey,
+	submission: Option<Arc<SubmissionEngine>>,
 ) -> Result<(), Box<dyn Error>> {
 	if !address.ip().is_loopback() {
 		return Err("refusing to bind TCP IPC to a nonloopback address".into());
@@ -53,7 +55,11 @@ pub fn serve(
 	if !listener.local_addr()?.ip().is_loopback() {
 		return Err("TCP IPC listener is not bound to loopback".into());
 	}
-	let service = Arc::new(IpcService::create(database, exports)?);
+	let mut service = IpcService::create(database, exports)?;
+	if let Some(submission) = submission {
+		service = service.with_submission(submission);
+	}
+	let service = Arc::new(service);
 	let principal = Arc::new(Principal::single(
 		STANDARD_NO_PAD.encode(client_public.as_bytes()),
 		application,
@@ -90,7 +96,7 @@ fn transaction(
 	let (mut channel, ()) = SecureChannel::accept(stream, server_keys, |key| {
 		(*key == client_public).then_some(())
 	})?;
-	let request = channel.receive_flat_document(EnvelopeKind::Request)?;
+	let request = channel.receive_document(EnvelopeKind::Request)?;
 	let response = service.process_request(&request, Some(principal));
 	channel.send_document(&response, EnvelopeKind::Result)?;
 	let mut stream = channel.into_inner();
@@ -144,7 +150,7 @@ mod tests {
 		channel
 			.send_document(request, EnvelopeKind::Request)
 			.unwrap();
-		let result = channel.receive_flat_document(EnvelopeKind::Result).unwrap();
+		let result = channel.receive_document(EnvelopeKind::Result).unwrap();
 		let document = Document::parse(&result, EnvelopeKind::Result).unwrap();
 		assert_eq!(document.lines[0].fields[0].text, "Capabilities");
 		assert_eq!(document.lines[0].fields[1].text, "Completed");

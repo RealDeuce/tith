@@ -183,6 +183,41 @@ fn run() -> Result<(), Box<dyn Error>> {
 					secret: server_secret,
 				},
 				client_public,
+				None,
+			)
+		}
+		#[cfg(unix)]
+		Some("serve-tcp-mailer") => {
+			let usage = "usage: tithd serve-tcp-mailer ADDRESS DATABASE EXPORT-DIRECTORY APPLICATION SERVER-PUBLIC-KEY SERVER-SECRET-FILE CLIENT-PUBLIC-KEY CONFIG-DIRECTORY NODELIST-DOMAIN NODELIST-FILE LOCAL-IDENTITY NODE-SECRET-FILE";
+			let address: SocketAddr = arguments.next().ok_or(usage)?.parse()?;
+			let database = arguments.next().ok_or(usage)?;
+			let exports = arguments.next().ok_or(usage)?;
+			let application = arguments.next().ok_or(usage)?;
+			let server_public = decode_public(&arguments.next().ok_or(usage)?)?;
+			let server_secret = tcp::read_secret(Path::new(&arguments.next().ok_or(usage)?))?;
+			let client_public = decode_public(&arguments.next().ok_or(usage)?)?;
+			let config_directory = arguments.next().ok_or(usage)?;
+			let nodelist_domain = arguments.next().ok_or(usage)?;
+			let nodelist_file = arguments.next().ok_or(usage)?;
+			let local_name = arguments.next().ok_or(usage)?;
+			let node_secret = arguments.next().ok_or(usage)?;
+			if arguments.next().is_some() { return Err(usage.into()); }
+			let configuration = Arc::new(load_config(Path::new(&config_directory))?);
+			let nodelist = Arc::new(Nodelist::parse(&nodelist_domain, &fs::read_to_string(nodelist_file)?)?);
+			let (local_ref, local) = resolve_local(&local_name, &configuration, &nodelist)?;
+			let submission = Arc::new(submission::SubmissionEngine::new(
+				Arc::clone(&configuration),
+				Arc::clone(&nodelist),
+				[(local_name, submission::LocalSigner { reference: local_ref, identity: local, secret: Arc::new(mail::read_secret(Path::new(&node_secret))?) })],
+			));
+			tcp::serve(
+				address,
+				Path::new(&database),
+				Path::new(&exports),
+				application,
+				KxKeyPair { public: server_public, secret: server_secret },
+				client_public,
+				Some(submission),
 			)
 		}
 		_ => Err("usage: tithd check-config DIRECTORY | generate-node-key SECRET-FILE | generate-ipc-key SECRET-FILE | serve-mail ADDRESS DATABASE APPLICATION CONFIG-DIRECTORY NODELIST-DOMAIN NODELIST-FILE LOCAL-IDENTITY NODE-SECRET-FILE | serve-unix SOCKET DATABASE EXPORT-DIRECTORY APPLICATION | serve-unix-mailer SOCKET DATABASE EXPORT-DIRECTORY APPLICATION CONFIG-DIRECTORY NODELIST-DOMAIN NODELIST-FILE LOCAL-IDENTITY NODE-SECRET-FILE | serve-tcp ADDRESS DATABASE EXPORT-DIRECTORY APPLICATION SERVER-PUBLIC-KEY SERVER-SECRET-FILE CLIENT-PUBLIC-KEY".into()),

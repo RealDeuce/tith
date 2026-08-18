@@ -53,6 +53,69 @@ pub enum EnvelopeKind {
 	Result,
 }
 
+/// Tracks nested operation blocks so a stream binding stops only at the
+/// document's outer `End` line.
+#[derive(Clone, Debug)]
+pub struct DocumentFramer {
+	kind: EnvelopeKind,
+	lines: usize,
+	depth: u64,
+	complete: bool,
+}
+
+impl DocumentFramer {
+	#[must_use]
+	pub fn new(kind: EnvelopeKind) -> Self {
+		Self {
+			kind,
+			lines: 0,
+			depth: 0,
+			complete: false,
+		}
+	}
+
+	pub fn push(&mut self, line: &[u8]) -> Result<bool, IpcError> {
+		self.lines += 1;
+		if self.complete {
+			return Err(fail(self.lines, "bytes after outer End"));
+		}
+		if self.lines == 1 {
+			let expected = match self.kind {
+				EnvelopeKind::Request => b"TITH-IPC 1\n".as_slice(),
+				EnvelopeKind::Result => b"TITH-IPC-Result 1\n".as_slice(),
+			};
+			if line != expected {
+				return Err(fail(1, "invalid envelope header"));
+			}
+			return Ok(false);
+		}
+		if line == b"End\n" {
+			if self.depth == 0 {
+				self.complete = true;
+				return Ok(true);
+			}
+			self.depth -= 1;
+			return Ok(false);
+		}
+		let opens = match self.kind {
+			EnvelopeKind::Request => {
+				line == b"Attachment\n"
+					|| line == b"File\n"
+					|| line.starts_with(b"Job\n")
+					|| line.starts_with(b"Job ")
+			}
+			EnvelopeKind::Result => line == b"Event\n" || line.starts_with(b"Delivery "),
+		};
+		if opens {
+			self.depth = self
+				.depth
+				.checked_add(1)
+				.ok_or_else(|| fail(self.lines, "block nesting overflow"))?;
+		}
+		Ok(false)
+	}
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Document {
 	pub kind: EnvelopeKind,
@@ -569,6 +632,35 @@ mod tests {
 				.unwrap()
 				.contains("\\0\\t\\n\\r\\\"\\\\\\x7F")
 		);
+	}
+
+	#[test]
+	fn stream_framer_distinguishes_nested_and_outer_end_lines() {
+		let mut framer = DocumentFramer::new(EnvelopeKind::Request);
+		let lines = [
+			b"TITH-IPC 1\n".as_slice(),
+			b"Submit-Items\n",
+			b"Job EchoMail\n",
+			b"Attachment\n",
+			b"End\n",
+			b"End\n",
+			b"End\n",
+		];
+		for line in &lines[..lines.len() - 1] {
+			assert!(!framer.push(line).unwrap());
+		}
+		assert!(framer.push(lines.last().unwrap()).unwrap());
+
+		let mut result = DocumentFramer::new(EnvelopeKind::Result);
+		for line in [
+			b"TITH-IPC-Result 1\n".as_slice(),
+			b"Events Completed\n",
+			b"Event\n",
+			b"End\n",
+		] {
+			assert!(!result.push(line).unwrap());
+		}
+		assert!(result.push(b"End\n").unwrap());
 	}
 
 	#[test]

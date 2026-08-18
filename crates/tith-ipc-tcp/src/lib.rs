@@ -9,7 +9,7 @@ use tith_crypto::{
 	CryptoError, KX_PACKET_BYTES, KX_PUBLIC_KEY_BYTES, KkInitiator, KxKeyPair, KxPublicKey,
 	SECRETBOX_HEADER_BYTES, SessionKeys, decrypt_ipc_line, encrypt_ipc_line, kk_respond,
 };
-use tith_ipc::{Document, EnvelopeKind, IpcError};
+use tith_ipc::{Document, DocumentFramer, EnvelopeKind, IpcError};
 use tith_wire::integer::{IntegerError, MAX_U64_BYTES, decode_u64, encode_u64};
 
 const GREETING: &[u8; 8] = b"TITHIPC1";
@@ -167,14 +167,12 @@ impl<S: Read + Write> SecureChannel<S> {
 		Ok(())
 	}
 
-	pub fn receive_flat_document(&mut self, kind: EnvelopeKind) -> Result<Vec<u8>, TcpIpcError> {
-		// TSP-0012 operations have no nested End blocks. Operations which do
-		// must use receive_line and identify their outer End according to the
-		// operation-specific grammar.
+	pub fn receive_document(&mut self, kind: EnvelopeKind) -> Result<Vec<u8>, TcpIpcError> {
 		let mut encoded = Vec::new();
+		let mut framer = DocumentFramer::new(kind);
 		loop {
 			let line = self.receive_line()?;
-			let complete = line == b"End\n";
+			let complete = framer.push(&line)?;
 			encoded.extend_from_slice(&line);
 			if complete {
 				Document::parse(&encoded, kind)?;
@@ -265,9 +263,7 @@ mod tests {
 			.unwrap();
 			assert_eq!(principal, "tosser");
 			assert_eq!(
-				channel
-					.receive_flat_document(EnvelopeKind::Request)
-					.unwrap(),
+				channel.receive_document(EnvelopeKind::Request).unwrap(),
 				request()
 			);
 			channel
@@ -281,7 +277,7 @@ mod tests {
 			.send_document(&request(), EnvelopeKind::Request)
 			.unwrap();
 		assert_eq!(
-			channel.receive_flat_document(EnvelopeKind::Result).unwrap(),
+			channel.receive_document(EnvelopeKind::Result).unwrap(),
 			result()
 		);
 		channel.into_inner().shutdown(Shutdown::Both).unwrap();
