@@ -24,7 +24,7 @@ use tith_store::{
 use tith_wire::address::Address;
 use tith_wire::bundle::{Identity, KeyResolver};
 use tith_wire::item::{
-	AttachmentData, MessageData, StandaloneFileData, build_originated_file,
+	AttachmentData, ItemProvenance, MessageData, StandaloneFileData, build_originated_file,
 	build_originated_message, forward_item, validate_item,
 };
 
@@ -227,7 +227,8 @@ impl SubmissionEngine {
 		identity: SubmissionIdentity,
 		message: &MessageSubmission,
 	) -> Result<NewOutboundJob, BuildFailure> {
-		let signer = self.signer(&message.origin)?;
+		let (signer, provenance) =
+			self.item_provenance(&message.origin, message.signed_origin.as_deref())?;
 		if message.kind == MessageKind::EchoMail {
 			validate_area_name(&message.destination_or_area)?;
 		}
@@ -251,8 +252,10 @@ impl SubmissionEngine {
 		let (kind, target, destination, seen_by, deliveries) = match message.kind {
 			MessageKind::NetMail => {
 				let destination = self.resolve_identity(&message.destination_or_area)?;
-				let routes = routes_for(&self.configuration, &signer.reference)
-					.ok_or_else(|| BuildFailure::permanent("Origin has no Routes block"))?;
+				let routes =
+					routes_for(&self.configuration, &signer.reference).ok_or_else(|| {
+						BuildFailure::permanent("local signing identity has no Routes block")
+					})?;
 				let (next_hop, mode, route_rule) =
 					match message.next_hop.as_ref().unwrap_or(&NextHop::Route) {
 						NextHop::Route => {
@@ -357,7 +360,7 @@ impl SubmissionEngine {
 				reply_to,
 				additional_kludge_lines: message.additional_kludge_lines.clone(),
 			},
-			&signer.identity,
+			&provenance,
 			&signer.secret,
 			random_u64()?,
 			timestamp,
@@ -387,7 +390,8 @@ impl SubmissionEngine {
 		identity: SubmissionIdentity,
 		file: &FileSubmission,
 	) -> Result<NewOutboundJob, BuildFailure> {
-		let signer = self.signer(&file.origin)?;
+		let (signer, provenance) =
+			self.item_provenance(&file.origin, file.signed_origin.as_deref())?;
 		validate_area_name(&file.area)?;
 		let ingested = ingest_source(&file.source, "", 1, false)?;
 		let deliveries =
@@ -406,7 +410,7 @@ impl SubmissionEngine {
 				magic_word: file.magic_word.clone(),
 				replaces: file.replaces.clone(),
 			},
-			&signer.identity,
+			&provenance,
 			&signer.secret,
 			random_u64()?,
 			created,
@@ -444,7 +448,11 @@ impl SubmissionEngine {
 			.map_err(|error| {
 				BuildFailure::invalid(format!("inbound claim is not current: {error}"))
 			})?;
-		if inbound.record.authentication != tith_store::ItemAuthentication::Valid {
+		if !matches!(
+			inbound.record.authentication,
+			tith_store::ItemAuthentication::OriginValid
+				| tith_store::ItemAuthentication::SignedOriginValid
+		) {
 			return Err(BuildFailure::invalid(
 				"Forward requires a valid end-to-end item signature",
 			));
@@ -527,6 +535,47 @@ impl SubmissionEngine {
 			.ok_or_else(|| BuildFailure::invalid("unknown or unauthorized Origin"))
 	}
 
+	fn item_provenance<'a>(
+		&'a self,
+		origin: &str,
+		signed_origin: Option<&str>,
+	) -> Result<(&'a LocalSigner, ItemProvenance), BuildFailure> {
+		let Some(signed_origin) = signed_origin else {
+			let signer = self.signer(origin)?;
+			return Ok((
+				signer,
+				ItemProvenance {
+					origin: signer.identity.address.clone(),
+					signer: Some(signer.identity.clone()),
+				},
+			));
+		};
+		let origin = origin
+			.parse::<Address>()
+			.map_err(|_| BuildFailure::invalid("invalid Origin address"))?;
+		if origin.is_unlisted() {
+			return Err(BuildFailure::invalid(
+				"Signed-Origin requires a listed Origin address",
+			));
+		}
+		if self.nodelist.public_key(&origin).is_some() {
+			return Err(BuildFailure::invalid(
+				"Signed-Origin cannot override the Origin nodelist key",
+			));
+		}
+		let signer = self
+			.signers
+			.get(signed_origin)
+			.ok_or_else(|| BuildFailure::invalid("unknown or unauthorized Signed-Origin"))?;
+		Ok((
+			signer,
+			ItemProvenance {
+				origin,
+				signer: Some(signer.identity.clone()),
+			},
+		))
+	}
+
 	fn resolve_identity(&self, value: &str) -> Result<Identity, BuildFailure> {
 		if let Some(name) = value.strip_prefix('@') {
 			let peer = self
@@ -598,7 +647,7 @@ impl SubmissionEngine {
 			.areas
 			.iter()
 			.find(|areas| &areas.local == local)
-			.ok_or_else(|| BuildFailure::permanent("Origin has no Areas block"))?;
+			.ok_or_else(|| BuildFailure::permanent("local signing identity has no Areas block"))?;
 		let area = areas
 			.areas
 			.iter()
@@ -608,7 +657,7 @@ impl SubmissionEngine {
 			return Err(BuildFailure::permanent("area has no Send-To link"));
 		}
 		let routes = routes_for(&self.configuration, local)
-			.ok_or_else(|| BuildFailure::permanent("Origin has no Routes block"))?;
+			.ok_or_else(|| BuildFailure::permanent("local signing identity has no Routes block"))?;
 		area.send_to
 			.iter()
 			.map(|link| {
@@ -931,6 +980,29 @@ mod tests {
 			BatchCommit::Committed(ref values)
 				if matches!(values[0], CommitOutcome::Existing { .. })
 		));
+		let gateway_request = SubmissionRequest::parse(
+			b"TITH-IPC 1\nSubmit\nJob\nApplication \"mailer\"\nIdempotency-Key \"gateway\"\nOrigin \"fidonet#1/100\"\nSigned-Origin \"@local\"\nDestination \"@destination\"\nTo-User \"You\"\nFrom-User \"Legacy\"\nEnd\nEnd\n",
+		)
+		.unwrap();
+		let BatchCommit::Committed(gateway_outcomes) =
+			engine.submit(&gateway_request, &store).unwrap()
+		else {
+			panic!("gateway commit expected");
+		};
+		let CommitOutcome::New { job_id, .. } = &gateway_outcomes[0] else {
+			panic!("new gateway job expected");
+		};
+		let encoded = store.item(job_id).unwrap();
+		let values = parse_sequence(&encoded).unwrap();
+		let validated = validate_item(&values[0], &|_: &Address| None)
+			.unwrap()
+			.unwrap();
+		let provenance = validated.provenance.unwrap();
+		assert_eq!(provenance.origin, "fidonet#1/100".parse().unwrap());
+		assert_eq!(
+			provenance.signer.unwrap().address,
+			Address::unlisted("p2p".to_owned()).unwrap()
+		);
 		drop(store);
 		drop(inbound);
 		std::fs::remove_file(path).unwrap();

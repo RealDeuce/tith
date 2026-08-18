@@ -3,10 +3,10 @@ TITH                                              THIS ISN'T THAT HARD
 **********************************************************************
 
 Publication:  TSP‑0013
-Revision:     1
+Revision:     3
 Title:        Legacy Mailer and Tosser IPC Adapters
 Author(s):    Stephen Hurd
-Date:         2026‑08‑17
+Date:         2026‑08‑18
 ══════════════════════════════════════════════════════════════════════
 
 Status of this document
@@ -76,6 +76,8 @@ Contents
 
     • the race‐resistant identity and digest of every legacy object;
     • the exact conversion policy and resulting canonical submission;
+    • TSP‑0003 TITHSIGN and TITHSIG verification and mutable forwarding
+      evidence when signed‑region reconstruction succeeds;
     • every Application and Idempotency-Key;
     • each returned JobID and state; and
     • legacy cleanup still required.
@@ -84,6 +86,8 @@ Contents
 
     • every InboundID and native PayloadHash;
     • the conversion policy and complete intended legacy object set;
+    • the exact signed Message region, Signature, and generated
+      TITHSIGN and TITHSIG controls;
     • stable generated legacy names and object digests;
     • staging, publication, and tosser ownership state; and
     • the claim token and acknowledgement recovery state when current.
@@ -109,6 +113,11 @@ Contents
 
   Before changing a legacy object, the adapter durably assigns the
   native submission idempotency keys and records the exact conversion.
+  When TSP‑0003 TITHSIG reconstruction succeeds, this record includes
+  the unchanged signed Message region, retained Signature, and current
+  unsigned legacy controls.  It also records legacy carriage and
+  bookkeeping evidence which has no signed mapping.  AttributeWord is
+  not in that category because it maps signed LegacyAttributes.
   It then submits through the applicable TSP‑0006 Submit or
   Submit-Items operation.  The mailer receives native fields and
   Sources; it does not receive a request to interpret a .MSG, packet,
@@ -125,7 +134,10 @@ Contents
   advertised, and the adapter intends cleanup after confirmed remote
   delivery.  Otherwise the adapter uses Copy with Keep and records its
   own later legacy cleanup.  It MUST NOT silently weaken a requested
-  ownership or deletion rule.
+  ownership or deletion rule.  FLAGS KFS and TFS are evidence of these
+  legacy sender‐side rules; they do not by themselves grant native
+  deletion or truncation authority.  K/S applies to the containing
+  message rather than its attached Sources and is tracked separately.
 
   Retiring a .MSG or control entry and recording its associated JobID
   are one recoverable adapter operation.  After a crash, the adapter
@@ -140,6 +152,22 @@ Contents
   the complete payload size and hash.  It checks its ledger for
   InboundID before converting or publishing anything.
 
+  Before publication it applies the configured TSP‑0011 final item
+  authentication policy.  Deliver-Warn records the exact diagnostic in
+  the ledger and places it at the start of the locally delivered legacy
+  Message presentation.  The adapter retains the unchanged native
+  payload separately.  The diagnostic is not an input to TITHSIG
+  reconstruction and MUST NOT be included if the object is later used
+  to reconstruct or forward the original native item.  For a File, the
+  diagnostic is an adjacent local message or metadata; it MUST NOT
+  alter the companion file bytes.
+
+  Orphan publishes no addressed legacy object.  The adapter first
+  records the exact payload and reason in its private administrative
+  store, then acknowledges the claim.  Reply-Origin is committed as a
+  separate TSP‑0006 Job before acknowledgement and obeys the loop and
+  flood controls in TSP‑0011.
+
   If the ledger shows that the exact InboundID and PayloadHash were
   already published and durably transferred to adapter ownership, the
   adapter does not publish a duplicate.  It acknowledges the current
@@ -148,9 +176,19 @@ Contents
   For a new InboundID, the adapter durably records the intended
   conversion and generated legacy names before publication.  It
   converts the exact claimed TITH item according to TSP‑0003 and trusted
-  local policy.  Remote Filename, Subject, Area, MessageID, and pathlike
-  strings MUST NOT become local path components without the explicit
-  validation and name generation required by the legacy format.
+  local policy.  For a Message, the intended object set includes the
+  TITHSIGN and TITHSIG reconstruction controls required to preserve its
+  byte‐exact signed region and Signature.  Remote Filename, Subject, Area,
+  MessageID, and pathlike strings MUST NOT become local path components
+  without the explicit validation and name generation required by the
+  legacy format.
+
+  If that conversion publishes attached Sources, the ledger records
+  whether legacy processing is to keep, remove, or truncate each source.
+  The adapter emits FLAGS KFS or TFS only for the corresponding legacy
+  post‐send action and never emits both.  Those controls do not alter the
+  native Message or File and are not inputs to TITHSIG signed‐region
+  reconstruction.
 
   The adapter acknowledges the inbound item only after all converted
   objects and the ledger state which transfers responsibility from the
@@ -256,12 +294,21 @@ Contents
   transaction, ownership, and recovery boundary around that mapping.
   A deployed legacy dialect does not change a native IPC grammar.
 
-  At Revision 1 of this proposal, TSP‑0003 does not yet define complete
-  Packed Message or Type‑2+ Packet conversion.  Therefore these
-  documents alone are not sufficient to implement an interoperable
-  native‐to‐packet adapter.  An implementation may use explicit local
-  conversion policy, but that policy is not a native TITH standard and
-  MUST NOT be presented as one.
+  TSP‑0003 revision 3 defines the canonical stored Message, packed
+  Message, Type‑2+ packet, WaZOO request, and TIC conversion, including
+  the trusted context which supplies facts absent from legacy bytes.
+  Its TITHSIGN and TITHSIG controls permit a canonical Message
+  conversion to restore the exact original encoded children covered by
+  Signature and the original Signature itself.  Children following
+  Signature are rebuilt from current legacy state.  The adapter ledger
+  retains unmapped
+  carriage and bookkeeping changes separately; it MUST NOT apply them
+  to signed values.  This lossless rule applies to TITH‑to‑legacy‑to‑TITH
+  conversion.  Ordinary Legacy‑to‑TITH‑to‑legacy conversion need not
+  reproduce the source legacy bytes.
+  Local policy selects objects, links, names, character defaults, and
+  accepted input dialects only where TSP‑0003 expressly permits it.  It
+  MUST NOT be presented as another native TITH wire grammar.
 
   At the legacy FTN boundary, exported EchoMail and file distribution
   network (FDN) transfers are NetMail traffic.  They use individual
@@ -291,9 +338,10 @@ Contents
   file is required.
 
   The adapter authorizes native operations through its configured IPC
-  principal and Application.  Legacy origin fields, usernames, packet
-  passwords, flow commands, and filenames do not grant native routing,
-  Source, cleanup, or Application authority.
+  principal and Application.  Its configured SignedOrigin is the local
+  effective signer when the legacy Origin has no key.  Legacy origin
+  fields, usernames, packet passwords, flow commands, and filenames do
+  not grant native routing, Source, cleanup, or Application authority.
 
   The adapter ledger, temporary objects, generated names, claimed
   payloads, and conversion diagnostics are protected from other local
@@ -332,25 +380,39 @@ A. References
   [FSC‑0028.001] "FwdSpec — A Collection of Notes on Moving Files in
   FidoNet", FTSC, 1988‑12‑02.
 
-  [TSP‑0002] "Routing and Distribution Configuration", TITH,
-  2026‑08‑17.
+  [FSC‑0053.002] "Specifications for the ^AFLAGS field", FTSC,
+  1992‑12‑08.
 
-  [TSP‑0003] "Legacy Data Formats and TITH", TITH, 2026‑08‑17.
+  [TSP‑0002] "Routing and Distribution Configuration", TITH,
+  2026‑08‑18.
+
+  [TSP‑0003] "Legacy Data Formats and TITH", TITH, 2026‑08‑18.
 
   [TSP‑0004] "Local IPC Format", TITH, 2026‑08‑17.
 
-  [TSP‑0005] "Durable Outbound Jobs", TITH, 2026‑08‑17.
+  [TSP‑0005] "Durable Outbound Jobs", TITH, 2026‑08‑18.
 
-  [TSP‑0006] "Outbound Job Submission", TITH, 2026‑08‑17.
+  [TSP‑0006] "Outbound Job Submission", TITH, 2026‑08‑18.
 
-  [TSP‑0011] "Durable Inbound Delivery Items", TITH, 2026‑08‑17.
+  [TSP‑0011] "Durable Inbound Delivery Items", TITH, 2026‑08‑18.
 
-  [TSP‑0012] "Tosser Consumption IPC", TITH, 2026‑08‑17.
+  [TSP‑0012] "Tosser Consumption IPC", TITH, 2026‑08‑18.
 
 
 B. History
 ──────────
 
    Rev.1, 2026‑08‑17: Initial Release.
+
+   Rev.2, 2026‑08‑18: Updated conversion scope for the completed
+   TSP‑0003 revision 2 legacy formats, canonical input boundary, and
+   exact signed‐region and Signature reconstruction ledger; separated
+   attached‐Source KFS and TFS disposition from K/S message cleanup,
+   and identified the adapter as SignedOrigin when it authenticates a
+   legacy Origin which has no key.
+
+   Rev.3, 2026‑08‑18: Applied final item authentication warning,
+   reply, and orphan policy without modifying retained native payloads
+   or File Contents.
 
 **********************************************************************

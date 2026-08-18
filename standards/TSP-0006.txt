@@ -3,7 +3,7 @@ TITH                                              THIS ISN'T THAT HARD
 **********************************************************************
 
 Publication:  TSP‑0006
-Revision:     3
+Revision:     5
 Title:        Outbound Job Submission
 Author(s):    Stephen Hurd
 Date:         2026‑08‑18
@@ -104,7 +104,8 @@ Contents
     Job
     Application "<application-name>"
     Idempotency-Key "<key>"
-    Origin "<local-identity>"
+    Origin "<origin>"
+    [Signed-Origin "<local-identity>"]
     Destination "<destination-identity>"
     To-User "<UTF-8-string>"
     From-User "<UTF-8-string>"
@@ -163,7 +164,8 @@ Contents
     Job EchoMail
     Application "<application-name>"
     Idempotency-Key "<key>"
-    Origin "<local-identity>"
+    Origin "<origin>"
+    [Signed-Origin "<local-identity>"]
     Area "<area-name>"
     To-User "<UTF-8-string>"
     From-User "<UTF-8-string>"
@@ -193,7 +195,8 @@ Contents
     Job File
     Application "<application-name>"
     Idempotency-Key "<key>"
-    Origin "<local-identity>"
+    Origin "<origin>"
+    [Signed-Origin "<local-identity>"]
     Area "<area-name>"
     File
     Source-Path "<local-pathname>"|Source-Handle <unsigned-integer>
@@ -243,13 +246,21 @@ Contents
   TSP‑0005 Kind.  The original Submit operation always creates Kind
   NetMail.  Job Forward preserves the Kind of its claimed inbound item.
 
-  Origin identifies one local identity having a TSP‑0002 Routes block.
-  It uses the local identity syntax defined there.  The service MUST
-  possess its secret signing key.
+  Without Signed-Origin, Origin identifies one local identity having a
+  TSP‑0002 Routes block.  It uses the local identity syntax defined
+  there, and the service MUST possess its secret signing key.
 
-  An EchoMail or File Origin also has exactly one applicable TSP‑0002
-  Areas block containing the submitted area and item Kind.  The Service
-  MUST authorize the Application to originate that area.
+  With Signed-Origin, Origin is a canonical listed TTS‑0004 address
+  used as the item's originating and reply address.  No public key may
+  be available for it in the current nodelist.  Signed-Origin identifies
+  the local identity whose key signs the item and MUST have a Routes
+  block.  If Origin later has an applicable key, TTS‑0005 ignores
+  SignedOrigin rather than allowing it to override that key.
+
+  For EchoMail or File, the local signing identity also has exactly one
+  applicable TSP‑0002 Areas block containing the submitted area and
+  item Kind.  The Service MUST authorize the Application to originate
+  that area and to use both the submitted Origin and Signed-Origin.
 
   Inbound identifies one current TSP‑0011 item and ClaimToken obtained
   by the same Application through TSP‑0012.  For a New Forward Job, the
@@ -263,8 +274,9 @@ Contents
   reference naming an exact unlisted identity in the TSP‑0002 peers
   file.  A wildcard is prohibited.  A peer reference is local syntax;
   the Message contains the unlisted address and that peer's PublicKey.
-  The Message likewise contains the Origin PublicKey when its resolved
-  Origin is unlisted.
+  Without Signed-Origin, the Message likewise contains the Origin
+  PublicKey when its resolved Origin is unlisted.  Signed-Origin itself
+  has the conditional PublicKey required by TTS‑0005.
 
   Destination occurs only for NetMail.  Area occurs only for EchoMail
   and File and supplies the exact nonempty TTS‑0005 AreaName.  It is
@@ -436,15 +448,15 @@ Contents
 ────────────────────────────────
 
   A NetMail Job produces exactly one TTS‑0005 NetMail Message.  It
-  contains the resolved Origin, Destination, and Timestamp, submitted
-  user names, Subject, MessageText, optional Message fields, and one
-  File child for each Attachment.
+  contains the resolved Origin, optional SignedOrigin, Destination, and
+  Timestamp, submitted user names, Subject, MessageText, optional
+  Message fields, and one File child for each Attachment.
 
   An EchoMail Job produces exactly one TTS‑0005 EchoMail Message.  It
-  contains the resolved Origin, submitted Timestamp, user names,
-  Subject, MessageText, Area, optional Message fields, and one File
-  child for each Attachment.  It contains no Destination or following
-  Destination PublicKey.
+  contains the resolved Origin, optional SignedOrigin, submitted
+  Timestamp, user names, Subject, MessageText, Area, optional Message
+  fields, and one File child for each Attachment.  It contains no
+  Destination or following Destination PublicKey.
 
   Each attached File contains a Filename equal to its Wire-Filename,
   an optional Timestamp, and exact private copy bytes as Contents.  It
@@ -453,8 +465,9 @@ Contents
 
   A File Job produces one standalone TTS‑0005 File.  It contains the
   submitted Filename, optional Timestamp, exact private copy bytes as
-  Contents, Area, resolved Origin and PublicKey when required, and the
-  submitted optional File metadata.
+  Contents, Area, resolved Origin, optional SignedOrigin, each
+  conditionally required PublicKey, and the submitted optional File
+  metadata.
 
   The service generates the TSP‑0005 JobID before generating filenames.
   Generate produces the 32 hexadecimal JobID digits, Hyphen‐Minus
@@ -472,7 +485,9 @@ Contents
   The Service signs a newly originated Message or standalone File after
   all signed children and private Contents are fixed.  It then appends
   RequestIdentifier and the initial Via.  A Message next appends the
-  submitted AdditionalKludgeLine values.
+  submitted AdditionalKludgeLine values.  The effective local signer,
+  not a distinct reply Origin, supplies routing configuration, Via,
+  SeenBy, and the local AKA recorded with every delivery copy.
 
   A Forward Job preserves the exact signed children and end‐to‐end
   Signature of its inbound item.  It replaces RequestIdentifier for the
@@ -481,6 +496,11 @@ Contents
   appends the receiving local identity as Via.  It MUST NOT decode and
   re‐encode, alter, or re‐sign any covered byte.  SeenBy is rebuilt as
   the one value required by TSP‑0002 without changing the signed bytes.
+
+  A Forward Job requires TSP‑0011 ItemAuthentication Origin-Valid or
+  SignedOrigin-Valid.  Unsigned, Origin-Invalid, and
+  SignedOrigin-Invalid items are final‐delivery or administrative work;
+  a Job Forward request for one is Invalid.
 
   Before New for NetMail, the Service creates its one TSP‑0002 Route
   delivery copy.  Before New for locally originated EchoMail or File,
@@ -732,9 +752,9 @@ Contents
 ─────────────────────────
 
   Submission crosses a local privilege boundary.  The service
-  authorizes Application, Kind, Origin, Destination, Area, explicit
-  Next-Hop, Failure-Policy, Source access, Move, and cleanup
-  dispositions against the TSP‑0004 caller identity.
+  authorizes Application, Kind, Origin, Signed-Origin, Destination,
+  Area, explicit Next-Hop, Failure-Policy, Source access, Move, and
+  cleanup dispositions against the TSP‑0004 caller identity.
 
   A Forward Job additionally requires the current claim's Application
   and binding‐supplied caller authorization.  InboundID and ClaimToken
@@ -922,11 +942,11 @@ A. References
   https://github.com/jedisct1/libhydrogen/wiki
 
   [TSP‑0002] "Routing and Distribution Configuration", TITH,
-  2026‑08‑17.
+  2026‑08‑18.
 
   [TSP‑0004] "Local IPC Format", TITH, 2026‑08‑17.
 
-  [TSP‑0005] "Durable Outbound Jobs", TITH, 2026‑08‑17.
+  [TSP‑0005] "Durable Outbound Jobs", TITH, 2026‑08‑18.
 
   [TSP‑0007] "Unix‐Domain Socket IPC Binding", TITH, 2026‑08‑17.
 
@@ -936,15 +956,15 @@ A. References
 
   [TSP‑0010] "Windows Named‐Pipe IPC Binding", TITH, 2026‑08‑17.
 
-  [TSP‑0011] "Durable Inbound Delivery Items", TITH, 2026‑08‑17.
+  [TSP‑0011] "Durable Inbound Delivery Items", TITH, 2026‑08‑18.
 
-  [TSP‑0012] "Tosser Consumption IPC", TITH, 2026‑08‑17.
+  [TSP‑0012] "Tosser Consumption IPC", TITH, 2026‑08‑18.
 
-  [TTS‑0003] "Common TLV Types", TITH, 2026‑08‑17.
+  [TTS‑0003] "Common TLV Types", TITH, 2026‑08‑18.
 
   [TTS‑0004] "Node Addresses", TITH, 2026‑08‑17.
 
-  [TTS‑0005] "Bundle Format", TITH, 2026‑08‑17.
+  [TTS‑0005] "Bundle Format", TITH, 2026‑08‑18.
 
   [TTS‑0007] "Signed Integer Encoding", TITH, 2026‑08‑16.
 
@@ -960,5 +980,11 @@ B. History
 
    Rev.3, 2026‑08‑18: Assigned complete Error results command‐line
    status one and invalid or mismatched results status two.
+
+   Rev.4, 2026‑08‑18: Added Signed-Origin submission for a separately
+   authenticated originating and reply Origin without a nodelist key.
+
+   Rev.5, 2026‑08‑18: Restricted Job Forward to Origin-Valid and
+   SignedOrigin-Valid inbound items.
 
 **********************************************************************

@@ -3,10 +3,10 @@ TITH                                              THIS ISN'T THAT HARD
 **********************************************************************
 
 Publication:  TSP‑0011
-Revision:     1
+Revision:     3
 Title:        Durable Inbound Delivery Items
 Author(s):    Stephen Hurd
-Date:         2026‑08‑17
+Date:         2026‑08‑18
 ══════════════════════════════════════════════════════════════════════
 
 Status of this document
@@ -106,13 +106,27 @@ Contents
   including the nodelist key for a listed address.  It does not replace
   the Origin or PublicKey inside a Message or standalone File.
 
-  ItemAuthentication is Valid or Invalid for a Message or standalone
-  File and Transport for a FileRequest.  Valid and Invalid report
-  validation of the item's end‐to‐end Signature.  Transport means the
-  FileRequest had no independent item signature and was authenticated
-  by its enclosing SignedTLV.  Invalid does not mean the SignedTLV was
-  unauthenticated; unauthenticated SignedData is never made an inbound
-  item.
+  ItemAuthentication is one of these values for a Message or
+  standalone File:
+
+    Unsigned
+    SignedOrigin-Invalid
+    SignedOrigin-Valid
+    Origin-Invalid
+    Origin-Valid
+
+  Unsigned means the item has no end‐to‐end Signature.  The other four
+  values identify whether Origin or SignedOrigin supplied the
+  applicable key and whether Signature verified.  The value is
+  Transport for a FileRequest, which has no independent item Signature
+  by design.
+
+  None of these values reports Bundle authentication.  Before an item
+  reaches this record, its enclosing payload SignedTLV has been
+  authenticated with the Bundle Origin.  Unauthenticated SignedData is
+  never made an inbound item.  The immediate peer therefore attests to
+  the exact bytes it sent even when the enclosed item is Unsigned or
+  has an invalid end‐to‐end Signature.
 
   PayloadHash is the 32‑byte unkeyed libhydrogen generic hash of the
   exact payload bytes.  Its context is the eight bytes of the C string
@@ -123,9 +137,10 @@ Contents
 ───────────────────────────────────────────────────
 
   This document applies when trusted local configuration selects local
-  application delivery for an authenticated Message, standalone File,
-  or FileRequest.  A value committed for forwarding or holding to a
-  next hop remains routing work and is not an inbound item.
+  application delivery for a Message, standalone File, or FileRequest
+  from an authenticated payload SignedTLV.  A value committed for
+  forwarding or holding to a next hop remains routing work and is not
+  an inbound item.
 
   Before returning TTS‑0005 Accepted for a new locally delivered value,
   the receiver MUST atomically and durably store:
@@ -139,9 +154,10 @@ Contents
   A consumer Application is selected from trusted local configuration,
   not from an unauthenticated field or IPC request.  Configuration may
   use native item Kind, local Destination, user, Area, authenticated
-  identity, or other validated data.  If local delivery is selected but
-  no consumer or administrative quarantine can own the item durably,
-  the receiver MUST reject it rather than accept and discard it.
+  identity, ItemAuthentication, or other validated data.  If local
+  delivery is selected but no consumer or administrative quarantine can
+  own the item durably, the receiver MUST reject it rather than accept
+  and discard it.
 
   Transport Accepted means the receiver owns durable responsibility
   for the item.  It does not mean that a tosser imported it, a user read
@@ -264,6 +280,98 @@ Contents
   administrative report is new outbound work and uses its normal
   submission and routing policy; it does not rewrite the inbound item.
 
+  5.1 Final Item Authentication Policy
+  ──────────────────────────────────
+  A final delivery consumer SHOULD have trusted local policy for each
+  Message and standalone File ItemAuthentication value other than
+  Origin-Valid.  For each value, the policy selects exactly one primary
+  action:
+
+    Deliver-Warn
+    Orphan
+
+  It independently enables or disables Reply-Origin.  Thus a reply may
+  accompany either primary action.  Origin-Valid is delivered normally
+  without an authentication warning or automatic authentication reply.
+  Absent configuration uses Deliver-Warn for Unsigned and
+  SignedOrigin-Valid, Orphan for both Invalid states, and disables
+  Reply-Origin.
+
+  Transport requires no such policy.  A FileRequest carries no Origin,
+  SignedOrigin, or Signature, so its authenticated enclosing payload
+  SignedTLV is its complete and intended authentication rather than a
+  reduced one.  Its only counterparty is the immediate peer, which that
+  SignedTLV already authenticates, so no Origin exists to warn a reader
+  about or to reply to.  A receiver unwilling to serve a FileRequest
+  refuses it with TTS‑0005 Rejected before transport acceptance; once
+  it is an inbound item, the ordinary outcomes in this section apply.
+
+  Deliver-Warn delivers the item with a prominent local diagnostic.
+  Unsigned and SignedOrigin-Valid use a NOTICE.  Unsigned indicates
+  that Origin did not sign the item or that an earlier legacy boundary
+  removed its Signature.  SignedOrigin-Valid indicates that the
+  intermediate gateway's attestation is valid but Origin did not sign
+  the item.  A suitable Message diagnostic is respectively:
+
+    NOTICE: This message was not signed by its Origin, or its
+    signature was removed before delivery.
+
+    NOTICE: This message was not signed by its Origin.  Its
+    intermediate gateway signature was valid.
+
+  SignedOrigin-Invalid and Origin-Invalid use an ERROR.  In both cases
+  the received bytes are known not to match the bytes authenticated by
+  the selected signer.  For Origin-Invalid, this specifically means the
+  item is known not to be what the listed author signed.  A suitable
+  diagnostic is:
+
+    ERROR: This signed message or its signature was modified in
+    transit.  It does not match the bytes authenticated by its signer.
+
+  A Message diagnostic is prepended to the local user presentation,
+  followed by an empty line before MessageText.  It MUST NOT alter the
+  immutable native payload or become the source for forwarding,
+  duplicate detection, or TSP‑0003 signed‐region reconstruction.  This
+  distinction matters because text inserted into the body can be
+  mistaken for author text, quoted in a reply, or invalidate a retained
+  signature.  A File diagnostic is local metadata or an adjacent
+  message; File Contents MUST NOT be prefixed or otherwise modified.
+
+  Orphan does not deliver the item to its addressed user or area.  The
+  consumer first takes durable administrative ownership of the exact
+  payload, authentication value, InboundID, and reason, then
+  acknowledges the item.  It may instead leave or defer the claim until
+  an administrative quarantine can own it.  It MUST NOT acknowledge
+  and silently discard the only recoverable copy.
+
+  Reply-Origin creates separate signed NetMail through TSP‑0006.  For a
+  Message it is addressed to FromUserName at Message Origin; for a File
+  it is addressed to the Sysop at File Origin.  It identifies the
+  authentication state and local disposition but MUST NOT quote the
+  original MessageText or disclose File Contents.  Its submission and
+  the consumer's InboundID association are durable before the inbound
+  item is acknowledged.  An authentication reply MUST NOT itself cause
+  another authentication reply.  If current routing cannot address
+  Origin, the reply is omitted and that result is recorded locally.
+
+  Automatic replies are disabled by default.  Unsigned Origin is
+  unauthenticated, and SignedOrigin authenticates only the gateway's
+  claim about Origin.  Replying to either can send backscatter to a
+  forged address.  Replayed items, many forged Origins, or broad
+  EchoMail distribution can turn replies into a flood amplifier.
+  Deployments which enable Reply-Origin SHOULD make each local effect
+  idempotent by InboundID, suppress repeated PayloadHash, peer, Origin,
+  and authentication‐result combinations, rate‐limit by effective
+  signer and Origin, and provide a local circuit breaker.
+
+  FidoNet Policy 4.07 section 2.1.7 does not require this final local
+  authentication reply.  It requires a node which agreed to route an
+  in‐transit message but does not forward it to return an explanation
+  to the sysop of the node where that message entered FidoNet.  A
+  system which is both final consumer and an obligated legacy router
+  must satisfy that separate routing duty; Reply-Origin is not a
+  substitute for it.
+
 
 6. Duplicate Delivery and Recovery
 ──────────────────────────────────
@@ -354,31 +462,40 @@ A. References
   https://github.com/jedisct1/libhydrogen/wiki
 
   [TSP‑0002] "Routing and Distribution Configuration", TITH,
-  2026‑08‑17.
+  2026‑08‑18.
 
   [TSP‑0004] "Local IPC Format", TITH, 2026‑08‑17.
 
-  [TSP‑0005] "Durable Outbound Jobs", TITH, 2026‑08‑17.
+  [TSP‑0005] "Durable Outbound Jobs", TITH, 2026‑08‑18.
 
-  [TSP‑0006] "Outbound Job Submission", TITH, 2026‑08‑17.
+  [TSP‑0006] "Outbound Job Submission", TITH, 2026‑08‑18.
 
-  [TSP‑0012] "Tosser Consumption IPC", TITH, 2026‑08‑17.
+  [TSP‑0012] "Tosser Consumption IPC", TITH, 2026‑08‑18.
 
   [TSP‑0013] "Legacy Mailer and Tosser IPC Adapters", TITH,
-  2026‑08‑17.
+  2026‑08‑18.
 
-  [TTS‑0003] "Common TLV Types", TITH, 2026‑08‑17.
+  [TTS‑0003] "Common TLV Types", TITH, 2026‑08‑18.
 
   [TTS‑0004] "Node Addresses", TITH, 2026‑08‑17.
 
-  [TTS‑0005] "Bundle Format", TITH, 2026‑08‑17.
+  [TTS‑0005] "Bundle Format", TITH, 2026‑08‑18.
 
-  [TTS‑0006] "Bundle Exchange Protocol", TITH, 2026‑08‑17.
+  [TTS‑0006] "Bundle Exchange Protocol", TITH, 2026‑08‑18.
+
+  [Policy] "FidoNet Policy Document", Version 4.07, 1989‑06‑09.
 
 
 B. History
 ──────────
 
    Rev.1, 2026‑08‑17: Initial Release.
+
+   Rev.2, 2026‑08‑18: Defined item authentication in terms of the
+   effective Origin or SignedOrigin signer.
+
+   Rev.3, 2026‑08‑18: Added unsigned and signer‐specific item
+   authentication states and configurable warning, reply, and orphan
+   policy for final delivery.
 
 **********************************************************************

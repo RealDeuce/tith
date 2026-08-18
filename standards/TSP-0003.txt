@@ -3,19 +3,18 @@ TITH                                              THIS ISN'T THAT HARD
 **********************************************************************
 
 Publication:  TSP‑0003
-Revision:     1
+Revision:     3
 Title:        Legacy Data Formats and TITH
 Author(s):    Stephen Hurd
-Date:         2026‑08‑17
-══════════════════════════════════════════════════════════════════════
+Date:         2026‑08‑18
+════════════════════════════════════════════════════════════════════════
 
 Status of this document
 ───────────────────────
 
-  This document is a TITH Technical Standard (TTS) — it specifies
-  the current technical requirements and recommendations for TITH
-  software developers, coordinators and sysops of the Fidonet network
-  and other networks using FTN technology.
+  This document is a TITH Standard Proposal (TSP) — it documents a
+  proposed standard and solicits discussion.  Until promoted to a TTS,
+  this is experimental only and does not describe required behaviour.
 
   This document is released to the public domain, and may be used,
   copied or modified for any purpose whatever.
@@ -23,285 +22,1381 @@ Status of this document
 Abstract
 ────────
 
-  This document describes how TITH data can be mapped to legacy FTN
-  formats.
+  This document defines a canonical conversion between TITH Messages
+  and legacy FTN stored Messages, packed Messages, and Type‑2+ packets.
+  It also defines the legacy character, address, time, attachment, and
+  EchoMail control information needed by that conversion.  The
+  canonical Message conversion regenerates the exact byte sequence
+  covered by the original TITH Message Signature and retains that
+  Signature.  Unsigned fields reflect current legacy processing.
 
 Contents
 ────────
 
-  1.  Introduction
-  2.  NetMail Formats
+  1. Introduction
+  2. Conversion Context and Authentication
+  3. Message Text and Common Fields
+  4. Stored Message
+  5. Packed Message
+  6. Type‑2+ Packet
+  7. EchoMail
+  8. WaZOO File Requests
+  9. TIC File Distribution
+  10. Validation and Compatibility
+  11. Feedback and Discussion
 
   A. References
   B. History
 
-══════════════════════════════════════════════════════════════════════
+═════════════════════════════════════════════════════════════════════
 
 
 1. Introduction
 ───────────────
 
-  Until every single node on all networks use TITH for everything, we
-  will need to be able to translate to and from the legacy formats as
-  used for decades.
+  Native TITH does not use legacy FTN files or packet syntax.  A
+  gateway nevertheless needs one deterministic representation when it
+  exchanges mail with software that implements those formats.
 
-  This document specifies how to convert various legacy formats to the
-  corresponding TITH documents.
+  FTS‑0001.016 defines Message Text, the 190‑byte stored Message, the
+  packed Message, and the Type‑2 packet.  This proposal generates the
+  Type‑2+ header from FSC‑0048.002 and the EchoMail controls from
+  FSC‑0074.001.  Other deployed packet and message dialects are input
+  compatibility policy, not alternate canonical output.
 
+  TSP‑0013 owns selection, durable staging, publication, companion
+  files, acknowledgement, and recovery.  This document owns only the
+  bytes and native fields produced from an already selected object.
+  Legacy routing and storage conventions do not change the TITH wire
+  grammar.
 
-2. NetMail Formats
-──────────────────
-
-  FTN software can usually interact with 4 data formats for NetMail.
-  These are the "Message Text" format specified in FTS‑0001.016, the
-  "Stored Message" format specified in FTS‑0001.016, the "Packed
-  Message" format specified in FTS‑0001.016, and the "Packet" as
-  specified in FTS‑0001.016.  An alternate packet header called
-  "Type-2+" is usually used in Packets, and is specified in
-  FSC‑0048.002.  There are other packet header formats, but Type-2+ has
-  clearly won on FidoNet and FTN software.
-
-  1. Message Text
-  ───────────────
-  Legacy FTN Message Text is a custom 8‑bit character set which is an
-  overlay on ASCII.  The following are redefined:
-  0x0D — 'hard' carriage return.  Marks the end of a paragraph.
-  0x8D — 'soft' carriage return.  Equivalent to ASCII NUL.
-  0x0A — linefeed.  Equivalent to ASCII NUL.
-  0x01 — Control Paragraph.  Causes all bytes up to and including the
-         next 0x0D to be interpreted as a control paragraph.
-
-  Any byte with the high bit set (ie: 0x80 and above) with the
-  exception of 0x8D is not defined.  When encountered, TITH software
-  MAY assume it is using whatever 8‑bit encoding was most common in
-  their area before Unicode became the norm.
-
-  1.1 Character Sets
-  ──────────────────
-  Poorly defined in FTS‑5003.001 is a terrible way to indicate a
-  character set other than the default one specified above.
-  Recommended usage of this control paragraph is covered below.
-
-  1.2 Converting from TITH to Legacy
-  ──────────────────────────────────
-  Converting from TITH format to legacy format is relatively
-  straight‐forward.  The following are concatenated:
-
-  "\x01CHRS: UTF-8 4\x0d" — this indicates that UTF‑8 is used.
-  "\x01MID: " followed by the value of MessageID followed by "\x0d"
-  "\x01RTO: " followed by the 5D address in ReplyTo, followed by a
-      space, followed by the string in ReplyTo.
-  MessageText — The original unmodified text of the message.  If the
-      original message did not end with "\x0d", one is appended.
-  "\x01TOPT " followed by the text point number, followed by "\x0d".
-      This is included only if the destination address has a non‐zero
-      point component.
-  "\x01FMPT " followed by the text point number, followed by "\x0d".
-      This is included only if the destination address has a non‐zero
-      point component.
-  "\x01INTL " followed by the 3D address of the destination node,
-      followed by " ", folowed by a 3D address of the origin node,
-      followed by "\x0d".
-  "\x01TZUTC: " followed by the negative value of TimestampOffset
-      expressed as HHMM.  This is included only if TimestampOffset is
-      present.
-  "\x01" followed by AdditionalKludgeLine followed by "\x0d".  This is
-      repeated for each AdditionalKludgeLine value.
-  "\x01Via " followed by the shitty FTN z:N/F[.P][@domain] formatted
-      Address, followed by " ", followed by the timstamp formatted as
-      "@YYYYMMDDHHMMSS.UTC " followed by either the UTF‑8 string or
-      "TTS-0005 1" if the string is zero length.  This should be
-      repeated in order for every Via value in the message.
-
-  1.3 Converting from Legacy to TITH
-  ──────────────────────────────────
-  This is a multi‐step process, and many of the steps can be expanded
-  to perform optional FTN processing.  When multiple instances of a
-  control paragraph are present, but only one is epxected, parse the
-  first one in the message text.
-
-  1. If the first bytes are "\x01AREA:" or "AREA:", this is an
-     EchoMail, do not process as described in section 2.
-  2. Scan the entire message for a "\x01CHRS: " control paragraph.  If
-     it is present, and does not indicate UTF‑8, convert the entire
-     message from whatever the CHRS line says to UTF‑8.  This includes
-     the subject and both user names, which aren't part of the
-     message text because why not?
-  3. If a CHRS control paragraph was not present, or indicated a level
-     0 or 1 set, remove any \x8d or \x0a bytes.
-  4. If a CHRS control paragraph was present, and indicated level 2 or
-     above, remove any linefeed characters.
-  5. Using the TOPT, FMPT, INTL, any other control paragraphs you can
-     find that look like they might be useful, and config files,
-     construct a 5D address for the origin and the destination.
-     There's no way to actually do this since there's no standard way
-     to include domains in messages. The DOMAIN and MSGID control
-     paragraphs appear to be the best sources.
-  6. If the message contains a TZUTC control paragraph, parse the time
-     and TZUTC per FTS‑4008.002.  Use this to generate Timestamp and
-     TimestampOffset values.  If the message does not contain a TZUTC
-     value, assume it's in UTC even though it likely isn't.
-  7. Convert any Via control paragraphs into Via values using
-     FTS‑4009.001 and TTS‑0005.
-  8. For all other control paragraphs, remove the "\x01" and add as
-     an AdditionalKludgeLine value.
+  The canonical lossless direction is TITH to legacy and back to TITH.
+  Ordinary legacy import accepts the documented compatibility profile,
+  but exporting the resulting TITH Message need not reproduce the
+  original legacy bytes.
 
 
-  2. Stored Message
-  ─────────────────
-  The Stored Message is not strictly covered by the FidoNet standards,
-  but is rather an intermediary format that was used by the original
-  Fido software.  However, since software supported it, it became the
-  defined generic way to generate and consume message from non‐BBS
-  software, especially InterBBS games.  Support for importing from and
-  exporting to this format is expected to be required.
+2. Conversion Context and Authentication
+────────────────────────────────────────
 
-  2.1 Converting from TITH to Legacy
-  ──────────────────────────────────
-  Truncate the FromUserName value to a maximum of 35 bytes, ensuring
-  that you do not leave fragments of a UTF‑8 character, then NUL pad
-  to 36 bytes and write the value.
+  A conversion context supplies all facts that the legacy bytes cannot
+  carry.  It contains:
 
-  Truncate the ToUserName value to a maximum of 35 bytes, ensuring
-  that you do not leave fragments of a UTF‑8 character, then NUL pad
-  to 36 bytes and write the value.
+    • the configured TITH identity and signing key of an importing
+      gateway;
+    • the legacy domain and default zone associated with each selected
+      object or link;
+    • the local and remote packet addresses;
+    • the default input character set when CHRS is absent;
+    • stable MSGID serial and attachment‐name mappings; and
+    • the packet password, product code, revision, and product data.
 
-  If there are files attached, <TODO> otherwise, truncate the Subject
-  value to a maximum of 71 bytes, ensuring that you do not leave
-  fragments of a UTF‑8 character, then NUL pad to 72 bytes and write
-  the value.
+  These are trusted local policy.  A pathname, packet password, legacy
+  address, MSGID, Origin line, PATH, username, or message attribute
+  MUST NOT supply or expand native authority.
 
-  Convert the Timestamp with applied TimestampOffset value into a
-  DateTime as described in FTS‑0001.016. Clamp values to the ranges
-  expresssed there (ie: if the seconds value is 60, convert to 59) and
-  write the value.
+  A received legacy message was not signed by its claimed author.  Its
+  resolved legacy author becomes the TITH Message Origin so replies are
+  constructed for the same originating system.  When the importer owns
+  the key applicable to that Origin, it signs directly and SignedOrigin
+  is absent.  Otherwise the configured importing gateway becomes
+  SignedOrigin and signs the Message.  That signature attests that the
+  gateway imported the displayed legacy claim; it is not proof that the
+  legacy author wrote the message.
 
-  Write two NUL bytes.
+  TTS‑0005 gives an available Origin key precedence over SignedOrigin.
+  Therefore an unsigned legacy message whose remote Origin currently
+  has a TITH nodelist key cannot be signed on that node's behalf by a
+  gateway which does not own that key.  It is retained as unsupported
+  input unless its original TITH Signature can be reconstructed under
+  section 3.1.  SignedOrigin is the effective signer for authentication
+  and relay policy, but it never replaces Origin as a reply address or
+  claimed legacy author.
 
-  Write the Destination node number as a 16‑bit little‐endian (least
-  siginificant byte first) binary value.
+  On export, Origin supplies the claimed legacy author.  It must belong
+  to the configured legacy domain and every emitted zone, net, node,
+  and point component must fit an unsigned 16‑bit field.  An adapter
+  MUST NOT truncate an address component or invent a domain or zone.
 
-  Write the Origin node number as a 16‑bit little‐endian (least
-  siginificant byte first) binary value.
+  2.1 TTS‑0005 Message Field Map
+  ───────────────────────────────
+  This subsection lists both directions for every defined child in the
+  TTS‑0005 Message grammar.  "No legacy field" means that the value is
+  local to native construction and MUST NOT be hidden in an unrelated
+  legacy semantic field.  These Legacy‑to‑TITH entries describe ordinary
+  import.  For an eligible TITH‑originated Message, successful section
+  3.1 TITHSIG reconstruction instead restores every encoded child
+  covered by the original Signature and the Signature itself.  Children
+  following Signature are reconstructed from current legacy state.
 
-  Write two NUL bytes.
+  Revision 1 permits and reconstructs signed Message children in exactly
+  this order:
 
-  Write the Origin net number as a 16‑bit little‐endian (least
-  siginificant byte first) binary value.
+    Origin, which must not be the unlisted address
+    SignedOrigin, when present, followed by its PublicKey when unlisted
+    Destination, for NetMail, which must be listed
+    Timestamp
+    ToUserName
+    FromUserName
+    Subject
+    MessageText
+    Area containing AreaName, for EchoMail
+    File values, in original order, each containing Filename then
+      Contents
+    LegacyAttributes
+    TimestampOffset
+    TearLine, when present in EchoMail
+    OriginLine, for EchoMail
+    MessageID, when present
+    ReplyTo, when present
+    Signature
 
-  Write the Destination net number as a 16‑bit little‐endian (least
-  siginificant byte first) binary value.
+  Revision 1 represents SignedOrigin and its conditional PublicKey with
+  TITHSIGN as specified in section 3.1.  It cannot represent an Origin
+  PublicKey or Destination PublicKey.  A different order, an omitted
+  required child, a duplicate singleton, or any other signed child is
+  not eligible for revision 1 canonical conversion.
 
-  Write the Destination zone number as a 16‑bit little‐endian (least
-  siginificant byte first) binary value.
+  Every permitted signed child must take the exact TITH‑to‑legacy path
+  and inverse described below.  A value for which the inverse would not
+  reproduce the original child's presence, Value, Type, or Length makes
+  canonical conversion unavailable.  This restriction does not apply
+  to ordinary Legacy‑to‑TITH import, which constructs a new signed
+  Message and need not reproduce its legacy source bytes on re‑export.
 
-  Write the Origin zone number as a 16‑bit little‐endian (least
-  siginificant byte first) binary value.
+  Origin
+      Legacy to TITH: the resolved claimed author from the sources
+      below.  TITH to legacy: supplies the claimed legacy author and
+      reply address.
 
-  Write the Destination point number as a 16‑bit little‐endian (least
-  siginificant byte first) binary value.
+  Origin PublicKey
+      Legacy to TITH: no legacy source.  TITH to legacy: no legacy
+      field.  Revision 1 therefore prohibits the unlisted Origin.
+      Packet passwords are not keys.
 
-  Write the Origin point number as a 16‑bit little‐endian (least
-  siginificant byte first) binary value.
+  SignedOrigin
+      Legacy to TITH: the configured importing gateway when it does not
+      own the key applicable to the distinct Origin.  It is absent when
+      the gateway signs directly as Origin.  For NetMail, Origin is the
+      claimed author from a complete
+      MSGID origin when available, otherwise from stored or packed
+      fields and INTL and FMPT.  For EchoMail, the final address in the
+      Origin line is used, with a complete MSGID origin as fallback.
+      Partial addresses are completed only by the trusted domain
+      context.
+      TITH to legacy: TITHSIGN carries the exact encoded SignedOrigin
+      and its conditional PublicKey.  SignedOrigin is not substituted
+      for any legacy author or reply field.
 
-  Write two NUL bytes.
+  Destination
+      Legacy to TITH: for NetMail, MSGTO when present, otherwise the
+      stored or packed destination completed by INTL and TOPT under the
+      trusted domain context.  EchoMail has no Destination.
+      TITH to legacy: NetMail MSGTO, fixed destination fields, INTL,
+      TOPT, and the applicable packet's immediate routing selection.
+      EchoMail has no ultimate destination field.
 
-  Write the LegacyAttributes (or zero if it is not present) as a
-  16‑bit little‐endian (least siginificant byte first) binary value.
+  Destination PublicKey
+      Legacy to TITH: no legacy source.  A legacy address cannot select
+      the key for a native unlisted Destination.
+      TITH to legacy: no legacy field.  Revision 1 therefore requires a
+      listed NetMail Destination.
 
-  Write two NUL bytes.
+  Timestamp
+      Legacy to TITH: stored or packed DateTime interpreted with TZUTC
+      or the configured source offset.
+      TITH to legacy: stored or packed DateTime after applying
+      TimestampOffset.  Packet creation time is separate carriage
+      metadata and does not replace Message Timestamp.  Revision 1
+      requires the exact range and offset representation in section 3.
 
-  Write the Message Text converted as described in this document.
+  ToUserName
+      Legacy to TITH: stored or packed destination‐user string.
+      TITH to legacy: stored or packed destination‐user string.
 
-  Write one NUL byte.
+  FromUserName
+      Legacy to TITH: stored or packed origin‐user string.
+      TITH to legacy: stored or packed origin‐user string.  It is a
+      claimed display name and does not change authenticated Origin.
 
-  2.2 Converting from Legacy to TITH
-  ──────────────────────────────────
-  Read from offset 190 to the first NUL byte and search for a CHRS
-  control paragraph.  If one is found, it indicates the encoding used
-  for the FromUserName, ToUserName, Subject, DateTime, and Text
-  fields.
+  Subject
+      Legacy to TITH: stored or packed Subject unless FileAttached is
+      asserted, in which case the FileList supplies File children and
+      native Subject is empty.  FileRequest or FileUpdateReq without
+      FileAttached still makes the legacy field a FileList, but ordinary
+      import retains that list as Subject and does not create a native
+      request merely from an attribute.
+      TITH to legacy: stored or packed Subject unless File children
+      require the field for their FileSpec list.  Revision 1 requires
+      an empty Subject when File children overload that field.
 
-  Read a 16‑bit little‐endian value from offset 186.  Check if bit 4
-  is set.  If it is, the subject contains file specifiers. <TODO>
+  MessageText
+      Legacy to TITH: user paragraphs remaining after all applicable
+      controls, EchoMail footer lines, and framing are removed.
+      TITH to legacy: normalized user paragraphs in the Message Text
+      body between the leading controls and trailing controls.
 
-  Read 36 bytes and strip the first NUL and everything after it.
-  Convert to UTF‑8. This is the FromUserName
+  Area
+      Legacy to TITH: AREA selects the exact configured native
+      AreaName.  Configured metadata MAY supply AreaDescription.
+      TITH to legacy: AreaName selects its configured legacy AREA tag.
+      AreaDescription has no packet field and MUST be absent for
+      revision 1 canonical conversion.  Configured descriptions are not
+      added during TITHSIG reconstruction.  NetMail has no Area.
 
-  Read 36 bytes and strip the first NUL and everything after it.
-  Convert to UTF‑8. This is the ToUserName
+  File children
+      Legacy to TITH: FileAttached makes the Subject FileList supply
+      ordered Filename values.  ASSOC is an ordinary‐import compatibility
+      source for the same list.  Trusted companion files supply Contents
+      and their file metadata MAY supply File Timestamp.  FileRequest
+      and FileUpdateReq alone do not create File children.  No packet
+      byte supplies the remaining File children.
+      TITH to legacy: Filename supplies ASSOC and a safely generated
+      FileSpec, Contents supplies the companion file bytes, and File
+      Timestamp MAY supply companion‐file modification time.  The
+      File's Area, Origin, PublicKey, ShortDescription,
+      LongDescriptionLine, TearLine, MagicWord, Replaces, Signature,
+      RequestIdentifier, Via, and SeenBy have no representation in
+      these message or packet formats.  A Message containing any of
+      those File children is not eligible for revision 1 canonical
+      conversion.  Those fields of a standalone File use section 9.
+      Revision 1 additionally requires Filename to be present and used
+      unchanged as the safe FileSpec, and File Timestamp to be absent.
+      Companion metadata does not create a File Timestamp during
+      TITHSIG reconstruction.
 
-  Read 72 bytes and strip the first NUL and everything after it.
-  Convert to UTF‑8. This is the Sibject
+  LegacyAttributes
+      Legacy to TITH: the complete AttributeWord, augmented only by
+      the exact FLAGS mappings in section 3.
+      TITH to legacy: AttributeWord, with file‐attach bit 4 made
+      consistent with the actual File children.  Revision 1 requires
+      LegacyAttributes to be present and its bit 4 already to agree
+      with the presence of File children.  During TITHSIG
+      reconstruction FLAGS remains an unsigned AdditionalKludgeLine and
+      does not contribute to LegacyAttributes.  FileRequest bit 11 and
+      FileUpdateReq bit 15 are preserved independently; neither creates
+      a TTS‑0005 FileRequest.
 
-  Read 20 bytes and strip the first NUL and everything after it.
-  Convert to UTF‑8. See if you can't figure out a date. FTS‑0001.016
-  has some suggestions, good luck.
+  TimestampOffset
+      Legacy to TITH: TZUTC or TZUTCINFO, or trusted source policy when
+      the control is absent.
+      TITH to legacy: TZUTC and the conversion of UTC Timestamp to the
+      stored or packed local DateTime.  Revision 1 requires this child
+      to be present and exactly representable by TZUTC.
 
-  Ignore two bytes.
+  TearLine
+      Legacy to TITH: the optional EchoMail line beginning with three
+      ASCII hyphens, excluding those hyphens and one following Space.
+      TITH to legacy: that EchoMail line.  NetMail has no defined
+      destination for this field and requires TearLine to be absent for
+      revision 1.
 
-  Read two bytes as a 16‑bit little‐endian (least siginificant byte
-  first) binary value. This is the Destination node number.
+  OriginLine
+      Legacy to TITH: all EchoMail Origin text after the fixed prefix,
+      including its final parenthesized address.
+      TITH to legacy: that complete text after the fixed prefix, subject
+      to the canonical ASCII and length rules.  Revision 1 EchoMail
+      requires OriginLine to be present, exactly representable, and to
+      end in the same legacy Origin address.  NetMail requires it to be
+      absent.
 
-  Read two bytes as a 16‑bit little‐endian (least siginificant byte
-  first) binary value. This is the Origin node number.
+  MessageID
+      Legacy to TITH: the complete decoded value after "MSGID: ".
+      TITH to legacy: that complete value when it is already a valid
+      FTS‑0009 payload, otherwise a legacy origin plus a stable serial
+      assigned as specified in section 3.  The substitution is ordinary
+      compatibility output only; revision 1 requires an existing value
+      to be emitted unchanged or MessageID to be absent in both forms.
 
-  Ignore two bytes.
+  ReplyTo
+      Legacy to TITH: a parseable REPLY origin becomes Address and the
+      complete decoded REPLY value becomes its string.
+      TITH to legacy: the string when it is already a valid FTS‑0009
+      payload, otherwise Address plus the stable identifier mapping.
+      Revision 1 requires the complete value and Address to survive the
+      documented REPLY inverse unchanged, or ReplyTo to be absent.
 
-  Read two bytes as a 16‑bit little‐endian (least siginificant byte
-  first) binary value. This is the Origin net number.
+  OriginalCharacterSet
+      Legacy to TITH: the decoded CHRS or CHARSET value before
+      conversion to UTF‑8.
+      TITH to legacy: no direct output; canonical output always emits
+      CHRS UTF-8 4.  The value records provenance, not an instruction
+      to recreate a noncanonical encoding.  Revision 1 canonical
+      conversion therefore requires OriginalCharacterSet to be absent;
+      its CHRS controls select decoding but do not create this child on
+      TITHSIG reconstruction.
 
-  Read two bytes as a 16‑bit little‐endian (least siginificant byte
-  first) binary value. This is the Destination net number.
+  Signature
+      Legacy to TITH: restored and verified through TITHSIG when its
+      complete reconstruction checks; otherwise generated by the
+      configured gateway after every signed field, including
+      Origin and SignedOrigin, has been constructed.
+      TITH to legacy: preserved through TITHSIG.  A packet password
+      MUST NOT be presented as an end‐to‐end signature.  An Unsigned
+      native item has no TITHSIG and is available only to marked final
+      compatibility delivery under section 10.1, not revision 1
+      canonical signed‐region conversion.
 
-  Read two bytes as a 16‑bit little‐endian (least siginificant byte
-  first) binary value. This is the Destination zone number.
+  RequestIdentifier
+      Legacy to TITH: newly allocated for both ordinary import and
+      successful TITHSIG reconstruction.
+      TITH to legacy: no legacy field.  It is outside the signed region
+      and is not preserved by TITHSIG.
 
-  Read two bytes as a 16‑bit little‐endian (least siginificant byte
-  first) binary value. This is the Origin zone number.
+  Via
+      Legacy to TITH: canonical NetMail Via controls become existing
+      Via values; the importing gateway then appends its own Via.
+      EchoMail SPTH and PATH do not become Via because neither has the
+      required timestamp and software identity.
+      TITH to legacy: NetMail Via controls; for EchoMail, representable
+      Via addresses contribute to SPTH without their native timestamps
+      or software strings.  A retained legacy PATH is re‑emitted only
+      under the section 7 interoperability rule.
 
-  Read two bytes as a 16‑bit little‐endian (least siginificant byte
-  first) binary value. This is the Destination point number.
+  SeenBy
+      Legacy to TITH: EchoMail SEEN-BY under the trusted packet domain
+      and zone.  NetMail has no source.
+      TITH to legacy: a Tiny SEEN-BY containing the immediate legacy
+      processing node and every recipient of that export operation.
 
-  Read two bytes as a 16‑bit little‐endian (least siginificant byte
-  first) binary value. This is the Origin point number.
+  AdditionalKludgeLine
+      Legacy to TITH: every decoded control paragraph without an exact
+      structured mapping, in encounter order and without Control‑A or
+      the terminating hard carriage return.  EchoMail PATH is retained
+      this way with the special placement rule in section 7.
+      TITH to legacy: a Control‑A paragraph in value order, except for
+      controls assigned a structured or special placement here.  SPTH
+      and PATH use their section 7 placement.
 
-  Ignore two bytes.
+  Unknown Message children
+      Legacy to TITH: none are invented.
+      TITH to legacy: no exact legacy mapping.  An unknown child before
+      or after Signature makes revision 1 canonical conversion
+      unavailable.  It MUST NOT be silently discarded in violation of
+      the unknown‐value retention requirements of TTS‑0005.
 
-  Read two bytes as a 16‑bit little‐endian (least siginificant byte
-  first) binary value. Logically AND the value with 0x7413. If the
-  result is not zero, this is the LegacyAttributes value.
+  2.2 Other TTS‑0005 Types
+  ───────────────────────────
+  A TTS‑0005 FileRequest maps to one FTS‑0006 WaZOO REQ action as
+  specified in section 8.  A standalone distribution File maps to one
+  FTS‑5006 TIC and companion file as specified in section 9.  File
+  children of a Message use ASSOC and the file‐attach rules above.
 
-  Ignore two bytes.
+  For a standalone File, the exact field map is:
 
-  Read up to the first NUL byte, convert the value as Message Text as
-  described in this document.
+    • Origin maps TIC Origin in both directions;
+    • Origin PublicKey has no TIC source;
+    • SignedOrigin is the importing gateway when distinct from Origin;
+    • its PublicKey is configured when SignedOrigin is unlisted;
+    • Filename maps TIC Lfile when present and otherwise File;
+    • Timestamp maps TIC Date;
+    • Contents maps the companion file and is verified by Size and Crc;
+    • AreaName and AreaDescription map Area and Areadesc through the
+      configured area mapping;
+    • ShortDescription and LongDescriptionLine map Desc and Ldesc;
+    • TearLine, MagicWord, and Replaces map Created, Magic, and Replaces;
+    • Signature and RequestIdentifier are generated on import and have
+      no TIC line; and
+    • Via and SeenBy map repeated Path and Seenby lines.
 
-  3. Packed Message
-  ─────────────────
+  For FileRequest, Filename and optional Timestamp map the REQ action
+  filename and plus time.  RequestIdentifier is generated on import and
+  has no REQ token.  A REQ password and minus time have no TITH field.
 
-  4. Type 2+ Packet
-  ─────────────────
-  
+  Accepted, Rejected, PollMessages, PollFiles, and PollFileRequests
+  have no stored Message, packed Message, Type‑2+ packet, REQ, or TIC
+  representation.  RequestIdentifier and TLVHash likewise have no
+  independent legacy representation.  A legacy session's silence or
+  returned file is not an exact Accepted or Rejected value.
+
+  Bark, WaZOO session negotiation, SRIF, Binkley‐style outbound, and
+  session polling are carriage or local‐interface concerns.  TSP‑0013
+  owns their adapter boundary.  An adapter MUST NOT disguise one as
+  ordinary NetMail or infer a native request merely from an attribute.
+
+
+3. Message Text and Common Fields
+───────────────────────────────────
+
+  Legacy Message Text is a NUL‑terminated byte string.  A byte 0x0D is
+  a hard carriage return.  A byte 0x8D is a soft carriage return in the
+  FTS‑0001 character model.  A byte 0x0A is ignored.  A byte 0x01 at
+  the beginning of a physical line starts a control paragraph which
+  ends at the next 0x0D.
+
+  A parser first divides the undecoded Message Text into physical
+  paragraphs without treating an encoding continuation byte as a
+  character.  The beginning of the text and the byte after a hard
+  carriage return are paragraph boundaries; intervening bytes 0x0A
+  are ignored.  Byte 0x01 starts a control paragraph only at such a
+  boundary.  A byte 0x01 elsewhere is message data.
+
+  The general FTS‑4000.001 control form is:
+
+    <SOH><tag>": "<value><CR>
+
+  A value‑less control ends immediately after the colon.  Historical
+  controls may omit the Space after the colon or may use a tag‐specific
+  form with no colon.  Those exceptions are recognized only where an
+  applicable FTSC document defines them.  Tag spelling and case are
+  significant; in particular, Via is mixed case.
+
+  Canonical controls contain printable ASCII except where a referenced
+  control definition expressly permits another value.  They contain
+  no byte 0x0A or 0x8D.  On input, byte 0x0A inside a control is
+  ignored.  Byte 0x8D is ignored only in a single‑byte level 0 or 1
+  encoding; it MUST NOT be removed from a multibyte encoded character.
+  A control has no arbitrary 80‑byte limit unless its own definition
+  supplies one.
+
+  Before converting any message field, a parser scans every physical
+  control paragraph for CHRS, CHARSET, and CODEPAGE using their ASCII
+  prefixes.  It then selects one decoder and converts the header,
+  body, controls, tear line, and Origin line together.  It does not
+  decode the body once to find CHRS and then reinterpret already acted
+  upon data.
+
+  Canonical output uses UTF‑8 and begins its control block with the
+  literal bytes:
+
+    01 43 48 52 53 3a 20 55 54 46 2d 38 20 34 0d
+
+  This is "\x01CHRS: UTF-8 4\x0d".  U+002D HYPHEN-MINUS in
+  "UTF-8" is literal protocol syntax.
+
+  On export, each CRLF pair and each remaining CR or LF in a native
+  MessageText becomes one byte 0x0D.  Other UTF‑8 bytes are unchanged.
+  U+0000 is not representable and makes conversion unavailable.  The
+  body is followed by 0x0D if it is not already empty or terminated by
+  0x0D.
+
+  Revision 1 canonical export requires MessageText to contain no
+  U+0000 or U+000D and to be either empty or end in U+000A.  Every
+  U+000A then maps one‑for‑one to a hard carriage return and back.  The
+  export self‑check in section 3.1 also rejects a user paragraph which
+  the legacy parser would classify as control or EchoMail framing.
+
+  On import, hard carriage returns in user text become U+000A.  Bytes
+  0x0A are ignored.  In a declared seven‑bit or other configured
+  single‑byte soft‑return encoding, byte 0x8D is also ignored.  In an
+  eight‑bit character set or multibyte encoding, byte 0x8D is passed to
+  that decoder.  The terminating NUL is framing and is not part of
+  MessageText.
+
+  CHRS and its permitted CHARSET synonym are parsed as specified by
+  FTS‑5003.001.  The identifier is at most eight ASCII characters.  A
+  converter MUST support ASCII, UTF‑8, CP437, CP850, CP866, LATIN‑1,
+  and CP895 input.  PC-8 is treated as CP437.  It SHOULD select the
+  decoder by identifier rather than trusting the level, because
+  deployed UTF‑8 level 2, LATIN‑1 level 4, and omitted‐level forms are
+  present in existing messages.  It MAY support other registered
+  identifiers through an exact configured decoder.  CODEPAGE overrides
+  an IBMPC identifier on input.  IBMPC without CODEPAGE uses the
+  configured IBM code page.  +7_FIDO means CP866.  IBMPC, CODEPAGE,
+  +7_FIDO, MAC, PC-8, CHARSET, an omitted level, and a wrong level are
+  input compatibility forms and MUST NOT be generated.
+
+  An unknown identifier or undecodable byte sequence is unsupported
+  input, not permission to guess.  When CHRS is absent, the configured
+  default is used; if none is configured, only ASCII input is accepted.
+  OriginalCharacterSet contains the complete decoded CHRS or CHARSET
+  value after the tag.  A CODEPAGE control is additionally retained as
+  an AdditionalKludgeLine.
+
+  CHRS, MSGID, REPLY, MSGTO, INTL, TOPT, FMPT, and TZUTC are singleton
+  controls.  TZUTCINFO is the input synonym of TZUTC.  ASSOC and SPTH
+  may repeat.  TITHSIGN and TITHSIG have the exact cardinalities in
+  section 3.1.  Canonical input contains at most one control for each
+  singleton.
+  More than one is malformed.  Compatibility policy MAY accept
+  byte‐for‐byte identical singleton duplicates, but MUST reject
+  conflicts and MUST NOT choose whichever address or character set
+  happens to occur first.
+
+  After structured controls have been parsed, every other Control‑A
+  paragraph is retained, in encounter order, as an
+  AdditionalKludgeLine containing the decoded bytes after Control‑A
+  and before hard carriage return.  Unknown controls are never acted
+  upon.  PID and TID from FSC‑0046.005, FLAGS from FSC‑0053.002, DOMAIN,
+  DEST, ORIG, ROUTE, ZPTH, and private product controls are preserved
+  this way unless a later TITH standard assigns an exact field.  MSGTO,
+  ASSOC, and SPTH are the FSC‑0067.001 exceptions defined below.  No
+  preserved control supplies an address, route, identity, or authority.
+
+  A FLAGS control is preserved verbatim and MAY additionally contribute
+  only these exact AttributeWord meanings to LegacyAttributes:
+
+    PVT bit 0, CRA bit 1, RCV bit 2, SNT bit 3, FIL bit 4,
+    K/S bit 7, HLD bit 9, FRQ bit 11, and RRQ bit 12.
+
+  All other FLAGS tokens remain legacy metadata.  In particular, DIR,
+  ZON, HUB, IMM, KFS, and TFS do not grant native routing, priority, or
+  Source‐disposition authority.  PID and TID are not substituted for
+  TearLine because they identify different processing stages.
+
+  FTS‑0001.016 gives three AttributeWord bits control of the stored or
+  packed Subject grammar:
+
+    bit 4   FileAttached
+    bit 11  FileRequest
+    bit 15  FileUpdateReq
+
+  If any is asserted, Subject is a FileList rather than an ordinary
+  subject.  A FileList is empty or consists of one or more FileSpecs.
+  Its separators are a comma followed by zero or more ASCII Spaces, or
+  one or more ASCII Spaces.  A FileSpec cannot contain NUL, comma, or
+  ASCII Space.  Empty FileSpecs, including those produced by adjacent
+  commas, are invalid.  Wildcards and system‐dependent syntax are legacy
+  request data, never permission to resolve an arbitrary local path.
+
+  FileAttached means that every FileSpec names a companion attachment.
+  FileRequest and FileUpdateReq give the same list different legacy
+  processing semantics; by themselves they do not identify companion
+  files and MUST NOT create TTS‑0005 FileRequest values.  If several bits
+  are asserted, the one FileList has every asserted legacy meaning.
+  Ordinary import preserves all three bits and the list even when a
+  requested or update operation has no native equivalent.
+
+  FLAGS FIL and FRQ are compatibility copies of bits 4 and 11.  ASSOC
+  is a repeatable compatibility list of companion filenames.  Ordinary
+  import MAY use them when the AttributeWord bit is missing.  TITHSIG
+  reconstruction MUST instead use the signed LegacyAttributes mapping
+  and Subject.  Changed or missing FLAGS and ASSOC controls do not
+  change the candidate signed children; a present disagreement is
+  recorded as mutable forwarding evidence.  The original Signature
+  determines whether the Subject, attributes, filenames, and companion
+  contents reconstruct the original signed region.
+
+  KFS and TFS respectively request removal or truncation of attached
+  companion files after successful legacy transmission.  K/S requests
+  removal of the message and is distinct from both.  These are legacy
+  ownership and disposition instructions, not Message or File content.
+  An adapter maps them only through the durable ownership rules in
+  TSP‑0013.  It MUST NOT infer native deletion authority from a received
+  control.  An export MAY emit KFS or TFS only when its ledger and
+  configured ownership rule require that exact legacy action, and MUST
+  NOT emit both.  These controls remain unsigned AdditionalKludgeLine
+  values and are excluded from TITHSIG reconstruction.
+
+  Canonical NetMail control paragraphs occur in this order before the
+  body when applicable:
+
+    CHRS, the TITHSIGN controls, both TITHSIG controls, MSGID, REPLY,
+    MSGTO, INTL, TOPT, FMPT, TZUTC, ASSOC, AdditionalKludgeLine values
+    in native order.
+
+  Each is prefixed by byte 0x01 and terminated by byte 0x0D.  An
+  AdditionalKludgeLine MUST NOT contain NUL, CR, LF, or a leading
+  byte 0x01.  Native input MUST NOT use one to duplicate AREA, CHRS,
+  CHARSET, TITHSIGN, TITHSIG, MSGID, REPLY, MSGTO, INTL, TOPT, FMPT, TZUTC,
+  TZUTCINFO, ASSOC, Via, or SEEN-BY.  Such values have the structured
+  mappings in this document.  An imported unstructured REPLY uses the
+  special placement below.  Imported SPTH and PATH controls are the
+  section 7 exceptions and are placed in the EchoMail path block, not
+  in this pre‐body control block.
+
+  MessageID maps to:
+
+    ^AMSGID: <legacy-origin> <serial>
+
+  ReplyTo maps to:
+
+    ^AREPLY: <reply-address> <serial>
+
+  The displayed "^A" denotes byte 0x01 and is not two literal
+  characters.  A serial is eight ASCII hexadecimal digits as required
+  by FTS‑0009.001.  Import stores the complete decoded MSGID payload as
+  MessageID so quoted, gateway, traditional FTN, and TTS address forms
+  remain distinguishable.  When native MessageID is not itself a valid
+  complete FTS‑0009 payload, the adapter durably assigns a serial unique
+  for legacy‐origin and records the association.
+
+  A parseable REPLY origin becomes ReplyTo Address and its complete
+  payload becomes the ReplyTo string.  If its origin is a legacy
+  gateway address which cannot become a TTS‑0004 Address, the REPLY is
+  retained as an AdditionalKludgeLine with special REPLY placement and
+  ReplyTo is omitted.  Export uses an already valid complete ReplyTo
+  string verbatim; otherwise it uses ReplyTo Address and the same stable
+  identifier mapping.  It never discards an existing legacy identifier
+  merely because its origin uses another legacy address syntax.
+
+  A canonical NetMail also contains this FSC‑0067.001 control after
+  MSGID and REPLY:
+
+    ^AMSGTO: <destination-5D>
+
+  The address is the canonical TTS‑0004 text address.  A newly generated
+  MSGID likewise uses the complete TTS address of legacy‐origin as its
+  origin address.  MSGTO and such a MSGID provide the full domain and
+  point information which the older addressing controls cannot carry.
+
+  Canonical NetMail always contains:
+
+    ^AINTL <destination-3D> <legacy-origin-3D>
+
+  TOPT follows it when the destination point is nonzero.  FMPT follows
+  TOPT when the legacy origin point is nonzero.  The values are decimal
+  unsigned point numbers.  The fixed stored or packed destination may
+  instead be the configured immediate legacy route.  MSGTO and INTL
+  continue to name the ultimate Destination and legacy‐origin.
+
+  On input, complete MSGTO is the NetMail Destination and a complete
+  MSGID origin is Origin.  Otherwise the fixed fields are the
+  initial net and node, INTL supplies zone, net, and node, TOPT and
+  FMPT supply points, and the trusted context supplies the absent
+  domain.  When complete and older forms both occur they MUST agree.
+  A conflict is malformed input.  Neither form grants native authority.
+
+  Every File child additionally produces:
+
+    ^AASSOC: <FileSpec>
+
+  in File child order.  On import, ASSOC supplies the ordered companion
+  names for ordinary compatibility conversion.  If a file‐attach
+  Subject is also present, both lists MUST identify the same files in
+  the same order.  During TITHSIG reconstruction the signed Subject is
+  authoritative and ASSOC is only mutable forwarding evidence.  ASSOC
+  does not make a pathname safe and does not transfer ownership by
+  itself.
+
+  TimestampOffset is the local offset from UTC, in seconds.  Canonical
+  output requires it to be a whole number of minutes representable as
+  two decimal hour digits and two decimal minute digits.  TZUTC has a
+  leading minus sign west of UTC and no leading plus sign east of UTC:
+
+    ^ATZUTC: [-]HHMM
+
+  A missing native TimestampOffset is exported as TZUTC 0000.  Import
+  accepts TZUTCINFO as an input synonym.  Without either control, the
+  trusted configured offset for that legacy source is used.  If no
+  such offset exists, the timestamp is ambiguous and conversion is
+  unavailable.
+
+  The stored and packed DateTime is local time: Timestamp plus
+  TimestampOffset.  Canonical output uses exactly:
+
+    DD Mon YY  HH:MM:SS
+
+  followed by NUL.  Month names are the English abbreviations from
+  FTS‑0001.016.  To make the two‑digit year deterministic, this proposal
+  maps 70–99 to 1970–1999 and 00–69 to 2000–2069.  A timestamp outside
+  that interval is not canonically representable.  Invalid calendar
+  values are rejected; they are never clamped.
+
+  A native Via is emitted after NetMail body text in the exact
+  FTS‑4009.001 form:
+
+    ^AVia <address> @YYYYMMDD.HHMMSS.UTC <product> <version> [serial]
+
+  Address and time are taken from the Via.  If its software string is
+  two or three space‑separated printable ASCII fields of one through ten
+  bytes each, those fields are used.  Otherwise the configured gateway
+  product and version are used.  Import accepts the canonical form and
+  stores the product, version, and optional serial joined by single
+  spaces as the Via string.  Deprecated Via forms are compatibility
+  policy and MUST NOT be generated.
+
+  3.1 TITHSIG Signed‑Region Reconstruction
+  ────────────────────────────────────────────
+  When the signed Message contains SignedOrigin, canonical conversion
+  carries the exact encoded SignedOrigin child and its immediately
+  following PublicKey, when present, in consecutive controls:
+
+    ^ATITHSIGN: 1 + <continuation-chunk>
+    ^ATITHSIGN: 1 . <final-chunk>
+
+  The complete encoded child sequence is RFC‑4648 base64 without
+  padding or whitespace.  It is split into 43‑character chunks.  Every
+  continuation chunk has exactly 43 characters; the final chunk has
+  one through 43.  One final control and zero or more continuation
+  controls form the group.  The plus and full stop are the literal
+  ASCII bytes U+002B and U+002E, each surrounded by one ASCII Space.
+  Version is the ASCII digit "1".  Each complete paragraph is at most
+  59 bytes including Control‑A and its terminating carriage return.
+
+  The decoded bytes MUST be exactly one canonical SignedOrigin TLV,
+  followed by one canonical PublicKey TLV if and only if SignedOrigin
+  is unlisted.  No other or trailing byte is permitted.  A Message
+  without SignedOrigin has no TITHSIGN control.  A missing, additional,
+  nonconsecutive, differently versioned, or malformed control makes
+  reconstruction fail.  Every TITHSIGN version MUST equal both
+  TITHSIG versions.
+
+  Canonical TITH‑to‑legacy Message conversion carries the original
+  64‑byte Message Signature in exactly two consecutive controls:
+
+    ^ATITHSIG: 1 <first-signature-half>
+    ^ATITHSIG: 1 <second-signature-half>
+
+  The displayed "^A" denotes byte 0x01.  Each control ends with byte
+  0x0D.  Version is the ASCII digit "1" and is followed by one U+0020
+  SPACE.  The original Signature is encoded using the RFC‑4648 base64
+  alphabet without padding or whitespace.  Its 86 characters are split
+  after character 43; each control therefore contains one 43‑character
+  half.  Each complete paragraph is 56 bytes including Control‑A and
+  carriage return, below the traditional 80‑character limit.
+
+  Exactly two TITHSIG controls are permitted and both MUST have the same
+  supported version.  Their halves are concatenated in encounter order
+  and decoded as one value.  A missing, additional, reordered, malformed,
+  or differently versioned control cannot yield a valid Signature.
+  TITHSIG is an owned structured control and MUST NOT become an
+  AdditionalKludgeLine.
+
+  TITHSIG carries no exporter identity, attestation, length, or hash.
+  TITHSIGN is present only because SignedOrigin and its conditional key
+  have no traditional legacy field; it contains no other Message data.
+  The original Signature authenticates those bytes and every other
+  encoded Message child preceding it, including MessageText and every
+  attached File Contents.  The revision selects the exact conversion
+  rules used to reconstruct those children.
+
+  Canonical export is available only when applying the canonical
+  Legacy‑to‑TITH rules to the generated legacy Message will reproduce
+  byte‑for‑byte the encoded Message children from Origin through the
+  final child before Signature.  The exporter MUST perform that inverse
+  conversion and verify the original Signature over the result before
+  publishing the legacy Message.  Presentation truncation, an absent
+  mapping, ambiguous optional‑field presence, or a user paragraph which
+  would be misclassified on import makes canonical conversion
+  unavailable.
+
+  TTS‑0002 requires minimal Type and Length encodings and TTS‑0005 fixes
+  Message child order.  Consequently, reconstructing the same ordered
+  children and Values also reconstructs their exact signed bytes.  An
+  implementation MUST compare those bytes directly during the export
+  self‑check; semantic equality alone is insufficient.
+
+  On import, the presence of TITHSIG selects revision 1 reconstruction
+  instead of ordinary gateway signing in section 2.  The resolved
+  legacy author becomes Origin.  TITHSIGN reconstructs SignedOrigin and
+  its conditional PublicKey when they were present.  An unlisted Origin
+  or Destination is not representable by this revision.  Every other
+  signed child is reconstructed through the field mappings in this
+  document.  Parallel legacy representations of Origin or Destination
+  MUST all agree with the reconstructed address.
+
+  The importer constructs the candidate encoded children through the
+  final child before Signature and verifies the retained Signature with
+  the effective Origin or SignedOrigin key required by TTS‑0005.  On
+  success, it emits those children,
+  followed by the same Signature value in its canonical Signature TLV.
+  It then appends a newly allocated RequestIdentifier and Via, SeenBy,
+  and AdditionalKludgeLine values parsed from current legacy state.  The
+  importing gateway appends its own Via before committing the Message to
+  a new next hop as required by TTS‑0005.
+
+  The enclosing Message Type and Length and every child following
+  Signature are freshly encoded because they are outside the original
+  signature.  Other unsigned control paragraphs may be added, removed,
+  reordered, or modified without affecting reconstruction.  Packet
+  routing and stored‐message bookkeeping fields have no signed mapping
+  and are ignored.  AttributeWord does map signed LegacyAttributes; a
+  change to that word causes original Signature verification to fail.
+
+  If TITHSIG is absent, malformed, or fails verification, it does not
+  authenticate any native value.  TITHSIGN then cannot select a signer
+  or supply an ordinary‑import field.  A remaining valid legacy Message
+  is processed by the ordinary gateway‑signed import in section 2 and
+  the reconstruction failure is recorded for diagnosis.  A lossy
+  compatibility export is not canonical.
+
+
+4. Stored Message
+─────────────────
+
+  A canonical stored Message consists of this 190‑byte header followed
+  by canonical Message Text and one NUL terminator.  Every integer is
+  an unsigned 16‑bit little‑endian value.
+
+    Offset  Size  Field
+         0    36  FromUserName, NUL‑padded
+        36    36  ToUserName, NUL‑padded
+        72    72  Subject or attached‐file list, NUL‑padded
+       144    20  DateTime, NUL‑padded
+       164     2  timesRead
+       166     2  destination node
+       168     2  origin node
+       170     2  cost
+       172     2  origin net
+       174     2  destination net
+       176     2  destination zone
+       178     2  origin zone
+       180     2  destination point
+       182     2  origin point
+       184     2  replyTo
+       186     2  AttributeWord
+       188     2  nextReply
+
+  Export encodes FromUserName and ToUserName as UTF‑8 and NUL‑pads each
+  field.  Each value must fit in 35 bytes.  A non‐attachment Subject is
+  treated identically with a 71‑byte maximum.  U+0000 in any of these
+  fields makes conversion unavailable.  Compatibility output MAY
+  truncate at a UTF‑8 scalar boundary, but then cannot carry TITHSIG.
+
+  When the Message has File children, the adapter first assigns each a
+  safe legacy FileSpec and publishes the companion files according to
+  TSP‑0013.  Subject is the FileSpecs in child order separated by one
+  ASCII Space, and AttributeWord bit 4 is set.  The complete list,
+  including its NUL, must fit 72 bytes; otherwise this representation
+  is unavailable.  A FileSpec MUST NOT contain NUL, ASCII Space, comma,
+  a path separator, or a traversal component.  Native Subject is not
+  placed in this overloaded field and MUST be empty for revision 1.
+
+  Bits 4, 11, and 15 select the FileList grammar described in section
+  3.  On ordinary import, AttributeWord bit 4, a preserved FLAGS FIL
+  token, or ASSOC identifies attached files.  Each attachment FileSpec
+  is resolved only through the trusted companion‐file mapping, opened
+  and validated according to TSP‑0013, and converted to a File child.
+  When bit 4 is asserted, native Subject is empty.  With only bit 11 or
+  bit 15 asserted, the exact decoded FileList remains native Subject;
+  it is not converted into a native request.
+
+  On ordinary import, a present ASSOC list MUST agree with the Subject
+  FileList when both claim the attachments.  Under TITHSIG, signed
+  LegacyAttributes bit 4 and Subject alone select the File children;
+  ASSOC and FLAGS are mutable evidence and cannot change them.  An empty
+  attachment list or a missing, unsafe, or unavailable companion makes
+  attachment conversion incomplete.  The message and diagnostic state
+  MUST be retained; the missing attachment MUST NOT be silently
+  discarded.
+
+  Export writes zero for timesRead, cost, replyTo, and nextReply.  It
+  writes LegacyAttributes, or zero when absent, after clearing bit 4
+  and setting that bit exactly when File children are present.  Import
+  preserves the complete AttributeWord as LegacyAttributes, including
+  a zero value.  Bits 11 and 15 are not changed by attachment export.
+  No attribute grants native authority or silently creates a native
+  request.
+
+  Import requires all 190 header bytes and a NUL terminating Message
+  Text.  The SEAdog DateTime and the historical blank‐line, byte 0x1A,
+  or end‐of‐file message terminators described by FTS‑0001.016 MAY be
+  accepted by explicit compatibility policy.  Canonical output never
+  uses them.
+
+
+5. Packed Message
+─────────────────
+
+  A packed Message begins with this fixed 34‑byte header.  Integers are
+  unsigned 16‑bit little‑endian values.
+
+    Offset  Size  Field
+         0     2  packed‐message type, value 2
+         2     2  origin node
+         4     2  destination node
+         6     2  origin net
+         8     2  destination net
+        10     2  AttributeWord
+        12     2  cost
+        14    20  DateTime, NUL‑padded
+
+  It is followed, in order, by NUL‑terminated ToUserName,
+  FromUserName, Subject, and Message Text.  The first two strings,
+  including NUL, are at most 36 bytes each.  Subject, including NUL,
+  is at most 72 bytes.  Message Text has no independent size limit;
+  its terminating NUL supplies its boundary.
+
+  Names, Subject, DateTime, AttributeWord, attachments, and text are
+  converted as in sections 3 and 4.  Cost is zero in canonical output.
+  A parser MUST find each bounded NUL before its maximum and MUST find
+  the Message Text NUL before the packet ends.
+
+  For NetMail, fixed net and node values are the legacy carriage source
+  and the configured immediate route.  MSGID, MSGTO, and INTL carry the
+  claimed author and ultimate Destination.  For EchoMail, the fixed
+  values are the immediate packet origin and destination because AREA,
+  Origin, MSGID, SEEN-BY, and SPTH carry conference semantics.  Fixed
+  fields MUST NOT be presented as authenticated author information.
+
+
+6. Type‑2+ Packet
+───────────────────
+
+  Canonical packet output uses the 58‑byte Type‑2+ header from
+  FSC‑0048.002.  Every two‑byte field is unsigned little‑endian.
+
+    Offset  Size  Field
+         0     2  origin node
+         2     2  destination node
+         4     2  creation year
+         6     2  creation month, January is zero
+         8     2  creation day
+        10     2  creation hour
+        12     2  creation minute
+        14     2  creation second
+        16     2  baud, zero
+        18     2  packet type, value 2
+        20     2  origin net or 0xffff for an origin point
+        22     2  destination net
+        24     1  product code low byte
+        25     1  revision major
+        26     8  packet password, NUL‑padded
+        34     2  legacy origin zone
+        36     2  legacy destination zone
+        38     2  auxiliary net
+        40     2  capability‐word validation copy
+        42     1  product code high byte
+        43     1  revision minor
+        44     2  capability word
+        46     2  origin zone
+        48     2  destination zone
+        50     2  origin point
+        52     2  destination point
+        54     4  configured product data
+
+  Origin and destination are the immediate legacy packet endpoints
+  from trusted link configuration, not necessarily a contained
+  Message's author or ultimate destination.  The packet has no domain
+  field.  The context therefore supplies the domain and MUST verify
+  that the selected packet endpoints belong to it.
+
+  Creation fields contain the adapter's packet‐publication time in the
+  configured local time of the legacy link.  They are packet metadata,
+  not a source for any contained Message Timestamp or TimestampOffset.
+
+  The capability word is 0x0001 and its validation copy is 0x0100.
+  Both legacy zone fields repeat the corresponding current zone.  For
+  an origin point, origin net is 0xffff and auxiliary net is the actual
+  origin net.  Otherwise origin net is actual and auxiliary net is
+  zero.  The configured password is at most eight bytes and is padded
+  with NUL; it is legacy link data and is not TITH authentication.
+
+  A Type‑2+ input header is valid when packet type is 2, the validation
+  copy is the byte‐swapped capability word, and capability bit zero is
+  set.  When the origin point is nonzero and origin net is 0xffff,
+  auxiliary net supplies the origin net.  Contradictory duplicate
+  zones or an absent auxiliary net in that case are malformed.
+
+  A packet consists of the header, zero or more packed Messages, and
+  one 16‑bit zero terminator.  At a record boundary, value 2 begins a
+  packed Message and value 0 ends the packet.  Any other value is
+  malformed.  Canonical input has no bytes after the terminator.
+
+  A parser MAY accept an FTS‑0001 Type‑2 or FSC‑0045 Type‑2.2 header by
+  explicit compatibility policy.  It MUST first classify the complete
+  header and then apply that format's field meanings.  Product‐based
+  guessing, partially mixing header layouts, or generating those
+  alternate headers is not conforming behaviour under this proposal.
+
+
+7. EchoMail
+────────────
+
+  A canonical EchoMail packed Message has exactly this logical order:
+
+    AREA line
+    CHRS, the TITHSIGN controls, both TITHSIG controls, MSGID, REPLY,
+    TZUTC, ASSOC, SPTH, and other controls
+    user MessageText
+    optional tear line
+    Origin line
+    Tiny SEEN-BY lines
+
+  Every line ends with byte 0x0D.  AREA is the first text byte and has
+  no Control‑A prefix:
+
+    AREA:<area-name>
+
+  The area name is one through 60 ASCII bytes from ranges 33–96 and
+  123–126.  It does not begin with "+" or "-".  Legacy AREA comparison
+  is case‐insensitive, while TITH AreaName comparison is exact.  The
+  conversion context therefore maps each native AreaName to one unique
+  legacy tag and rejects configured collisions; it does not lowercase
+  a native AreaName or use an untrusted AREA to create one implicitly.
+
+  A tear line is three ASCII hyphens followed, when TearLine is
+  nonempty, by one Space and that value.  U+002D HYPHEN-MINUS is
+  literal syntax.  A canonical Origin line is:
+
+    <space>*<space>Origin:<space><OriginLine>
+
+  It is at most 79 ASCII bytes.  For revision 1, OriginLine is present
+  and ends in a parenthesized legacy address equal to Origin.  Its bytes
+  are emitted unchanged after the prefix.  Compatibility output MAY use
+  "TITH (<legacy-origin>)" when OriginLine is absent or cannot be
+  represented, using Origin as legacy‐origin.
+
+  SPTH is the full 5D path from FSC‑0067.001.  It begins with byte 0x01
+  and "SPTH: ", and contains a TTS‑0004 Trimmed List in processing
+  order.  Existing imported SPTH addresses occur first.  Addresses
+  recovered from a following legacy 2D PATH occur next under the
+  trusted domain and zone of that PATH.  Native Via addresses then
+  occur in their existing order, followed by the immediate packet
+  origin if it is not already last.  SPTH lines are at most 80 bytes.
+  Canonical output does not synthesize a 2D PATH.  It re‑emits one only
+  when it was retained as AdditionalKludgeLine from legacy input, after
+  SPTH and before the tear and Origin lines.
+
+  Canonical output uses the Tiny SEEN-BY model from FSC‑0068.001.  The
+  collection contains the immediate processing node and every legacy
+  recipient in the current export operation, not the accumulated
+  native SeenBy.  Only addresses in the packet domain and zone with
+  point zero are representable.  Values are sorted by numeric net and
+  node, deduplicated, and emitted in trimmed 2D form.  Every line begins
+  "SEEN-BY: ", and is at most 80 bytes.
+
+  Import requires one AREA and a nonempty SEEN-BY set.  It removes AREA,
+  SPTH, the optional footer lines, SEEN-BY, and PATH from MessageText.
+  AREA selects the configured AreaName.  A valid final address in the
+  Origin line becomes Origin, and all text after the fixed prefix
+  becomes OriginLine.  When the Origin line is absent, a complete MSGID
+  origin may supply Origin.  If neither exists, the importing gateway
+  becomes Origin and SignedOrigin is omitted rather than guessing an
+  author from the forwarded packed‐message header.
+  SEEN-BY addresses become TITH SeenBy values in the configured domain
+  and zone.
+
+  SPTH and PATH carry no timestamp or software identity, so neither can
+  truthfully become TITH Via.  Their decoded controls are retained as
+  AdditionalKludgeLine values in encounter order and use the special
+  path‐block placement on re‐export.  The importing gateway supplies
+  its own ordinary Via when it constructs and signs the Message.  This
+  preserves claimed legacy path evidence without inventing
+  authenticated hops.
+
+  Input compatibility accepts the FSC‑0074.001 colon form of SEEN-BY,
+  its optional Control‑A prefix, 2D PATH, full accumulated SEEN-BY, and
+  a Control‑A before AREA.  It also accepts the FSC‑0068.001 tag forms
+  without a colon.  The selected form is classified before parsing and
+  conflicting parallel controls are malformed.  Canonical output uses
+  AREA, SPTH, Tiny SEEN-BY, and the Origin line form above.
+
+
+8. WaZOO File Requests
+────────────────────────
+
+  One FTS‑0006.002 REQ file carries one or more TTS‑0005 FileRequest
+  values for the same authenticated Bundle destination.  Its legacy
+  filename and placement select the immediate legacy peer according to
+  TSP‑0013 and local outbound policy; they are not a Filename value and
+  do not change the native Destination.
+
+  Canonical output writes each FileRequest as one ASCII action line in
+  request order, terminated by byte 0x0D:
+
+    <Filename>
+    <Filename><space>+<Timestamp>
+
+  The second form is used exactly when Timestamp is present.  It asks
+  for matching files newer than that POSIX timestamp, which is the
+  TTS‑0005 condition.  Filename MUST NOT contain a path separator, NUL,
+  CR, LF, Space, or a leading "+", "-", or "!".  Wildcard semantics,
+  when enabled, are explicit local policy and do not weaken pathname
+  validation.
+
+  Canonical output does not write a transaction password.  TITH
+  authenticates the requester with its Bundle signature.  It also does
+  not write the FTS‑0006 minus timestamp form because TTS‑0005 has no
+  request for files at or older than a timestamp.
+
+  Import accepts CR, LF, or CRLF line endings.  Each nonempty line is
+  split into Filename, an optional "!password", and an optional signed
+  decimal update time in that order.  A plus time becomes Timestamp.
+  A line with a minus time has no exact TITH representation and is
+  retained as unsupported work.  A password may be checked by legacy
+  link policy, but it is not transmitted, stored as a TITH credential,
+  or treated as native authority.
+
+  Every successfully parsed action becomes one FileRequest with a
+  newly allocated RequestIdentifier.  The importing gateway signs the
+  enclosing payload as itself.  REQ has no per‐action acceptance or
+  rejection record, so an adapter MUST NOT manufacture Accepted or
+  Rejected from a missing response or from the end of a legacy session.
+
+
+9. TIC File Distribution
+──────────────────────────
+
+  One FTS‑5006.001 TIC and its named companion map to one standalone
+  TTS‑0005 distribution File.  TIC Origin becomes File Origin.  The
+  configured importing gateway signs directly when it owns that Origin
+  key and otherwise becomes SignedOrigin under the section 2 rule.  TIC
+  From and To identify immediate legacy processing endpoints and do not
+  replace either native field.
+
+  A canonical TIC is ASCII or UTF‑8 text with CRLF line endings.  Each
+  line is one keyword, one Space, and its parameters.  Output uses this
+  order, omitting an optional line when its source is absent:
+
+    Area
+    Areadesc
+    Origin
+    From
+    To
+    File
+    Lfile
+    Size
+    Date
+    Desc
+    Ldesc values in native order
+    Created
+    Magic
+    Replaces
+    Crc
+    Path values in native order
+    Seenby values
+    Pw
+
+  Area is the configured legacy tag for File AreaName.  Areadesc maps
+  AreaDescription.  Origin is File Origin.  From is the immediate
+  legacy adapter address and To,
+  when required by the selected legacy link, is its immediate
+  destination.  These addresses use the FTS‑5006 5D form
+  "zone:net/node[.point][@domain]" with no omitted zone, net, or node.
+
+  File is a stable safe 8.3 DOS transfer name generated and recorded by
+  the TSP‑0013 adapter.  Lfile is emitted when Filename differs from
+  that transfer name and contains the native Filename.  Import uses
+  Lfile as Filename when present and otherwise File.  Neither value is
+  used as a local path without the TSP‑0013 validation and name mapping.
+
+  The companion bytes are Contents.  Size is their decimal byte count.
+  Crc is their eight‐digit uppercase FTS‑5006 CRC‑32.  Both are computed
+  from the exact companion bytes; input MUST verify both when present
+  and MUST verify the required Crc before constructing the File.  Date
+  is File Timestamp as unsigned decimal POSIX seconds.
+
+  Desc maps ShortDescription.  Repeated Ldesc maps
+  LongDescriptionLine in order.  Created maps File TearLine, Magic maps
+  MagicWord, and Replaces maps Replaces.  No line is folded; a value
+  containing CR, LF, or NUL is not representable.
+
+  Each Path maps exactly to one Via.  Its address supplies Via Address,
+  its unsigned decimal POSIX value supplies Via Timestamp, and all text
+  after that timestamp, excluding one separating Space, supplies the
+  Via software string.  Canonical output uses the same fields and order.
+  A Path address which is unlisted cannot carry its required PublicKey
+  and is not representable.  Repeated Seenby maps the File SeenBy
+  collection using the trusted legacy domain where a line is only 4D.
+
+  Pw is trusted legacy link policy only.  It has no TITH field and does
+  not authenticate Origin, SignedOrigin, Contents, or any route.  An
+  adapter MAY emit the configured link value needed by its legacy peer.
+  It MUST NOT derive Pw from a native key or expose Pw as native data.
+
+  Input keywords are case‐insensitive and may occur in any order except
+  that repeated Path, Desc, and Ldesc groups retain their documented
+  order.  Fullname is accepted as the input synonym of Lfile.  CR, LF,
+  and CRLF line endings are accepted.  A duplicate singleton, invalid
+  size, bad CRC, missing required keyword, missing companion, or
+  conflict with trusted link context is malformed.
+
+  Unknown TIC lines have no TTS‑0005 File child.  The adapter retains
+  them verbatim in its TSP‑0013 conversion ledger for replay to the same
+  legacy side, but they do not enter the signed native File and cannot
+  grant authority.  A gateway which requires end‑to‑end preservation of
+  an unknown keyword must retain the work rather than claim a lossless
+  conversion.
+
+
+10. Validation and Compatibility
+───────────────────────────────────
+
+  Legacy lengths and terminators are framing, not suggestions.  A
+  parser checks every fixed field, bounded NUL, record boundary,
+  integer conversion, address component, calendar value, and container
+  end before allocating or acting on the value.  It MUST NOT scan past
+  the selected file or packet to recover a missing terminator.
+
+  Conversion is unavailable rather than lossy when a required address,
+  timestamp, attachment, character conversion, or control value cannot
+  be represented by the selected legacy format.  A deliberate legacy
+  presentation loss is compatibility output and MUST NOT carry TITHSIG.
+  Canonical Message conversion is complete only when section 3.1 can
+  regenerate the exact original encoded children covered by Signature
+  and retain that Signature.  No corresponding byte‑preservation claim
+  is made for Legacy‑to‑TITH‑to‑legacy conversion.
+
+  An implementation may accept a documented legacy variant at this
+  boundary.  Its policy identifies the variant before interpreting
+  overloaded bytes and records enough information for diagnosis and
+  replay.  It MUST NOT emit the variant, silently repair conflicting
+  addresses, treat malformed native data as valid, or turn observed
+  local behaviour into a requirement for another implementation.
+
+  The required import profile deliberately covers the forms present in
+  existing Synchronet FTN message bases.  In addition to canonical
+  input it accepts:
+
+    • absent CHRS under a configured per‐area default;
+    • CHARSET, PC-8, IBMPC with CODEPAGE, CP895, UTF‑8 level 2,
+      LATIN‑1 level 4, and an omitted level as specified in section 3;
+    • traditional, domain‐suffixed, quoted, or opaque gateway origin
+      strings in MSGID and REPLY without treating an opaque string as
+      a TITH address;
+    • absent MSGID, REPLY, PID, TID, Origin, or legacy PATH when the
+      remaining required native fields have independent sources;
+    • repeated, accumulated, unsorted, or duplicated SEEN-BY input,
+      which is parsed completely and normalized as a TITH collection;
+      and
+    • unknown controls such as MAILER, RFC-X-No-Archive, Email, ICQ,
+      RealName, DBID, NOTE, and BBSID, retained without interpretation.
+
+  Missing optional evidence is not an error.  Missing information
+  required by the TTS‑0005 grammar is supplied only by the authenticated
+  gateway or trusted conversion context, never guessed from an unknown
+  control.  This permits every message in that corpus to be represented
+  without pretending that every historical producer used the same
+  dialect.
+
+  Packet passwords and legacy control paragraphs are untrusted input.
+  Attached FileSpecs and every generated or received pathname are
+  subject to the race‑resistant ownership and validation rules in
+  TSP‑0013.  No legacy field selects SignedOrigin, overrides an existing
+  Origin nodelist key, or grants native routing policy.
+
+  10.1 Final Delivery Authentication
+  ────────────────────────────────────
+  TTS‑0005 permits five end‐to‐end authentication states for a
+  Message or standalone File carried in an authenticated payload
+  SignedTLV.  TSP‑0011 names them Unsigned, SignedOrigin-Invalid,
+  SignedOrigin-Valid, Origin-Invalid, and Origin-Valid.  These are item
+  states; a Bundle Header or payload SignedTLV which does not validate
+  is rejected before any legacy conversion or final delivery.
+
+  Ordinary legacy import under section 2 creates Origin-Valid when the
+  gateway owns the Origin key and SignedOrigin-Valid otherwise.  It
+  does not pretend that the legacy author supplied that gateway
+  signature.  Successful TITHSIG reconstruction retains whichever
+  valid state the original native item had.  A native Unsigned item has
+  no TITHSIG controls.  Invalid or Unsigned input is not eligible for a
+  canonical signed‐region export, though a final delivery adapter may
+  produce a clearly marked local compatibility presentation under
+  TSP‑0011 and TSP‑0013.
+
+  Delivering an Unsigned or SignedOrigin-Valid item with a NOTICE tells
+  the reader that Origin did not authenticate the text.  Delivering an
+  Origin-Invalid or SignedOrigin-Invalid item with an ERROR tells the
+  reader that the received bytes are known not to match the selected
+  signer's authenticated bytes.  The diagnostic is local presentation,
+  not legacy author text.  If it is inserted into an ordinary stored
+  body, it can be quoted, mistaken for content, or destroy a later
+  byte‐exact reconstruction.  The adapter therefore retains the exact
+  native source separately and never prefixes File Contents.
+
+  An automatic reply to Origin is potentially dangerous.  Unsigned
+  Origin is unverified, and a valid SignedOrigin authenticates only the
+  gateway's report of a legacy claim.  Forged Origins, retransmission,
+  and EchoMail fan‐out can therefore make replies backscatter or a flood
+  amplifier.  TSP‑0011 consequently makes Reply-Origin explicit local
+  policy, disabled by default, idempotent, rate‐limited, and
+  nonrecursive.
+
+  FidoNet Policy 4.07 section 2.1.7 does require an explanation when a
+  node agreed to route an in‐transit message but does not forward it.
+  That explanation goes to the sysop of the node where the message
+  entered FidoNet, not necessarily to its claimed Origin.  It is a
+  routing obligation and does not require a final destination to send
+  Reply-Origin when local authentication policy orphans an item.  A
+  final adapter which also performs obligated legacy routing must
+  satisfy both rules independently.
+
+
+11. Feedback and Discussion
+───────────────────────────────
+
+  The canonical output deliberately chooses one deployed FTN grammar.
+  Import tolerance exists because legacy archives contain messages
+  written before their control formats converged; it is not a reason
+  for native TITH parsers to accept multiple representations.
+
+  TITHSIG carries only the conversion revision and original Signature.
+  TITHSIGN carries only SignedOrigin and its conditional PublicKey,
+  which have no traditional legacy field.  MessageText and File
+  Contents remain in the formats legacy software already handles, and
+  every other signed child has one exact revision 1 inverse.  The
+  retained Signature verifies the reconstructed byte sequence.
+  Unsigned control paragraphs remain ordinary mutable legacy data.
+
+  The Origin and SignedOrigin distinction is essential.  Origin remains
+  the originating system to which replies are constructed, while
+  SignedOrigin identifies the gateway which authenticated a conversion
+  only when that Origin has no key of its own.
 
 
 A. References
 ─────────────
 
-  [FTS‑0001.016] "A Basic FidoNet(r) Technical Standard", Randy Bush,
-  Pacific Systems Group, 1995‑09‑30
+  [FTS‑0001.016] Revision 16, "A Basic FidoNet Technical Standard",
+  FTSC, 1995‑09‑30.
 
-  [FSC‑0048.002] "A Proposed Type-2 Packet Extension", Jan Vroonhof,
-  1990‑10‑21
+  [FSC‑0045.001] "A Proposal for a New Packet Header Format", FTSC,
+  1990‑04‑17.
 
-  [FTS‑5003.001] "Character set definition in Fidonet messages", Peter
-  Krefting (born Karlsson), 2012‑04‑07
+  [FSC‑0048.002] "A Proposed Type-2 Packet Extension", FTSC,
+  1990‑10‑21.
+
+  [FSC‑0067.001] "A Proposal For Sensible New Kludge Lines", FTSC,
+  1992‑08‑02.
+
+  [FSC‑0068.001] "A Proposed Replacement For FTS-0004", FTSC,
+  1992‑12‑13.
+
+  [FSC‑0074.001] "EchoMail Specification", FTSC, 1993‑07‑28.
+
+  [FTS‑4000.001] Revision 1, "Control Paragraphs", FTSC,
+  2000‑10‑01.
+
+  [FTS‑4001.001] Revision 1, "Addressing Control Paragraphs", FTSC,
+  2000‑10‑01.
+
+  [FTS‑5003.001] "Character set definition in Fidonet messages", FTSC,
+  2012‑04‑07.
 
   [FTS‑0009.001] "A standard for unique message identifiers and reply
-  chain linkage", jim nutt, 1991‑12‑17
+  chain linkage", FTSC, 1991‑12‑17.
 
-  [FTS‑4008.002] "Time zone information (TZUTC)", FTSC, 2003‑05‑16
+  [FTS‑4008.002] "Time zone information (TZUTC)", FTSC, 2003‑05‑16.
 
-  [FTS‑4009.001] "Netmail tracking (Via)", FTSC, 2003‑05‑16
+  [FTS‑4009.001] "Netmail tracking (Via)", FTSC, 2003‑05‑16.
 
-  [TTS‑0005] "Bundle Format", TITH, 2026‑08‑17.
+  [FSC‑0046.005] "A Product Identifier for FidoNet Message Handlers",
+  FTSC, 1994‑08‑30.
+
+  [FSC‑0053.002] "Specifications for the ^AFLAGS field", FTSC,
+  1992‑12‑08.
+
+  [FTS‑0006.002] "YOOHOO and YOOHOO/2U2", FTSC, 1991‑11‑30.
+
+  [FTS‑5006.001] Revision 1, "TIC file format", FTSC,
+  2016‑11‑07.
+
+  [FSP‑1040.001] Revision 1, "SRIF file request interface", FTSC,
+  2018‑03‑11.
+
+  [RFC‑4648] "The Base16, Base32, and Base64 Data Encodings", IETF,
+  2006‑10.
+
+  [Policy] "FidoNet Policy Document", Version 4.07, 1989‑06‑09.
+
+  [TSP‑0013] "Legacy Mailer and Tosser IPC Adapters", TITH,
+  2026‑08‑18.
+
+  [TSP‑0011] "Durable Inbound Delivery Items", TITH, 2026‑08‑18.
+
+  [TTS‑0004] "Node Addresses", TITH, 2026‑08‑17.
+
+  [TTS‑0005] "Bundle Format", TITH, 2026‑08‑18.
+
+
+B. History
+──────────
+
+   Rev.1, 2026‑08‑17: Initial Release.
+
+   Rev.2, 2026‑08‑18: Defined canonical stored and packed Messages,
+   Type‑2+ packets, field and control conversion, attachments, EchoMail,
+   WaZOO requests, TIC distribution, corpus compatibility, validation,
+   authenticated legacy‐origin handling, and byte‐exact TITHSIG
+   verification of the ordered signed Message profile using the
+   retained original Signature, conversion revision, and exact
+   SignedOrigin mapping.
+
+   Rev.3, 2026‑08‑18: Defined final legacy presentation for all five
+   item authentication states and documented warning integrity,
+   automatic‐reply flood risk, and the distinct Policy 4.07 routing
+   return obligation.
+
+**********************************************************************

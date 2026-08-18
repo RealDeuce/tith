@@ -33,7 +33,8 @@ TITH documents use three publication classes:
 TITH is designed around a few firm constraints:
 
 - canonical TLV framing and integer encodings;
-- public-key authentication for nodes, bundles, and end-to-end items;
+- mandatory public-key authentication for nodes and bundles, with explicit
+  end-to-end item authentication states;
 - authenticated unlisted identities for enrollment and peer-to-peer use;
 - a nodelist-backed trust path for listed nodes;
 - explicit routing, durable acceptance, polling, and local IPC semantics;

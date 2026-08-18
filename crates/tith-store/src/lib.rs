@@ -8,6 +8,7 @@ use std::sync::Arc;
 
 use redb::{Database, ReadableDatabase, ReadableTable, TableDefinition};
 use tith_crypto::{CryptoError, PublicKey, TlvHash, hash_inbound_item, random_bytes};
+pub use tith_wire::item::ItemAuthentication;
 use tith_wire::item::SignedItemIdentity;
 use tith_wire::{tlv::parse_sequence, types};
 
@@ -26,13 +27,6 @@ pub enum ItemKind {
 	Message,
 	File,
 	FileRequest,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ItemAuthentication {
-	Valid,
-	Invalid,
-	Transport,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -220,8 +214,10 @@ impl InboundStore {
 		if let Some(identity) = duplicate_identity
 			&& (identity.type_code != parsed[0].type_code
 				|| matches!(kind, ItemKind::FileRequest)
-				|| value.authentication != ItemAuthentication::Valid)
-		{
+				|| !matches!(
+					value.authentication,
+					ItemAuthentication::OriginValid | ItemAuthentication::SignedOriginValid
+				)) {
 			return Err(StoreError::InvalidPayload);
 		}
 		let hash = hash_inbound_item(value.payload)?;
@@ -603,8 +599,8 @@ pub(crate) fn random_identifier(prefix: char) -> Result<String, StoreError> {
 fn encode_duplicate_identity(value: &SignedItemIdentity) -> Vec<u8> {
 	let mut output = Vec::new();
 	put_u64(&mut output, value.type_code);
-	put_string(&mut output, &value.origin.address.to_string());
-	output.extend_from_slice(value.origin.public_key.as_bytes());
+	put_string(&mut output, &value.signer.address.to_string());
+	output.extend_from_slice(value.signer.public_key.as_bytes());
 	output.extend_from_slice(value.signature.as_bytes());
 	output
 }
@@ -675,7 +671,14 @@ pub(crate) fn encode_record(value: &InboundRecord) -> Vec<u8> {
 		put_u64(&mut out, number);
 	}
 	out.push(value.kind as u8);
-	out.push(value.authentication as u8);
+	out.push(match value.authentication {
+		ItemAuthentication::OriginValid => 0,
+		ItemAuthentication::OriginInvalid => 1,
+		ItemAuthentication::Transport => 2,
+		ItemAuthentication::Unsigned => 3,
+		ItemAuthentication::SignedOriginInvalid => 4,
+		ItemAuthentication::SignedOriginValid => 5,
+	});
 	out.push(value.state as u8);
 	out.extend_from_slice(value.payload_hash.as_bytes());
 	for text in [&value.claim_key, &value.claim_token, &value.last_result] {
@@ -721,9 +724,12 @@ pub(crate) fn decode_record(mut input: &[u8]) -> Result<InboundRecord, StoreErro
 		_ => return Err(StoreError::CorruptRecord),
 	};
 	let authentication = match take_byte(&mut input)? {
-		0 => ItemAuthentication::Valid,
-		1 => ItemAuthentication::Invalid,
+		0 => ItemAuthentication::OriginValid,
+		1 => ItemAuthentication::OriginInvalid,
 		2 => ItemAuthentication::Transport,
+		3 => ItemAuthentication::Unsigned,
+		4 => ItemAuthentication::SignedOriginInvalid,
+		5 => ItemAuthentication::SignedOriginValid,
 		_ => return Err(StoreError::CorruptRecord),
 	};
 	let state = decode_state(take_byte(&mut input)?)?;
@@ -851,6 +857,47 @@ mod tests {
 	use tith_wire::tlv::OwnedTlv;
 
 	#[test]
+	fn item_authentication_encoding_round_trips_every_state() {
+		let mut record = InboundRecord {
+			inbound_id: "I00000000000000000000000000000000".to_owned(),
+			application: "tosser".to_owned(),
+			local_identity: "fidonet#1".to_owned(),
+			peer: "fidonet#2".to_owned(),
+			peer_key: PublicKey::from_bytes([1; 32]),
+			received: 1,
+			changed: 1,
+			kind: ItemKind::Message,
+			authentication: ItemAuthentication::Unsigned,
+			payload_size: 0,
+			payload_hash: TlvHash::from_bytes([2; 32]),
+			state: InboundState::Available,
+			attempts: 0,
+			eligible_at: 1,
+			claim_key: None,
+			claim_token: None,
+			claim_expires: None,
+			last_result: None,
+			forward_job: None,
+		};
+		for authentication in [
+			ItemAuthentication::Unsigned,
+			ItemAuthentication::SignedOriginInvalid,
+			ItemAuthentication::SignedOriginValid,
+			ItemAuthentication::OriginInvalid,
+			ItemAuthentication::OriginValid,
+			ItemAuthentication::Transport,
+		] {
+			record.authentication = authentication;
+			assert_eq!(
+				decode_record(&encode_record(&record))
+					.unwrap()
+					.authentication,
+				authentication
+			);
+		}
+	}
+
+	#[test]
 	fn claims_are_atomic_and_idempotent() {
 		let path = std::env::temp_dir().join(format!(
 			"tith-store-{}.redb",
@@ -865,7 +912,7 @@ mod tests {
 				peer: "fidonet#2",
 				peer_key: PublicKey::from_bytes([7; 32]),
 				received: 10,
-				authentication: ItemAuthentication::Valid,
+				authentication: ItemAuthentication::OriginValid,
 				payload: &payload,
 			})
 			.unwrap();
@@ -916,7 +963,7 @@ mod tests {
 				peer: "fidonet#2",
 				peer_key: PublicKey::from_bytes([8; 32]),
 				received: 1,
-				authentication: ItemAuthentication::Valid,
+				authentication: ItemAuthentication::OriginValid,
 				payload: &payload,
 			})
 			.unwrap();
@@ -980,7 +1027,7 @@ mod tests {
 			.encode();
 		let identity = SignedItemIdentity {
 			type_code: types::MESSAGE,
-			origin: Identity {
+			signer: Identity {
 				address: "fidonet#1/2".parse().unwrap(),
 				public_key: PublicKey::from_bytes([9; 32]),
 			},
@@ -992,7 +1039,7 @@ mod tests {
 			peer: "fidonet#1/2",
 			peer_key: PublicKey::from_bytes([9; 32]),
 			received: 10,
-			authentication: ItemAuthentication::Valid,
+			authentication: ItemAuthentication::OriginValid,
 			payload: &payload,
 		};
 		let stored_id = {
@@ -1033,7 +1080,7 @@ mod tests {
 				peer: "fidonet#2",
 				peer_key: PublicKey::from_bytes([4; 32]),
 				received: 10,
-				authentication: ItemAuthentication::Valid,
+				authentication: ItemAuthentication::OriginValid,
 				payload: &payload,
 			})
 			.unwrap();

@@ -3,10 +3,10 @@ TITH                                              THIS ISN'T THAT HARD
 **********************************************************************
 
 Publication:  TSP‑0005
-Revision:     2
+Revision:     3
 Title:        Durable Outbound Jobs
 Author(s):    Stephen Hurd
-Date:         2026‑08‑17
+Date:         2026‑08‑18
 ══════════════════════════════════════════════════════════════════════
 
 Status of this document
@@ -124,7 +124,7 @@ Contents
   Before a Job is committed, it has zero or more TSP‑0002 delivery
   copies.  Every copy is durably recorded with:
 
-    • Origin as the selected local AKA;
+    • the selected local signing identity as the local AKA;
     • the Job Kind and ultimate Destination or Area;
     • the exact next‐hop address and unlisted PublicKey, if any;
     • Active or Passive delivery mode;
@@ -425,12 +425,13 @@ Contents
     End
 
   Local-Identity is the routing AKA recorded with every copy and may
-  differ from the signed item Origin of a Forward Job.  Destination
-  occurs only for NetMail; Area occurs only for EchoMail and File.  A
-  NetMail Job has exactly one Delivery block.  Other Jobs
-  contain zero or more in stable delivery‐index order.  Zero occurs
-  only for the successful Forward case defined in section 4.  The state
-  on a Delivery line is that copy's state, and its Attempts and
+  differ from the item Origin of a Forward Job.  For an originated item
+  using SignedOrigin, it is that effective signer rather than the reply
+  Origin.  Destination occurs only for NetMail; Area occurs only for
+  EchoMail and File.  A NetMail Job has exactly one Delivery block.
+  Other Jobs contain zero or more in stable delivery‐index order.  Zero
+  occurs only for the successful Forward case defined in section 4.
+  The state on a Delivery line is that copy's state, and its Attempts and
   Last-Result apply only to that copy.
 
   Source lines occur in Attachment order for a locally submitted
@@ -621,17 +622,17 @@ A. References
 ─────────────
 
   [TSP‑0002] "Routing and Distribution Configuration", TITH,
-  2026‑08‑17.
+  2026‑08‑18.
 
   [TSP‑0004] "Local IPC Format", TITH, 2026‑08‑17.
 
-  [TSP‑0006] "Outbound Job Submission", TITH, 2026‑08‑17.
+  [TSP‑0006] "Outbound Job Submission", TITH, 2026‑08‑18.
 
-  [TSP‑0011] "Durable Inbound Delivery Items", TITH, 2026‑08‑17.
+  [TSP‑0011] "Durable Inbound Delivery Items", TITH, 2026‑08‑18.
 
-  [TTS‑0003] "Common TLV Types", TITH, 2026‑08‑17.
+  [TTS‑0003] "Common TLV Types", TITH, 2026‑08‑18.
 
-  [TTS‑0005] "Bundle Format", TITH, 2026‑08‑17.
+  [TTS‑0005] "Bundle Format", TITH, 2026‑08‑18.
 
 
 B. History
@@ -641,5 +642,8 @@ B. History
 
    Rev.2, 2026‑08‑17: Generalized Jobs to EchoMail and file
    distribution with multiple independently delivered copies.
+
+   Rev.3, 2026‑08‑18: Distinguished a delivery copy's local signing
+   identity from an item's originating and reply Origin.
 
 **********************************************************************

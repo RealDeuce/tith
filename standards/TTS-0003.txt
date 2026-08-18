@@ -3,10 +3,10 @@ TITH                                              THIS ISN'T THAT HARD
 **********************************************************************
 
 Publication:  TTS‑0003
-Revision:     2
+Revision:     3
 Title:        Common TLV Types
 Author(s):    Stephen Hurd
-Date:         2026‑08‑17
+Date:         2026‑08‑18
 ══════════════════════════════════════════════════════════════════════
 
 Status of this document
@@ -69,11 +69,18 @@ Contents
 
   1.  Origin
       This type contains the 5D address as specified by TTS‑0004.
-      This address identifies the public key to use for signing
-      operations at this level and below.  The unlisted address is
+      The enclosing standard defines what originated at that address
+      and whether it is also a reply address.  When Origin selects a
+      signing key, its nodelist key is used.  The unlisted address is
       the sole exception: where an enclosing standard permits it, an
-      accompanying PublicKey identifies the key to use.  A supplied
-      PublicKey MUST NOT override the nodelist key of any other Origin.
+      accompanying PublicKey identifies its key.  A supplied PublicKey
+      MUST NOT override the nodelist key of any other Origin.
+
+      When an enclosing standard permits SignedOrigin and no public
+      key is available for Origin, SignedOrigin selects the signing
+      key.  If a key is available for Origin, SignedOrigin is ignored
+      for key selection.  Failed verification with an Origin key MUST
+      NOT be retried using SignedOrigin.
 
   2.  Signature
       The value MUST be the 64 binary bytes of data output from the
@@ -83,12 +90,12 @@ Contents
       U+6E, U+54, U+4C, U+56, U+00.
 
       The definition of a type containing a Signature MUST specify the
-      exact byte sequence that was signed and the Origin whose public
-      key is applicable.  That byte sequence MUST be verified using
-      hydro_sign_verify(), or the equivalent hydro_sign_init(),
-      hydro_sign_update(), and hydro_sign_final_verify() sequence.
-      The containing type also defines the consequences of a missing
-      or invalid Signature.
+      exact byte sequence that was signed and the Origin or permitted
+      SignedOrigin whose public key is applicable.  That byte sequence
+      MUST be verified using hydro_sign_verify(), or the equivalent
+      hydro_sign_init(), hydro_sign_update(), and
+      hydro_sign_final_verify() sequence.  The containing type also
+      defines the consequences of a missing or invalid Signature.
 
   3.  SignedData
       The value is binary data that can be validated by a Signature
@@ -184,6 +191,19 @@ Contents
       defines the address with which the key is associated and how the
       key is used.
 
+  9.  SignedOrigin
+      This type contains the 5D address specified by TTS‑0004 whose key
+      signed a value on behalf of an Origin for which no public key is
+      available.  It is permitted only where an enclosing standard
+      defines its placement and signature coverage.  It does not
+      replace Origin as the originating or reply address.
+
+      If SignedOrigin is the unlisted address, it MUST be immediately
+      followed by one PublicKey.  For any other SignedOrigin, a
+      PublicKey at that position is prohibited and its key is obtained
+      from the nodelist.  SignedOrigin never overrides an available
+      Origin key.
+
 
 A. References
 ─────────────
@@ -192,7 +212,7 @@ A. References
 
   [TTS‑0004] "Node Addresses", TITH, 2026‑08‑17.
 
-  [TTS‑0005] "Bundle Format", TITH, 2026‑08‑17.
+  [TTS‑0005] "Bundle Format", TITH, 2026‑08‑18.
 
   [FTA‑1006.002] "Keywords to indicate requirement levels" FTSC,
   2000‑01‑17.
@@ -214,5 +234,8 @@ B. History
 
    Rev.2, 2026‑08‑17: Defined PublicKey placement for an unlisted
    SignedTLV Origin and made the child grammar explicit.
+
+   Rev.3, 2026‑08‑18: Added SignedOrigin as the fallback signing‐key
+   identity when an Origin has no available public key.
 
 **********************************************************************

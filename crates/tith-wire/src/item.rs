@@ -25,11 +25,27 @@ pub enum ItemKind {
 	PollFileRequests,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ItemAuthentication {
+	Unsigned,
+	SignedOriginInvalid,
+	SignedOriginValid,
+	OriginInvalid,
+	OriginValid,
+	Transport,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SignedItemIdentity {
 	pub type_code: u64,
-	pub origin: Identity,
+	pub signer: Identity,
 	pub signature: Signature,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ItemProvenance {
+	pub origin: Address,
+	pub signer: Option<Identity>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -37,7 +53,9 @@ pub struct ValidatedItem {
 	pub kind: ItemKind,
 	pub request_identifier: u64,
 	pub duplicate_identity: Option<SignedItemIdentity>,
+	pub authentication: Option<ItemAuthentication>,
 	pub response_to: Option<TlvHash>,
+	pub provenance: Option<ItemProvenance>,
 	pub destination: Option<Identity>,
 	pub area: Option<String>,
 	pub raw: OwnedTlv,
@@ -93,20 +111,24 @@ pub struct StandaloneFileData {
 
 pub fn build_originated_message(
 	data: MessageData,
-	origin: &Identity,
+	provenance: &ItemProvenance,
 	secret: &SecretKey,
 	request_identifier: u64,
 	via_timestamp: u64,
 	software: &str,
 	seen_by: &[String],
 ) -> Result<OwnedTlv, BundleError> {
+	let effective_signer = provenance
+		.signer
+		.as_ref()
+		.ok_or(BundleError::Missing("Message signing identity"))?;
 	if data.destination.is_some() == data.area.is_some() {
 		return Err(BundleError::Unexpected(
 			"Message Destination/Area combination",
 		));
 	}
 	let mut signed = Vec::new();
-	push_identity(&mut signed, types::ORIGIN, origin)?;
+	push_provenance(&mut signed, provenance)?;
 	if let Some(destination) = &data.destination {
 		push_identity(&mut signed, types::DESTINATION, destination)?;
 	}
@@ -169,7 +191,7 @@ pub fn build_originated_message(
 		types::REQUEST_IDENTIFIER,
 		crate::integer::encode_u64(request_identifier),
 	)?);
-	signed.push(via_value(origin, via_timestamp, software)?);
+	signed.push(via_value(effective_signer, via_timestamp, software)?);
 	for value in seen_by {
 		signed.push(OwnedTlv::new(types::SEEN_BY, value.as_bytes().to_vec())?);
 	}
@@ -184,13 +206,17 @@ pub fn build_originated_message(
 
 pub fn build_originated_file(
 	data: StandaloneFileData,
-	origin: &Identity,
+	provenance: &ItemProvenance,
 	secret: &SecretKey,
 	request_identifier: u64,
 	via_timestamp: u64,
 	software: &str,
 	seen_by: &[String],
 ) -> Result<OwnedTlv, BundleError> {
+	let effective_signer = provenance
+		.signer
+		.as_ref()
+		.ok_or(BundleError::Missing("File signing identity"))?;
 	let mut signed = vec![OwnedTlv::new(types::FILENAME, data.filename.into_bytes())?];
 	if let Some(timestamp) = data.timestamp {
 		signed.push(OwnedTlv::new(
@@ -200,7 +226,7 @@ pub fn build_originated_file(
 	}
 	signed.push(OwnedTlv::new(types::CONTENTS, data.contents)?);
 	signed.push(area_value(&data.area)?);
-	push_identity(&mut signed, types::ORIGIN, origin)?;
+	push_provenance(&mut signed, provenance)?;
 	if let Some(value) = data.short_description {
 		signed.push(OwnedTlv::new(types::SHORT_DESCRIPTION, value.into_bytes())?);
 	}
@@ -228,7 +254,7 @@ pub fn build_originated_file(
 		types::REQUEST_IDENTIFIER,
 		crate::integer::encode_u64(request_identifier),
 	)?);
-	signed.push(via_value(origin, via_timestamp, software)?);
+	signed.push(via_value(effective_signer, via_timestamp, software)?);
 	for value in seen_by {
 		signed.push(OwnedTlv::new(types::SEEN_BY, value.as_bytes().to_vec())?);
 	}
@@ -298,6 +324,29 @@ fn push_identity(
 		)?);
 	}
 	Ok(())
+}
+
+fn push_provenance(
+	output: &mut Vec<OwnedTlv>,
+	provenance: &ItemProvenance,
+) -> Result<(), BundleError> {
+	let signer = provenance
+		.signer
+		.as_ref()
+		.ok_or(BundleError::Missing("item signing identity"))?;
+	if provenance.origin == signer.address {
+		return push_identity(output, types::ORIGIN, signer);
+	}
+	if provenance.origin.is_unlisted() {
+		return Err(BundleError::Unexpected(
+			"unlisted Origin without its own PublicKey",
+		));
+	}
+	output.push(OwnedTlv::new(
+		types::ORIGIN,
+		provenance.origin.to_string().into_bytes(),
+	)?);
+	push_identity(output, types::SIGNED_ORIGIN, signer)
 }
 
 fn area_value(name: &str) -> Result<OwnedTlv, BundleError> {
@@ -456,6 +505,59 @@ fn parse_identity(
 	})
 }
 
+fn parse_provenance(
+	origin: &OwnedTlv,
+	origin_key: Option<&OwnedTlv>,
+	signed_origin: Option<(&OwnedTlv, Option<&OwnedTlv>)>,
+	resolver: &impl KeyResolver,
+) -> Result<ItemProvenance, BundleError> {
+	let origin_address = parse_address(origin)?;
+	let origin_public_key = if origin_address.is_unlisted() {
+		Some(parse_public_key(
+			origin_key.ok_or(BundleError::Missing("unlisted Origin PublicKey"))?,
+		)?)
+	} else {
+		if origin_key.is_some() {
+			return Err(BundleError::Unexpected("listed Origin PublicKey"));
+		}
+		resolver.public_key(&origin_address)
+	};
+	let signed_parts = signed_origin
+		.map(|(value, key)| {
+			let address = parse_address(value)?;
+			let inline_key = key.map(parse_public_key).transpose()?;
+			Ok::<_, BundleError>((address, inline_key, value, key))
+		})
+		.transpose()?;
+	let signer = if let Some(public_key) = origin_public_key {
+		Identity {
+			address: origin_address.clone(),
+			public_key,
+		}
+	} else {
+		let (_, _, value, key) =
+			signed_parts.ok_or_else(|| BundleError::UnknownKey(origin_address.clone()))?;
+		parse_identity(value, key, resolver)?
+	};
+	Ok(ItemProvenance {
+		origin: origin_address,
+		signer: Some(signer),
+	})
+}
+
+fn item_authentication(provenance: &ItemProvenance, authenticated: bool) -> ItemAuthentication {
+	let signer = provenance
+		.signer
+		.as_ref()
+		.expect("signed provenance has a signer");
+	match (signer.address == provenance.origin, authenticated) {
+		(true, true) => ItemAuthentication::OriginValid,
+		(true, false) => ItemAuthentication::OriginInvalid,
+		(false, true) => ItemAuthentication::SignedOriginValid,
+		(false, false) => ItemAuthentication::SignedOriginInvalid,
+	}
+}
+
 fn conditional_public_key<'a>(
 	cursor: &mut Cursor<'a>,
 	address: &Address,
@@ -552,8 +654,13 @@ fn validate_message(
 	let (_, origin_value) = cursor.take(types::ORIGIN, "Message Origin")?;
 	let origin_address = parse_address(origin_value)?;
 	let origin_key = conditional_public_key(&mut cursor, &origin_address)?;
-	let origin = parse_identity(origin_value, origin_key, resolver)?;
-
+	let signed_origin = if let Some((_, value)) = cursor.optional(types::SIGNED_ORIGIN) {
+		let address = parse_address(value)?;
+		let key = conditional_public_key(&mut cursor, &address)?;
+		Some((value, key))
+	} else {
+		None
+	};
 	let destination = if cursor.peek_type() == Some(types::DESTINATION) {
 		let (_, destination) = cursor.take(types::DESTINATION, "Destination")?;
 		let address = parse_address(destination)?;
@@ -603,13 +710,40 @@ fn validate_message(
 	if let Some((_, value)) = cursor.optional(types::ORIGINAL_CHARACTER_SET) {
 		text(value)?;
 	}
-	let (signature_index, signature_value) = cursor.take(types::SIGNATURE, "Message Signature")?;
-	let signature = parse_signature(signature_value)?;
-	let authenticated = verify_tlv(
-		&encoded_prefix(&children, signature_index),
-		&signature,
-		&origin.public_key,
-	)?;
+	let signature_entry = cursor.optional(types::SIGNATURE);
+	let (provenance, authentication, duplicate_identity) =
+		if let Some((signature_index, signature_value)) = signature_entry {
+			let provenance = parse_provenance(origin_value, origin_key, signed_origin, resolver)?;
+			let signature = parse_signature(signature_value)?;
+			let signer = provenance
+				.signer
+				.as_ref()
+				.expect("signed provenance has a signer");
+			let authenticated = verify_tlv(
+				&encoded_prefix(&children, signature_index),
+				&signature,
+				&signer.public_key,
+			)?;
+			let authentication = item_authentication(&provenance, authenticated);
+			let duplicate_identity = authenticated.then_some(SignedItemIdentity {
+				type_code: types::MESSAGE,
+				signer: signer.clone(),
+				signature,
+			});
+			(provenance, authentication, duplicate_identity)
+		} else {
+			if signed_origin.is_some() {
+				return Err(BundleError::Unexpected("SignedOrigin without Signature"));
+			}
+			(
+				ItemProvenance {
+					origin: origin_address,
+					signer: None,
+				},
+				ItemAuthentication::Unsigned,
+				None,
+			)
+		};
 	let request_identifier = decode_u64(
 		&cursor
 			.take(types::REQUEST_IDENTIFIER, "Message RequestIdentifier")?
@@ -637,12 +771,10 @@ fn validate_message(
 			ItemKind::EchoMail
 		},
 		request_identifier,
-		duplicate_identity: authenticated.then_some(SignedItemIdentity {
-			type_code: types::MESSAGE,
-			origin,
-			signature,
-		}),
+		duplicate_identity,
+		authentication: Some(authentication),
 		response_to: None,
+		provenance: Some(provenance),
 		destination,
 		area,
 		raw: value.clone(),
@@ -674,10 +806,17 @@ fn validate_file(
 	if standalone && origin_value.is_none() {
 		return Err(BundleError::Missing("standalone File Origin"));
 	}
-	let origin = if let Some(origin_value) = origin_value {
+	let provenance_parts = if let Some(origin_value) = origin_value {
 		let address = parse_address(origin_value)?;
 		let key = conditional_public_key(&mut cursor, &address)?;
-		Some(parse_identity(origin_value, key, resolver)?)
+		let signed_origin = if let Some((_, value)) = cursor.optional(types::SIGNED_ORIGIN) {
+			let address = parse_address(value)?;
+			let key = conditional_public_key(&mut cursor, &address)?;
+			Some((value, key))
+		} else {
+			None
+		};
+		Some((origin_value, address, key, signed_origin))
 	} else {
 		None
 	};
@@ -697,24 +836,46 @@ fn validate_file(
 		}
 	}
 	let signature_entry = cursor.optional(types::SIGNATURE);
-	if standalone && signature_entry.is_none() {
-		return Err(BundleError::Missing("standalone File Signature"));
+	if signature_entry.is_some() && provenance_parts.is_none() {
+		return Err(BundleError::Unexpected("File Signature without Origin"));
 	}
-	if signature_entry.is_some() != origin.is_some() {
-		return Err(BundleError::Unexpected("File Origin/Signature combination"));
-	}
-	let signature = if let Some((signature_index, signature_value)) = signature_entry {
-		let signature = parse_signature(signature_value)?;
-		let origin = origin.as_ref().expect("combination checked above");
-		let authenticated = verify_tlv(
-			&encoded_prefix(&children, signature_index),
-			&signature,
-			&origin.public_key,
-		)?;
-		Some((signature, authenticated))
-	} else {
-		None
-	};
+	let (provenance, authentication, signature) =
+		if let Some((signature_index, signature_value)) = signature_entry {
+			let signature = parse_signature(signature_value)?;
+			let (origin_value, _, key, signed_origin) = provenance_parts
+				.as_ref()
+				.expect("combination checked above");
+			let provenance = parse_provenance(origin_value, *key, *signed_origin, resolver)?;
+			let signer = provenance
+				.signer
+				.as_ref()
+				.expect("signed provenance has a signer");
+			let authenticated = verify_tlv(
+				&encoded_prefix(&children, signature_index),
+				&signature,
+				&signer.public_key,
+			)?;
+			let authentication = item_authentication(&provenance, authenticated);
+			(
+				Some(provenance),
+				Some(authentication),
+				Some((signature, authenticated)),
+			)
+		} else {
+			let provenance = provenance_parts
+				.map(|(_, origin, _, signed_origin)| {
+					if signed_origin.is_some() {
+						return Err(BundleError::Unexpected("SignedOrigin without Signature"));
+					}
+					Ok(ItemProvenance {
+						origin,
+						signer: None,
+					})
+				})
+				.transpose()?;
+			let authentication = provenance.as_ref().map(|_| ItemAuthentication::Unsigned);
+			(provenance, authentication, None)
+		};
 	let request_identifier = if standalone {
 		Some(decode_u64(
 			&cursor
@@ -746,11 +907,19 @@ fn validate_file(
 		duplicate_identity: signature.filter(|(_, authenticated)| *authenticated).map(
 			|(signature, _)| SignedItemIdentity {
 				type_code: types::FILE,
-				origin: origin.expect("standalone file has Origin"),
+				signer: provenance
+					.as_ref()
+					.expect("standalone file has Origin")
+					.signer
+					.as_ref()
+					.expect("valid signature has a signer")
+					.clone(),
 				signature,
 			},
 		),
+		authentication,
 		response_to: None,
+		provenance,
 		destination: None,
 		area,
 		raw: value.clone(),
@@ -771,7 +940,9 @@ fn simple_request(value: &OwnedTlv, kind: ItemKind) -> Result<ValidatedItem, Bun
 		kind,
 		request_identifier,
 		duplicate_identity: None,
+		authentication: None,
 		response_to: None,
+		provenance: None,
 		destination: None,
 		area: None,
 		raw: value.clone(),
@@ -799,7 +970,9 @@ fn validate_file_request(value: &OwnedTlv) -> Result<ValidatedItem, BundleError>
 		kind: ItemKind::FileRequest,
 		request_identifier,
 		duplicate_identity: None,
+		authentication: Some(ItemAuthentication::Transport),
 		response_to: None,
+		provenance: None,
 		destination: None,
 		area: None,
 		raw: value.clone(),
@@ -833,7 +1006,9 @@ fn validate_response(value: &OwnedTlv, accepted: bool) -> Result<ValidatedItem, 
 			kind: ItemKind::Accepted,
 			request_identifier,
 			duplicate_identity: None,
+			authentication: None,
 			response_to: Some(response_to),
+			provenance: None,
 			destination: None,
 			area: None,
 			raw: value.clone(),
@@ -874,7 +1049,9 @@ fn validate_response(value: &OwnedTlv, accepted: bool) -> Result<ValidatedItem, 
 		kind: ItemKind::Rejected,
 		request_identifier,
 		duplicate_identity: None,
+		authentication: None,
 		response_to: Some(response_to),
+		provenance: None,
 		destination: None,
 		area: None,
 		raw: value.clone(),
@@ -1033,6 +1210,58 @@ mod tests {
 	}
 
 	#[test]
+	fn accepts_unsigned_message_and_standalone_file() {
+		let destination_keys = SigningKeyPair::from_seed(&[12; 32]).unwrap();
+		let origin = Identity {
+			address: "fidonet#1/12".parse().unwrap(),
+			public_key: SigningKeyPair::from_seed(&[13; 32]).unwrap().public,
+		};
+		let destination = Identity {
+			address: "fidonet#1/13".parse().unwrap(),
+			public_key: destination_keys.public,
+		};
+		let message = container(
+			types::MESSAGE,
+			&[
+				OwnedTlv::new(types::ORIGIN, origin.address.to_string().into_bytes()).unwrap(),
+				OwnedTlv::new(
+					types::DESTINATION,
+					destination.address.to_string().into_bytes(),
+				)
+				.unwrap(),
+				OwnedTlv::new(types::TIMESTAMP, crate::integer::encode_u64(1)).unwrap(),
+				OwnedTlv::new(types::TO_USER_NAME, b"You".to_vec()).unwrap(),
+				OwnedTlv::new(types::FROM_USER_NAME, b"Me".to_vec()).unwrap(),
+				OwnedTlv::new(types::SUBJECT, Vec::new()).unwrap(),
+				OwnedTlv::new(types::MESSAGE_TEXT, b"Legacy".to_vec()).unwrap(),
+				OwnedTlv::new(types::REQUEST_IDENTIFIER, crate::integer::encode_u64(10)).unwrap(),
+				via_value(&origin, 1, "test").unwrap(),
+			],
+		);
+		let validated = validate_item(&message, &|address: &Address| {
+			(address == &destination.address).then_some(destination.public_key)
+		})
+		.unwrap()
+		.unwrap();
+		assert_eq!(validated.authentication, Some(ItemAuthentication::Unsigned));
+		assert!(validated.duplicate_identity.is_none());
+		assert_eq!(validated.provenance.unwrap().signer, None);
+
+		let file = container(
+			types::FILE,
+			&[
+				OwnedTlv::new(types::FILENAME, b"legacy.zip".to_vec()).unwrap(),
+				OwnedTlv::new(types::CONTENTS, b"legacy".to_vec()).unwrap(),
+				OwnedTlv::new(types::ORIGIN, origin.address.to_string().into_bytes()).unwrap(),
+				OwnedTlv::new(types::REQUEST_IDENTIFIER, crate::integer::encode_u64(11)).unwrap(),
+			],
+		);
+		let validated = validate_item(&file, &|_: &Address| None).unwrap().unwrap();
+		assert_eq!(validated.authentication, Some(ItemAuthentication::Unsigned));
+		assert!(validated.duplicate_identity.is_none());
+	}
+
+	#[test]
 	fn message_origin_is_the_literal_first_child() {
 		let message = container(
 			types::MESSAGE,
@@ -1109,5 +1338,165 @@ mod tests {
 		}
 		value.extend_from_slice(b"tith 1.0");
 		validate_via(&OwnedTlv::new(types::VIA, value).unwrap()).unwrap();
+	}
+
+	#[test]
+	fn signed_origin_authenticates_when_origin_has_no_key() {
+		let signer_keys = SigningKeyPair::from_seed(&[20; 32]).unwrap();
+		let destination_keys = SigningKeyPair::from_seed(&[21; 32]).unwrap();
+		let provenance = ItemProvenance {
+			origin: "fidonet#1/100".parse().unwrap(),
+			signer: Some(Identity {
+				address: Address::unlisted("p2p".to_owned()).unwrap(),
+				public_key: signer_keys.public,
+			}),
+		};
+		let destination = Identity {
+			address: "fidonet#1/200".parse().unwrap(),
+			public_key: destination_keys.public,
+		};
+		let message = build_originated_message(
+			MessageData {
+				destination: Some(destination.clone()),
+				timestamp: 1,
+				to_user: "You".to_owned(),
+				from_user: "Me".to_owned(),
+				subject: String::new(),
+				text: "Legacy".to_owned(),
+				area: None,
+				attachments: Vec::new(),
+				legacy_attributes: None,
+				timestamp_offset: None,
+				tear_line: None,
+				origin_line: None,
+				message_id: None,
+				reply_to: None,
+				additional_kludge_lines: Vec::new(),
+			},
+			&provenance,
+			&signer_keys.secret,
+			7,
+			1,
+			"test",
+			&[],
+		)
+		.unwrap();
+		let validated = validate_item(&message, &|address: &Address| {
+			(address == &destination.address).then_some(destination.public_key)
+		})
+		.unwrap()
+		.unwrap();
+		assert_eq!(
+			validated.authentication,
+			Some(ItemAuthentication::SignedOriginValid)
+		);
+		assert_eq!(validated.provenance, Some(provenance.clone()));
+		assert_eq!(
+			validated.duplicate_identity.unwrap().signer,
+			provenance.signer.unwrap()
+		);
+	}
+
+	#[test]
+	fn origin_key_prevents_signed_origin_fallback() {
+		let signer_keys = SigningKeyPair::from_seed(&[22; 32]).unwrap();
+		let origin_keys = SigningKeyPair::from_seed(&[23; 32]).unwrap();
+		let destination_keys = SigningKeyPair::from_seed(&[24; 32]).unwrap();
+		let origin: Address = "fidonet#1/100".parse().unwrap();
+		let destination = Identity {
+			address: "fidonet#1/200".parse().unwrap(),
+			public_key: destination_keys.public,
+		};
+		let message = build_originated_message(
+			MessageData {
+				destination: Some(destination.clone()),
+				timestamp: 1,
+				to_user: "You".to_owned(),
+				from_user: "Me".to_owned(),
+				subject: String::new(),
+				text: "Legacy".to_owned(),
+				area: None,
+				attachments: Vec::new(),
+				legacy_attributes: None,
+				timestamp_offset: None,
+				tear_line: None,
+				origin_line: None,
+				message_id: None,
+				reply_to: None,
+				additional_kludge_lines: Vec::new(),
+			},
+			&ItemProvenance {
+				origin: origin.clone(),
+				signer: Some(Identity {
+					address: Address::unlisted("p2p".to_owned()).unwrap(),
+					public_key: signer_keys.public,
+				}),
+			},
+			&signer_keys.secret,
+			8,
+			1,
+			"test",
+			&[],
+		)
+		.unwrap();
+		let validated = validate_item(&message, &|address: &Address| {
+			if address == &origin {
+				Some(origin_keys.public)
+			} else if address == &destination.address {
+				Some(destination.public_key)
+			} else {
+				None
+			}
+		})
+		.unwrap()
+		.unwrap();
+		assert_eq!(
+			validated.authentication,
+			Some(ItemAuthentication::OriginInvalid)
+		);
+		assert!(validated.duplicate_identity.is_none());
+		assert_eq!(
+			validated.provenance.unwrap().signer.unwrap().address,
+			origin
+		);
+	}
+
+	#[test]
+	fn standalone_file_uses_signed_origin_fallback() {
+		let signer_keys = SigningKeyPair::from_seed(&[25; 32]).unwrap();
+		let provenance = ItemProvenance {
+			origin: "fidonet#1/300".parse().unwrap(),
+			signer: Some(Identity {
+				address: Address::unlisted("p2p".to_owned()).unwrap(),
+				public_key: signer_keys.public,
+			}),
+		};
+		let file = build_originated_file(
+			StandaloneFileData {
+				filename: "test.zip".to_owned(),
+				timestamp: None,
+				contents: b"file".to_vec(),
+				area: "FILES".to_owned(),
+				short_description: None,
+				long_description_lines: Vec::new(),
+				tear_line: None,
+				magic_word: None,
+				replaces: None,
+			},
+			&provenance,
+			&signer_keys.secret,
+			9,
+			1,
+			"test",
+			&["fidonet#1/300".to_owned()],
+		)
+		.unwrap();
+		let validated = validate_item(&file, &|_: &Address| None).unwrap().unwrap();
+		assert_eq!(
+			validated.authentication,
+			Some(ItemAuthentication::SignedOriginValid)
+		);
+		assert_eq!(validated.provenance, Some(provenance));
+		assert!(validated.duplicate_identity.is_some());
 	}
 }

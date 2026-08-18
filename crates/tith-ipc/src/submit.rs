@@ -75,6 +75,7 @@ pub enum MessageKind {
 pub struct MessageSubmission {
 	pub kind: MessageKind,
 	pub origin: String,
+	pub signed_origin: Option<String>,
 	pub destination_or_area: String,
 	pub to_user: String,
 	pub from_user: String,
@@ -97,6 +98,7 @@ pub struct MessageSubmission {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct FileSubmission {
 	pub origin: String,
+	pub signed_origin: Option<String>,
 	pub area: String,
 	pub source: SourceSubmission,
 	pub short_description: Option<String>,
@@ -306,6 +308,7 @@ fn parse_message(
 	kind: ParsedJobKind,
 ) -> Result<MessageSubmission, IpcError> {
 	let origin = cursor.required_quoted("Origin")?;
+	let signed_origin = cursor.optional_quoted("Signed-Origin")?;
 	let (message_kind, destination_or_area) = match kind {
 		ParsedJobKind::NetMail => (MessageKind::NetMail, cursor.required_quoted("Destination")?),
 		ParsedJobKind::EchoMail => (MessageKind::EchoMail, cursor.required_quoted("Area")?),
@@ -345,6 +348,7 @@ fn parse_message(
 	Ok(MessageSubmission {
 		kind: message_kind,
 		origin,
+		signed_origin,
 		destination_or_area,
 		to_user,
 		from_user,
@@ -367,6 +371,7 @@ fn parse_message(
 
 fn parse_file(cursor: &mut Cursor<'_>) -> Result<FileSubmission, IpcError> {
 	let origin = cursor.required_quoted("Origin")?;
+	let signed_origin = cursor.optional_quoted("Signed-Origin")?;
 	let area = cursor.required_quoted("Area")?;
 	if !cursor.peek_exact("File") {
 		return Err(cursor.error("missing File block"));
@@ -392,6 +397,7 @@ fn parse_file(cursor: &mut Cursor<'_>) -> Result<FileSubmission, IpcError> {
 	cursor.finish()?;
 	Ok(FileSubmission {
 		origin,
+		signed_origin,
 		area,
 		source,
 		short_description,
@@ -748,5 +754,16 @@ mod tests {
 			)
 			.is_err()
 		);
+	}
+
+	#[test]
+	fn parses_signed_origin_after_origin() {
+		let request = b"TITH-IPC 1\nSubmit\nJob\nApplication \"gateway\"\nIdempotency-Key \"legacy\"\nOrigin \"fidonet#1/100\"\nSigned-Origin \"fidonet#1/1\"\nDestination \"fidonet#1/2\"\nTo-User \"You\"\nFrom-User \"Me\"\nEnd\nEnd\n";
+		let parsed = SubmissionRequest::parse(request).unwrap();
+		let SubmissionBody::Message(message) = &parsed.jobs[0].body else {
+			panic!("message expected");
+		};
+		assert_eq!(message.origin, "fidonet#1/100");
+		assert_eq!(message.signed_origin.as_deref(), Some("fidonet#1/1"));
 	}
 }

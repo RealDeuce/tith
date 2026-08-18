@@ -8,6 +8,7 @@ pub const TIMESTAMP: u64 = 5;
 pub const DESTINATION: u64 = 6;
 pub const ADDRESS: u64 = 7;
 pub const PUBLIC_KEY: u64 = 8;
+pub const SIGNED_ORIGIN: u64 = 9;
 
 pub const MESSAGE: u64 = 64;
 pub const FILE: u64 = 65;
@@ -46,7 +47,7 @@ pub const REPLACES: u64 = 121;
 
 #[must_use]
 pub const fn is_defined(type_code: u64) -> bool {
-	matches!(type_code, 0..=8 | 64..=71 | 96..=99 | 101..=121)
+	matches!(type_code, 0..=9 | 64..=71 | 96..=99 | 101..=121)
 }
 
 #[must_use]

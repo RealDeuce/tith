@@ -271,9 +271,9 @@ A. References
 
   [TSP‑0004] "Local IPC Format", TITH, 2026‑08‑17.
 
-  [TSP‑0006] "Outbound Job Submission", TITH, 2026‑08‑17.
+  [TSP‑0006] "Outbound Job Submission", TITH, 2026‑08‑18.
 
-  [TSP‑0012] "Tosser Consumption IPC", TITH, 2026‑08‑17.
+  [TSP‑0012] "Tosser Consumption IPC", TITH, 2026‑08‑18.
 
   [TTS‑0002] "Type Length Value Encoding", TITH, 2026‑08‑16.
 

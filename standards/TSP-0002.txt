@@ -3,10 +3,10 @@ TITH                                              THIS ISN'T THAT HARD
 **********************************************************************
 
 Publication:  TSP‑0002
-Revision:     4
+Revision:     6
 Title:        Routing and Distribution Configuration
 Author(s):    Stephen Hurd
-Date:         2026‑08‑17
+Date:         2026‑08‑18
 ══════════════════════════════════════════════════════════════════════
 
 Status of this document
@@ -283,6 +283,13 @@ Contents
   ultimate Destination is not local.  Local delivery does not require
   relay authorization.
 
+  Authenticated here means TSP‑0011 ItemAuthentication Origin-Valid or
+  SignedOrigin-Valid.  An Unsigned, Origin-Invalid, or
+  SignedOrigin-Invalid item MUST NOT be relayed or distributed as
+  authenticated content; attempting to create such a copy fails as
+  Authentication.  This restriction does not prevent final local
+  delivery under the warning or orphan policy in TSP‑0011.
+
   A relay rule has one of the following forms:
 
     Allow-Relay From <selector> Origin <selector>
@@ -292,8 +299,9 @@ Contents
 
   Each displayed rule is one physical line; the indentation above is
   only typographic wrapping.  From selects the authenticated immediate
-  peer.  Origin selects the signed Message Origin.  Destination
-  selects the ultimate Message Destination.
+  peer.  Origin selects the Message's effective signer: its Origin when
+  that address has an applicable key, and its SignedOrigin otherwise.
+  Destination selects the ultimate Message Destination.
 
   Allow-Relay and Deny-Relay lines are examined together in file
   order.  The first rule whose three selectors match decides whether
@@ -310,10 +318,11 @@ Contents
 
   A notification is one of None, Sender, Origin-Sysop, or Both.
   Sender generates a failure NetMail to the original FromUserName at
-  the authenticated Origin.  Origin-Sysop generates one to the Sysop
-  at that Origin.  Both requests both notices.  A notice whose target
-  cannot be determined is omitted.  A failure notice MUST NOT itself
-  generate another failure notice.
+  the Message Origin.  Origin-Sysop generates one to the Sysop at that
+  Origin.  SignedOrigin does not replace this reply address.  Both
+  requests both notices.  A notice whose target cannot be determined
+  is omitted.  A failure notice MUST NOT itself generate another
+  failure notice.
 
   Failure lines have this form:
 
@@ -327,8 +336,9 @@ Contents
   does not match an item without a Destination.
 
   Failure lines are examined in file order.  The first line whose kind
-  and selectors match supplies the policy.  Any matches every failure
-  kind.
+  and selectors match supplies the policy.  Its Origin selector uses
+  the same effective signer as a relay rule.  Any matches every
+  failure kind.
 
   A Route, Allow-Relay, or Deny-Relay line may end with this complete
   failure override:
@@ -702,20 +712,20 @@ Contents
 A. References
 ─────────────
 
-  [TSP‑0011] "Durable Inbound Delivery Items", TITH, 2026‑08‑17.
+  [TSP‑0011] "Durable Inbound Delivery Items", TITH, 2026‑08‑18.
 
   [TSP‑0013] "Legacy Mailer and Tosser IPC Adapters", TITH,
-  2026‑08‑17.
+  2026‑08‑18.
 
-  [TTS‑0003] "Common TLV Types", TITH, 2026‑08‑17.
+  [TTS‑0003] "Common TLV Types", TITH, 2026‑08‑18.
 
   [TTS‑0004] "Node Addresses", TITH, 2026‑08‑17.
 
-  [TTS‑0005] "Bundle Format", TITH, 2026‑08‑17.
+  [TTS‑0005] "Bundle Format", TITH, 2026‑08‑18.
 
-  [TTS‑0006] "Bundle Exchange Protocol", TITH, 2026‑08‑17.
+  [TTS‑0006] "Bundle Exchange Protocol", TITH, 2026‑08‑18.
 
-  [TTS‑5000] "The Distribution Nodelist", TITH, 2026‑08‑17.
+  [TTS‑5000] "The Distribution Nodelist", TITH, 2026‑08‑18.
 
   [FSC‑0003.001] "FidoNet Route Files Explained", Ben Barker,
   1986‑03‑23.
@@ -742,5 +752,13 @@ B. History
    Rev.4, 2026‑08‑17: Defined durable inbound items as retained tossing
    sources after a Bundle container is retired and fixed Send-To
    delivery mode and distribution metadata at route commitment.
+
+   Rev.5, 2026‑08‑18: Distinguished the effective signing identity
+   used by relay and failure policy from the Message Origin used for
+   replies and failure notices.
+
+   Rev.6, 2026‑08‑18: Restricted forwarding to Origin-Valid and
+   SignedOrigin-Valid items while permitting separate final delivery
+   policy for unsigned and invalid items.
 
 **********************************************************************

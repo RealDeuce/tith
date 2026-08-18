@@ -11,7 +11,7 @@ use tith_config::{ConfigurationSet, IdentityRef};
 use tith_crypto::{SECRET_KEY_BYTES, SecretKey, TlvHash, hash_tlv, sign_tlv, verify_tlv};
 use tith_exchange::ServerReply;
 use tith_nodelist::Nodelist;
-use tith_store::{AcceptResult, InboundStore, ItemAuthentication, NewInbound};
+use tith_store::{AcceptResult, InboundStore, NewInbound};
 use tith_wire::address::Address;
 use tith_wire::bundle::{
 	Bundle, BundleError, Identity, KeyResolver, unauthenticated_signed_data, verify_signed_tlv,
@@ -312,11 +312,9 @@ fn dispatch_item(
 		)?);
 	}
 
-	let authentication = if item.duplicate_identity.is_some() {
-		ItemAuthentication::Valid
-	} else {
-		ItemAuthentication::Invalid
-	};
+	let authentication = item
+		.authentication
+		.ok_or("locally delivered item has no authentication state")?;
 	let result = mailer.store.accept(
 		NewInbound {
 			application: &mailer.application,
@@ -416,7 +414,7 @@ mod tests {
 	use base64::engine::general_purpose::STANDARD_NO_PAD;
 	use tith_crypto::{SigningKeyPair, sign_tlv};
 	use tith_ipc::{Document, EnvelopeKind};
-	use tith_store::ClaimResult;
+	use tith_store::{ClaimResult, ItemAuthentication};
 	use tith_wire::bundle::{build_bundle, build_signed_tlv};
 	use tith_wire::integer::{decode_u64_prefix, encode_u64};
 	use tith_wire::item::validate_payload;
@@ -609,7 +607,7 @@ mod tests {
 				.unwrap()
 				.fields[1]
 				.text,
-			"Valid"
+			"Origin-Valid"
 		);
 		let payload_path = claim_document
 			.lines
@@ -650,7 +648,7 @@ mod tests {
 			panic!("stored Message was not claimable")
 		};
 		assert_eq!(claim.record.kind, tith_store::ItemKind::Message);
-		assert_eq!(claim.record.authentication, ItemAuthentication::Valid);
+		assert_eq!(claim.record.authentication, ItemAuthentication::OriginValid);
 		drop(mailer);
 		fs::remove_file(database).unwrap();
 	}
@@ -703,7 +701,36 @@ mod tests {
 		else {
 			panic!("invalidly signed file was not retained")
 		};
-		assert_eq!(claim.record.authentication, ItemAuthentication::Invalid);
+		assert_eq!(
+			claim.record.authentication,
+			ItemAuthentication::OriginInvalid
+		);
+		drop(mailer);
+		fs::remove_file(database).unwrap();
+	}
+
+	#[test]
+	fn accepts_an_unsigned_item_only_inside_an_authenticated_bundle() {
+		let (mailer, peer_keys, peer, local, database) = setup();
+		let signed_file = standalone_file(&peer, &peer_keys.secret, 72);
+		let children = parse_sequence(&signed_file.value).unwrap();
+		let unsigned_children = children
+			.into_iter()
+			.filter(|child| child.type_code != types::SIGNATURE)
+			.collect::<Vec<_>>();
+		let file = container(types::FILE, &unsigned_children);
+		let request = build_bundle(&peer, &peer_keys.secret, &local, 1, vec![vec![file]]).unwrap();
+		let (response, completed) = exchange(&request, &mailer);
+		assert!(completed);
+		assert_eq!(response_kind(&response, &mailer), ItemKind::Accepted);
+		let ClaimResult::Completed(claim) = mailer
+			.store
+			.claim("tosser", "unsigned", now().saturating_add(1), 60)
+			.unwrap()
+		else {
+			panic!("unsigned file was not retained")
+		};
+		assert_eq!(claim.record.authentication, ItemAuthentication::Unsigned);
 		drop(mailer);
 		fs::remove_file(database).unwrap();
 	}

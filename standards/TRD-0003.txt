@@ -244,13 +244,13 @@ A. References
   [TRD‑0002] "Joining a FidoNet Technology Network", TITH,
   2026‑08‑17.
 
-  [TTS‑0003] "Common TLV Types", TITH, 2026‑08‑17.
+  [TTS‑0003] "Common TLV Types", TITH, 2026‑08‑18.
 
   [TTS‑0004] "Node Addresses", TITH, 2026‑08‑17.
 
-  [TTS‑0005] "Bundle Format", TITH, 2026‑08‑17.
+  [TTS‑0005] "Bundle Format", TITH, 2026‑08‑18.
 
-  [TTS‑0006] "Bundle Exchange Protocol", TITH, 2026‑08‑17.
+  [TTS‑0006] "Bundle Exchange Protocol", TITH, 2026‑08‑18.
 
 
 B. History

@@ -973,8 +973,11 @@ fn kind_name(value: tith_store::ItemKind) -> &'static str {
 }
 fn auth_name(value: tith_store::ItemAuthentication) -> &'static str {
 	match value {
-		tith_store::ItemAuthentication::Valid => "Valid",
-		tith_store::ItemAuthentication::Invalid => "Invalid",
+		tith_store::ItemAuthentication::Unsigned => "Unsigned",
+		tith_store::ItemAuthentication::SignedOriginInvalid => "SignedOrigin-Invalid",
+		tith_store::ItemAuthentication::SignedOriginValid => "SignedOrigin-Valid",
+		tith_store::ItemAuthentication::OriginInvalid => "Origin-Invalid",
+		tith_store::ItemAuthentication::OriginValid => "Origin-Valid",
 		tith_store::ItemAuthentication::Transport => "Transport",
 	}
 }
@@ -1158,7 +1161,7 @@ mod tests {
 				peer: "fidonet#2",
 				peer_key: PublicKey::from_bytes([3; 32]),
 				received: now(),
-				authentication: ItemAuthentication::Valid,
+				authentication: ItemAuthentication::OriginValid,
 				payload: &payload,
 			})
 			.unwrap();

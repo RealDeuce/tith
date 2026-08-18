@@ -3,10 +3,10 @@ TITH                                              THIS ISN'T THAT HARD
 **********************************************************************
 
 Publication:  TSP‑0012
-Revision:     1
+Revision:     2
 Title:        Tosser Consumption IPC
 Author(s):    Stephen Hurd
-Date:         2026‑08‑17
+Date:         2026‑08‑18
 ══════════════════════════════════════════════════════════════════════
 
 Status of this document
@@ -155,7 +155,8 @@ Contents
     Local-Identity "<local-identity>"
     Peer "<address>"
     Peer-Key "<base64-public-key>"
-    Item-Authentication Valid|Invalid|Transport
+    Item-Authentication Unsigned|SignedOrigin-Invalid|
+        SignedOrigin-Valid|Origin-Invalid|Origin-Valid|Transport
     Received <timestamp>
     Payload-Size <unsigned-integer>
     Payload-Hash "<base64-hash>"
@@ -175,6 +176,11 @@ Contents
   43‑character base 64 representation of their 32 bytes without a
   trailing Equals Sign (U+003D).  Timestamp fields are TTS‑0003
   Timestamps.
+
+  The displayed Item-Authentication alternatives occupy one physical
+  line in the actual result.  Their meanings and final delivery policy
+  are defined by TSP‑0011.  Transport occurs only for FileRequest; the
+  other five values occur only for Message and File.
 
   Eligible items are ordered first by the instant at which they became
   eligible, then by Received, then by InboundID exact bytes.  Initial
@@ -308,7 +314,8 @@ Contents
     Local-Identity "<local-identity>"
     Peer "<address>"
     Peer-Key "<base64-public-key>"
-    Item-Authentication Valid|Invalid|Transport
+    Item-Authentication Unsigned|SignedOrigin-Invalid|
+        SignedOrigin-Valid|Origin-Invalid|Origin-Valid|Transport
     Received <timestamp>
     Changed <timestamp>
     Attempts <unsigned-integer>
@@ -425,11 +432,11 @@ A. References
 ─────────────
 
   [TSP‑0002] "Routing and Distribution Configuration", TITH,
-  2026‑08‑17.
+  2026‑08‑18.
 
   [TSP‑0004] "Local IPC Format", TITH, 2026‑08‑17.
 
-  [TSP‑0006] "Outbound Job Submission", TITH, 2026‑08‑17.
+  [TSP‑0006] "Outbound Job Submission", TITH, 2026‑08‑18.
 
   [TSP‑0007] "Unix‐Domain Socket IPC Binding", TITH, 2026‑08‑17.
 
@@ -439,18 +446,21 @@ A. References
 
   [TSP‑0010] "Windows Named‐Pipe IPC Binding", TITH, 2026‑08‑17.
 
-  [TSP‑0011] "Durable Inbound Delivery Items", TITH, 2026‑08‑17.
+  [TSP‑0011] "Durable Inbound Delivery Items", TITH, 2026‑08‑18.
 
-  [TTS‑0003] "Common TLV Types", TITH, 2026‑08‑17.
+  [TTS‑0003] "Common TLV Types", TITH, 2026‑08‑18.
 
   [TTS‑0004] "Node Addresses", TITH, 2026‑08‑17.
 
-  [TTS‑0005] "Bundle Format", TITH, 2026‑08‑17.
+  [TTS‑0005] "Bundle Format", TITH, 2026‑08‑18.
 
 
 B. History
 ──────────
 
    Rev.1, 2026‑08‑17: Initial Release.
+
+   Rev.2, 2026‑08‑18: Exposed the five Message and File item
+   authentication states required by final delivery policy.
 
 **********************************************************************
