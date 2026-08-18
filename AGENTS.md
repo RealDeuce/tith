@@ -12,6 +12,31 @@ behaviour is automatically normative. When code and a document disagree,
 identify the disagreement and open a GitHub issue instead of silently changing
 one to match the other.
 
+## Standards Defect Workflow
+
+Treat standards review as part of implementation. Whenever implementation,
+testing, review, or interoperability work exposes a defect, contradiction,
+missing requirement, or ambiguity in a TITH document, open a GitHub issue so
+the normative text can be corrected. Do this during the work rather than
+leaving the discovery only in chat, a commit message, or a code comment.
+
+- Search existing open and closed issues first to avoid filing a duplicate.
+- Identify the document, revision, section, and conflicting or incomplete
+  requirements precisely. Explain the implementation decision that the text
+  does not determine and, when clear, suggest a resolution.
+- File one issue per independently resolvable standards problem. Group findings
+  only when they have the same underlying defect.
+- Link the issue from any temporary implementation assumption or follow-up
+  work. Do not quietly make an arbitrary interpretation normative through the
+  reference implementation.
+- Continue implementation only when a safe, narrow, and reversible assumption
+  is available; record that assumption in the issue. If the ambiguity affects
+  security, wire compatibility, persistent data, or assigned values, stop that
+  part of the work until the standard is resolved.
+- If GitHub access or authentication prevents filing the issue, preserve the
+  complete issue text locally and report the blocker rather than dropping the
+  finding.
+
 ## Why TITH Exists
 
 TITH is a reaction to the accumulated complexity of conventional FTN
