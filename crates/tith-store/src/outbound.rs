@@ -6,13 +6,15 @@ use tith_crypto::TlvHash;
 use tith_wire::{tlv::parse_sequence, types};
 
 use super::{
-	StoreError, put_bytes, put_string, put_u64, random_identifier, take_byte, take_bytes,
-	take_bytes_fixed, take_string, take_u64,
+	InboundRecord, InboundState, PAYLOADS, RECORDS, StoreError, decode_record, encode_record,
+	put_bytes, put_string, put_u64, random_identifier, take_byte, take_bytes, take_bytes_fixed,
+	take_string, take_u64,
 };
 
 const JOBS: TableDefinition<&str, &[u8]> = TableDefinition::new("outbound-jobs");
 const ITEMS: TableDefinition<&str, &[u8]> = TableDefinition::new("outbound-items");
 const SUBMISSIONS: TableDefinition<&[u8], &[u8]> = TableDefinition::new("outbound-submissions");
+const EVENTS: TableDefinition<&str, &[u8]> = TableDefinition::new("outbound-events");
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum JobKind {
@@ -144,11 +146,13 @@ pub struct NewOutboundJob {
 	pub identity: SubmissionIdentity,
 	pub kind: JobKind,
 	pub target: JobTarget,
+	pub local_identity: String,
 	pub item: Vec<u8>,
 	pub deliveries: Vec<NewDelivery>,
 	pub sources: Vec<SourceRecord>,
 	pub created: u64,
 	pub forward_inbound: Option<String>,
+	pub forward_claim_token: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -159,6 +163,7 @@ pub struct OutboundJob {
 	pub digest: TlvHash,
 	pub kind: JobKind,
 	pub target: JobTarget,
+	pub local_identity: String,
 	pub state: JobState,
 	pub created: u64,
 	pub changed: u64,
@@ -217,9 +222,67 @@ pub enum DeliveryOutcome {
 	Failed(String),
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct OutboundEvent {
+	pub event_id: String,
+	pub job_id: String,
+	pub previous: Option<JobState>,
+	pub current: JobState,
+	pub changed: u64,
+	pub last_result: String,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ControlOutcome {
+	Completed(JobState),
+	Busy(JobState),
+	NotPermitted(JobState),
+}
+
 #[derive(Clone)]
 pub struct OutboundStore {
 	database: Arc<Database>,
+}
+
+pub struct BatchContext<'a> {
+	write: &'a redb::WriteTransaction,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ForwardInbound {
+	pub record: InboundRecord,
+	pub payload: Vec<u8>,
+}
+
+impl BatchContext<'_> {
+	pub fn claimed_inbound(
+		&self,
+		application: &str,
+		inbound_id: &str,
+		claim_token: &str,
+		now: u64,
+	) -> Result<ForwardInbound, StoreError> {
+		let records = self.write.open_table(RECORDS)?;
+		let value = records.get(inbound_id)?.ok_or(StoreError::NotFound)?;
+		let record = decode_record(value.value())?;
+		if record.application != application
+			|| record.state != InboundState::Claimed
+			|| record.claim_token.as_deref() != Some(claim_token)
+			|| record.claim_expires.is_none_or(|expires| expires <= now)
+		{
+			return Err(StoreError::Stale(record.state));
+		}
+		if record.forward_job.is_some() {
+			return Err(StoreError::CorruptRecord);
+		}
+		let payloads = self.write.open_table(PAYLOADS)?;
+		let payload = payloads
+			.get(inbound_id)?
+			.ok_or(StoreError::CorruptRecord)?
+			.value()
+			.to_vec();
+		Ok(ForwardInbound { record, payload })
+	}
 }
 
 impl OutboundStore {
@@ -229,6 +292,7 @@ impl OutboundStore {
 			write.open_table(JOBS)?;
 			write.open_table(ITEMS)?;
 			write.open_table(SUBMISSIONS)?;
+			write.open_table(EVENTS)?;
 		}
 		write.commit()?;
 		Ok(Self { database })
@@ -240,7 +304,7 @@ impl OutboundStore {
 		build: F,
 	) -> Result<BatchCommit, StoreError>
 	where
-		F: FnOnce(&[SubmissionClass]) -> Result<Vec<NewOutboundJob>, StoreError>,
+		F: FnOnce(&[SubmissionClass], &BatchContext<'_>) -> Result<Vec<NewOutboundJob>, StoreError>,
 	{
 		if identities.is_empty() {
 			return Err(StoreError::CorruptRecord);
@@ -302,7 +366,8 @@ impl OutboundStore {
 			}
 		}
 
-		let new_jobs = build(&classes)?;
+		let context = BatchContext { write: &write };
+		let new_jobs = build(&classes, &context)?;
 		let expected_new = classes
 			.iter()
 			.filter(|class| matches!(class, SubmissionClass::New { .. }))
@@ -326,6 +391,24 @@ impl OutboundStore {
 						return Err(StoreError::CorruptRecord);
 					}
 					validate_new_job(&value)?;
+					if let Some(inbound_id) = &value.forward_inbound {
+						let token = value
+							.forward_claim_token
+							.as_deref()
+							.ok_or(StoreError::CorruptRecord)?;
+						let mut record = context
+							.claimed_inbound(
+								&identity.application,
+								inbound_id,
+								token,
+								value.created,
+							)?
+							.record;
+						record.forward_job = Some(job_id.clone());
+						write
+							.open_table(RECORDS)?
+							.insert(inbound_id.as_str(), encode_record(&record).as_slice())?;
+					}
 					let item = value.item.clone();
 					let job = make_job(job_id.clone(), value);
 					{
@@ -340,6 +423,7 @@ impl OutboundStore {
 							encode_submission(job_id, &identity.digest).as_slice(),
 						)?;
 					}
+					append_event(&write, &job, None)?;
 					outcomes.push(CommitOutcome::New {
 						job_id: job_id.clone(),
 						state: job.state,
@@ -384,6 +468,180 @@ impl OutboundStore {
 		let jobs = read.open_table(JOBS)?;
 		let value = jobs.get(job_id)?.ok_or(StoreError::NotFound)?;
 		decode_job(value.value())
+	}
+
+	pub fn query_for(&self, application: &str, job_id: &str) -> Result<OutboundJob, StoreError> {
+		let job = self.query(job_id)?;
+		if job.application != application {
+			return Err(StoreError::NotFound);
+		}
+		Ok(job)
+	}
+
+	pub fn events(&self, application: &str) -> Result<Vec<OutboundEvent>, StoreError> {
+		let read = self.database.begin_read()?;
+		let table = read.open_table(EVENTS)?;
+		let mut output = Vec::new();
+		for entry in table.iter()? {
+			let (_, value) = entry?;
+			let (owner, acknowledged, event) = decode_event(value.value())?;
+			if owner == application && !acknowledged {
+				output.push(event);
+			}
+		}
+		output.sort_by(|left, right| {
+			(left.changed, &left.event_id).cmp(&(right.changed, &right.event_id))
+		});
+		Ok(output)
+	}
+
+	pub fn acknowledge_event(&self, application: &str, event_id: &str) -> Result<(), StoreError> {
+		let write = self.database.begin_write()?;
+		let encoded = {
+			let table = write.open_table(EVENTS)?;
+			let value = table.get(event_id)?.ok_or(StoreError::NotFound)?;
+			let (owner, _, event) = decode_event(value.value())?;
+			if owner != application {
+				return Err(StoreError::NotFound);
+			}
+			encode_event(&owner, true, &event)
+		};
+		write
+			.open_table(EVENTS)?
+			.insert(event_id, encoded.as_slice())?;
+		write.commit()?;
+		Ok(())
+	}
+
+	pub fn cancel(
+		&self,
+		application: &str,
+		job_id: &str,
+		now: u64,
+	) -> Result<ControlOutcome, StoreError> {
+		self.control(application, job_id, now, "Cancelled", |job| {
+			if job
+				.deliveries
+				.iter()
+				.any(|copy| copy.state == JobState::Active)
+			{
+				return ControlOutcome::Busy(job.state);
+			}
+			if job.state == JobState::Cancelled {
+				return ControlOutcome::Completed(job.state);
+			}
+			let mut changed = false;
+			for copy in &mut job.deliveries {
+				if matches!(
+					copy.state,
+					JobState::Queued | JobState::Deferred | JobState::Rejected | JobState::Failed
+				) {
+					copy.state = JobState::Cancelled;
+					copy.retry_at = None;
+					"Cancelled".clone_into(&mut copy.last_result);
+					changed = true;
+				}
+			}
+			if changed {
+				ControlOutcome::Completed(JobState::Cancelled)
+			} else {
+				ControlOutcome::NotPermitted(job.state)
+			}
+		})
+	}
+
+	pub fn retry(
+		&self,
+		application: &str,
+		job_id: &str,
+		now: u64,
+	) -> Result<ControlOutcome, StoreError> {
+		self.control(application, job_id, now, "Retry requested", |job| {
+			let mut changed = false;
+			for copy in &mut job.deliveries {
+				if matches!(
+					copy.state,
+					JobState::Deferred | JobState::Rejected | JobState::Failed
+				) {
+					copy.state = JobState::Queued;
+					copy.retry_at = None;
+					"Retry requested".clone_into(&mut copy.last_result);
+					changed = true;
+				}
+			}
+			if changed {
+				ControlOutcome::Completed(JobState::Queued)
+			} else {
+				ControlOutcome::NotPermitted(job.state)
+			}
+		})
+	}
+
+	pub fn reroute(
+		&self,
+		application: &str,
+		job_id: &str,
+		now: u64,
+		delivery: NewDelivery,
+	) -> Result<ControlOutcome, StoreError> {
+		self.control(application, job_id, now, "Rerouted", |job| {
+			if job.kind != JobKind::NetMail
+				|| job.deliveries.len() != 1
+				|| matches!(job.state, JobState::Delivered | JobState::Cancelled)
+			{
+				return ControlOutcome::NotPermitted(job.state);
+			}
+			if job.state == JobState::Active {
+				return ControlOutcome::Busy(job.state);
+			}
+			let copy = &mut job.deliveries[0];
+			copy.local_identity = delivery.local_identity;
+			copy.next_hop = delivery.next_hop;
+			copy.mode = delivery.mode;
+			copy.class = delivery.class;
+			copy.retry_at = None;
+			copy.policies = delivery.policies;
+			copy.state = JobState::Queued;
+			"Rerouted".clone_into(&mut copy.last_result);
+			ControlOutcome::Completed(JobState::Queued)
+		})
+	}
+
+	fn control(
+		&self,
+		application: &str,
+		job_id: &str,
+		now: u64,
+		result: &str,
+		update: impl FnOnce(&mut OutboundJob) -> ControlOutcome,
+	) -> Result<ControlOutcome, StoreError> {
+		let write = self.database.begin_write()?;
+		let mut job = {
+			let jobs = write.open_table(JOBS)?;
+			let value = jobs.get(job_id)?.ok_or(StoreError::NotFound)?;
+			decode_job(value.value())?
+		};
+		if job.application != application {
+			return Err(StoreError::NotFound);
+		}
+		let previous = job.state;
+		let outcome = update(&mut job);
+		if matches!(outcome, ControlOutcome::Completed(_))
+			&& (job.state != previous || job.last_result != result)
+		{
+			job.state = aggregate_state(&job.deliveries);
+			job.changed = now;
+			result.clone_into(&mut job.last_result);
+			write
+				.open_table(JOBS)?
+				.insert(job_id, encode_job(&job).as_slice())?;
+			append_event(&write, &job, Some(previous))?;
+		}
+		write.commit()?;
+		Ok(match outcome {
+			ControlOutcome::Completed(_) => ControlOutcome::Completed(job.state),
+			other => other,
+		})
 	}
 
 	pub fn item(&self, job_id: &str) -> Result<Vec<u8>, StoreError> {
@@ -440,6 +698,7 @@ impl OutboundStore {
 		let Some((mut job, index)) = selected else {
 			return Ok(None);
 		};
+		let previous = job.state;
 		let token = random_identifier('W')?;
 		let copy = &mut job.deliveries[index];
 		copy.state = JobState::Active;
@@ -463,6 +722,7 @@ impl OutboundStore {
 			let mut jobs = write.open_table(JOBS)?;
 			jobs.insert(job.job_id.as_str(), encode_job(&job).as_slice())?;
 		}
+		append_event(&write, &job, Some(previous))?;
 		let delivery = job.deliveries[index].clone();
 		write.commit()?;
 		Ok(Some(DeliveryClaim {
@@ -488,6 +748,7 @@ impl OutboundStore {
 			let value = jobs.get(job_id)?.ok_or(StoreError::NotFound)?;
 			decode_job(value.value())?
 		};
+		let previous = job.state;
 		let copy = job
 			.deliveries
 			.iter_mut()
@@ -516,6 +777,7 @@ impl OutboundStore {
 			let mut jobs = write.open_table(JOBS)?;
 			jobs.insert(job_id, encode_job(&job).as_slice())?;
 		}
+		append_event(&write, &job, Some(previous))?;
 		write.commit()?;
 		Ok(state)
 	}
@@ -539,19 +801,23 @@ impl OutboundStore {
 					}
 				}
 				if recovered {
+					let previous = job.state;
 					job.state = aggregate_state(&job.deliveries);
 					job.changed = now;
 					result.clone_into(&mut job.last_result);
-					changed.push(job);
+					changed.push((job, previous));
 				}
 			}
 		}
 		let count = changed.len() as u64;
 		{
 			let mut jobs = write.open_table(JOBS)?;
-			for job in changed {
-				jobs.insert(job.job_id.as_str(), encode_job(&job).as_slice())?;
+			for (job, _) in &changed {
+				jobs.insert(job.job_id.as_str(), encode_job(job).as_slice())?;
 			}
+		}
+		for (job, previous) in &changed {
+			append_event(&write, job, Some(*previous))?;
 		}
 		write.commit()?;
 		Ok(count)
@@ -570,6 +836,8 @@ fn validate_new_job(value: &NewOutboundJob) -> Result<(), StoreError> {
 	if matches!(value.kind, JobKind::NetMail) != matches!(value.target, JobTarget::Destination(_))
 		|| (!matches!(value.kind, JobKind::NetMail) && !matches!(value.target, JobTarget::Area(_)))
 		|| (value.deliveries.is_empty() && value.forward_inbound.is_none())
+		|| (value.forward_inbound.is_some() != value.forward_claim_token.is_some())
+		|| value.local_identity.is_empty()
 	{
 		return Err(StoreError::CorruptRecord);
 	}
@@ -616,6 +884,7 @@ fn make_job(job_id: String, value: NewOutboundJob) -> OutboundJob {
 		digest: value.identity.digest,
 		kind: value.kind,
 		target: value.target,
+		local_identity: value.local_identity,
 		state,
 		created: value.created,
 		changed: value.created,
@@ -677,6 +946,94 @@ fn decode_submission(mut input: &[u8]) -> Result<(String, TlvHash), StoreError> 
 	Ok((id, digest))
 }
 
+fn append_event(
+	write: &redb::WriteTransaction,
+	job: &OutboundJob,
+	previous: Option<JobState>,
+) -> Result<(), StoreError> {
+	let table = write.open_table(EVENTS)?;
+	let prefix = format!("{}:", job.job_id);
+	let mut sequence = 0_u64;
+	for entry in table.iter()? {
+		let (key, _) = entry?;
+		if let Some(number) = key
+			.value()
+			.strip_prefix(&prefix)
+			.and_then(|value| value.parse::<u64>().ok())
+		{
+			sequence = sequence.max(number);
+		}
+	}
+	drop(table);
+	let sequence = sequence.checked_add(1).ok_or(StoreError::CorruptRecord)?;
+	let event = OutboundEvent {
+		event_id: format!("{}:{sequence}", job.job_id),
+		job_id: job.job_id.clone(),
+		previous,
+		current: job.state,
+		changed: job.changed,
+		last_result: job.last_result.clone(),
+	};
+	write.open_table(EVENTS)?.insert(
+		event.event_id.as_str(),
+		encode_event(&job.application, false, &event).as_slice(),
+	)?;
+	Ok(())
+}
+
+fn encode_event(application: &str, acknowledged: bool, event: &OutboundEvent) -> Vec<u8> {
+	let mut output = Vec::new();
+	put_string(&mut output, application);
+	output.push(u8::from(acknowledged));
+	put_string(&mut output, &event.event_id);
+	put_string(&mut output, &event.job_id);
+	match event.previous {
+		Some(state) => {
+			output.push(1);
+			output.push(state as u8);
+		}
+		None => output.push(0),
+	}
+	output.push(event.current as u8);
+	put_u64(&mut output, event.changed);
+	put_string(&mut output, &event.last_result);
+	output
+}
+
+fn decode_event(mut input: &[u8]) -> Result<(String, bool, OutboundEvent), StoreError> {
+	let application = take_string(&mut input)?;
+	let acknowledged = match take_byte(&mut input)? {
+		0 => false,
+		1 => true,
+		_ => return Err(StoreError::CorruptRecord),
+	};
+	let event_id = take_string(&mut input)?;
+	let job_id = take_string(&mut input)?;
+	let previous = match take_byte(&mut input)? {
+		0 => None,
+		1 => Some(decode_job_state(take_byte(&mut input)?)?),
+		_ => return Err(StoreError::CorruptRecord),
+	};
+	let current = decode_job_state(take_byte(&mut input)?)?;
+	let changed = take_u64(&mut input)?;
+	let last_result = take_string(&mut input)?;
+	if !input.is_empty() {
+		return Err(StoreError::CorruptRecord);
+	}
+	Ok((
+		application,
+		acknowledged,
+		OutboundEvent {
+			event_id,
+			job_id,
+			previous,
+			current,
+			changed,
+			last_result,
+		},
+	))
+}
+
 fn encode_job(value: &OutboundJob) -> Vec<u8> {
 	let mut output = vec![1];
 	for text in [&value.job_id, &value.application, &value.idempotency_key] {
@@ -732,6 +1089,7 @@ fn encode_job(value: &OutboundJob) -> Vec<u8> {
 		output.push(source.cleanup as u8);
 		put_bytes(&mut output, &source.file_identity);
 	}
+	put_string(&mut output, &value.local_identity);
 	output
 }
 
@@ -828,6 +1186,13 @@ fn decode_job(mut input: &[u8]) -> Result<OutboundJob, StoreError> {
 			file_identity: take_bytes(&mut input)?.to_vec(),
 		});
 	}
+	let local_identity = if input.is_empty() {
+		deliveries
+			.first()
+			.map_or_else(String::new, |copy| copy.local_identity.clone())
+	} else {
+		take_string(&mut input)?
+	};
 	if !input.is_empty() {
 		return Err(StoreError::CorruptRecord);
 	}
@@ -838,6 +1203,7 @@ fn decode_job(mut input: &[u8]) -> Result<OutboundJob, StoreError> {
 		digest,
 		kind,
 		target,
+		local_identity,
 		state,
 		created,
 		changed,
@@ -929,6 +1295,7 @@ mod tests {
 			identity,
 			kind: JobKind::NetMail,
 			target: JobTarget::Destination("fidonet#1/2".to_owned()),
+			local_identity: "fidonet#1/1".to_owned(),
 			item: payload,
 			deliveries: vec![NewDelivery {
 				local_identity: "fidonet#1/1".to_owned(),
@@ -941,6 +1308,7 @@ mod tests {
 			sources: Vec::new(),
 			created: 10,
 			forward_inbound: None,
+			forward_claim_token: None,
 		}
 	}
 
@@ -955,7 +1323,7 @@ mod tests {
 		let payload = OwnedTlv::new(types::MESSAGE, Vec::new()).unwrap().encode();
 		let id = identity("one", &payload);
 		let result = store
-			.commit_batch(std::slice::from_ref(&id), |_| {
+			.commit_batch(std::slice::from_ref(&id), |_, _| {
 				Ok(vec![new_job(id.clone(), payload.clone())])
 			})
 			.unwrap();
@@ -966,7 +1334,7 @@ mod tests {
 			panic!("new job expected");
 		};
 		let repeated = store
-			.commit_batch(std::slice::from_ref(&id), |classes| {
+			.commit_batch(std::slice::from_ref(&id), |classes, _| {
 				assert!(matches!(classes[0], SubmissionClass::Existing { .. }));
 				Ok(Vec::new())
 			})
@@ -1007,18 +1375,77 @@ mod tests {
 		let payload = OwnedTlv::new(types::MESSAGE, Vec::new()).unwrap().encode();
 		let id = identity("one", &payload);
 		store
-			.commit_batch(std::slice::from_ref(&id), |_| {
+			.commit_batch(std::slice::from_ref(&id), |_, _| {
 				Ok(vec![new_job(id.clone(), payload.clone())])
 			})
 			.unwrap();
 		let other_payload = OwnedTlv::new(types::MESSAGE, vec![1]).unwrap().encode();
 		let other = identity("one", &other_payload);
 		let result = store
-			.commit_batch(std::slice::from_ref(&other), |_| {
+			.commit_batch(std::slice::from_ref(&other), |_, _| {
 				panic!("conflict must be classified before source construction")
 			})
 			.unwrap();
 		assert_eq!(result, BatchCommit::Conflict(vec![1]));
+		drop(store);
+		drop(inbound);
+		std::fs::remove_file(path).unwrap();
+	}
+
+	#[test]
+	fn controls_and_events_are_durable_and_application_scoped() {
+		let path = std::env::temp_dir().join(format!(
+			"tith-outbound-events-{}.redb",
+			random_identifier('T').unwrap()
+		));
+		let inbound = super::super::InboundStore::create(&path).unwrap();
+		let store = inbound.outbound().unwrap();
+		let payload = OwnedTlv::new(types::MESSAGE, Vec::new()).unwrap().encode();
+		let id = identity("events", &payload);
+		let BatchCommit::Committed(created) = store
+			.commit_batch(std::slice::from_ref(&id), |_, _| {
+				Ok(vec![new_job(id.clone(), payload)])
+			})
+			.unwrap()
+		else {
+			panic!("commit expected")
+		};
+		let CommitOutcome::New { job_id, .. } = &created[0] else {
+			panic!("new expected")
+		};
+		let events = store.events("mailer").unwrap();
+		assert_eq!(events.len(), 1);
+		assert_eq!(events[0].previous, None);
+		store
+			.acknowledge_event("mailer", &events[0].event_id)
+			.unwrap();
+		assert!(store.events("mailer").unwrap().is_empty());
+		assert!(matches!(
+			store.cancel("other", job_id, 20),
+			Err(StoreError::NotFound)
+		));
+		let claim = store.claim_scheduled("normal", 20).unwrap().unwrap();
+		assert_eq!(
+			store.cancel("mailer", job_id, 21).unwrap(),
+			ControlOutcome::Busy(JobState::Active)
+		);
+		store
+			.finish_delivery(
+				job_id,
+				1,
+				&claim.worker_token,
+				22,
+				DeliveryOutcome::Deferred {
+					retry_at: 40,
+					result: "later".to_owned(),
+				},
+			)
+			.unwrap();
+		assert_eq!(
+			store.retry("mailer", job_id, 23).unwrap(),
+			ControlOutcome::Completed(JobState::Queued)
+		);
+		assert_eq!(store.events("mailer").unwrap().len(), 3);
 		drop(store);
 		drop(inbound);
 		std::fs::remove_file(path).unwrap();

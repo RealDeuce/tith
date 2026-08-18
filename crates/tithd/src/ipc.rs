@@ -12,12 +12,13 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD_NO_PAD;
 use tith_ipc::{
-	ConsumeRequest, Document, EnvelopeKind, Field, Line, LookupSubmission, Presentation,
-	SubmissionRequest, capabilities,
+	ConsumeRequest, Document, EnvelopeKind, Field, JobRequest, Line, LookupSubmission,
+	Presentation, SubmissionRequest, capabilities,
 };
 use tith_store::{
-	BatchCommit, ClaimResult, CommitOutcome, InboundState, InboundStore, JobBuildFailure, JobState,
-	OutboundStore, Resolution, StoreError, SubmissionLookup,
+	BatchCommit, ClaimResult, CommitOutcome, ControlOutcome, DeliveryMode, FailureDisposition,
+	FailureNotification, InboundState, InboundStore, JobBuildFailure, JobKind, JobState, JobTarget,
+	OutboundEvent, OutboundJob, OutboundStore, Resolution, StoreError, SubmissionLookup,
 };
 
 use crate::submission::SubmissionEngine;
@@ -128,6 +129,9 @@ impl IpcService {
 			},
 			"Submit" | "Submit-Items" => self.submit(request, principal),
 			"Lookup-Submission" => self.lookup_submission(request, principal),
+			"Query" | "Query-Job" | "Cancel" | "Retry" | "Reroute" | "Events" | "Acknowledge" => {
+				self.job_request(request, principal)
+			}
 			_ => error_result("Invalid", "unknown or malformed operation"),
 		}
 	}
@@ -143,7 +147,18 @@ impl IpcService {
 			"Renew-Inbound",
 		];
 		if self.submission.is_some() {
-			operations.extend(["Lookup-Submission", "Submit", "Submit-Items"]);
+			operations.extend([
+				"Acknowledge",
+				"Cancel",
+				"Events",
+				"Lookup-Submission",
+				"Query",
+				"Query-Job",
+				"Reroute",
+				"Retry",
+				"Submit",
+				"Submit-Items",
+			]);
 		}
 		capabilities(operations.into_iter().map(str::to_owned), [])
 	}
@@ -343,6 +358,123 @@ impl IpcService {
 				result(lines)
 			}
 			Err(_) => operation_result("Lookup-Submission", &["TemporaryFailure"]),
+		}
+	}
+
+	fn job_request(&self, request: &[u8], principal: &Principal) -> Vec<u8> {
+		let parsed = match JobRequest::parse(request) {
+			Ok(value) => value,
+			Err(error) => return error_result("Invalid", &error.to_string()),
+		};
+		match self.job_request_inner(parsed, principal) {
+			Ok(value) => value,
+			Err(StoreError::NotFound) => {
+				let operation = Document::parse(request, EnvelopeKind::Request)
+					.ok()
+					.and_then(|document| {
+						document
+							.lines
+							.first()
+							.and_then(|line| line.fields.first())
+							.map(|field| field.text.clone())
+					})
+					.unwrap_or_else(|| "Query-Job".to_owned());
+				operation_result(&operation, &["NotFound"])
+			}
+			Err(StoreError::JobBuild {
+				kind: JobBuildFailure::Invalid | JobBuildFailure::Permanent,
+				description,
+				..
+			}) => error_result("PermanentFailure", &description),
+			Err(error) => error_result("TemporaryFailure", &error.to_string()),
+		}
+	}
+
+	fn job_request_inner(
+		&self,
+		request: JobRequest,
+		principal: &Principal,
+	) -> Result<Vec<u8>, StoreError> {
+		match request {
+			JobRequest::Query {
+				job_id,
+				item_aware,
+				paths,
+			} => {
+				let application = authorized_application(principal)?;
+				let job = self.outbound.query_for(application, &job_id)?;
+				if !item_aware && job.kind != JobKind::NetMail {
+					return Err(StoreError::NotFound);
+				}
+				Ok(outbound_query_result(&job, item_aware, paths))
+			}
+			JobRequest::Cancel { job_id } => {
+				let application = authorized_application(principal)?;
+				Ok(control_result(
+					"Cancel",
+					self.outbound.cancel(application, &job_id, now())?,
+				))
+			}
+			JobRequest::Retry { job_id } => {
+				let application = authorized_application(principal)?;
+				Ok(control_result(
+					"Retry",
+					self.outbound.retry(application, &job_id, now())?,
+				))
+			}
+			JobRequest::Reroute {
+				job_id,
+				next_hop,
+				failure_policy,
+			} => {
+				let application = authorized_application(principal)?;
+				let job = self.outbound.query_for(application, &job_id)?;
+				if job.state == JobState::Active {
+					return Ok(control_result("Reroute", ControlOutcome::Busy(job.state)));
+				}
+				if job.kind != JobKind::NetMail
+					|| matches!(job.state, JobState::Delivered | JobState::Cancelled)
+				{
+					return Ok(control_result(
+						"Reroute",
+						ControlOutcome::NotPermitted(job.state),
+					));
+				}
+				let engine = self.submission.as_ref().ok_or(StoreError::CorruptRecord)?;
+				let item = self.outbound.item(&job_id)?;
+				let delivery = engine.reroute_delivery(&job, &item, &next_hop, failure_policy)?;
+				Ok(control_result(
+					"Reroute",
+					self.outbound
+						.reroute(application, &job_id, now(), delivery)?,
+				))
+			}
+			JobRequest::Events { application, wait } => {
+				if !principal.authorizes(&application) {
+					return Ok(operation_result("Events", &["NotAuthorized"]));
+				}
+				let started = Instant::now();
+				loop {
+					let events = self.outbound.events(&application)?;
+					if !events.is_empty() || !wait {
+						return Ok(events_result(&events));
+					}
+					if started.elapsed() >= WAIT_TIMEOUT {
+						return Ok(operation_result("Events", &["TemporaryFailure"]));
+					}
+					thread::sleep(WAIT_POLL_INTERVAL);
+				}
+			}
+			JobRequest::Acknowledge {
+				application,
+				event_id,
+			} => {
+				if !principal.authorizes(&application) {
+					return Ok(operation_result("Acknowledge", &["NotFound"]));
+				}
+				self.outbound.acknowledge_event(&application, &event_id)?;
+				Ok(operation_result("Acknowledge", &["Completed"]))
+			}
 		}
 	}
 
@@ -562,6 +694,255 @@ fn error_result(kind: &str, description: &str) -> Vec<u8> {
 		fields: vec![unquoted("Error"), unquoted(kind), quoted(description)],
 	}])
 }
+fn control_result(operation: &str, outcome: ControlOutcome) -> Vec<u8> {
+	let (status, state) = match outcome {
+		ControlOutcome::Completed(state) => ("Completed", state),
+		ControlOutcome::Busy(state) => ("Busy", state),
+		ControlOutcome::NotPermitted(state) => ("NotPermitted", state),
+	};
+	operation_result(operation, &[status, job_state_name(state)])
+}
+
+fn events_result(events: &[OutboundEvent]) -> Vec<u8> {
+	let mut lines = vec![Line {
+		fields: vec![unquoted("Events"), unquoted("Completed")],
+	}];
+	for event in events {
+		lines.extend([
+			Line {
+				fields: vec![unquoted("Event")],
+			},
+			Line {
+				fields: vec![unquoted("Event-ID"), quoted(&event.event_id)],
+			},
+			Line {
+				fields: vec![unquoted("Job"), unquoted(&event.job_id)],
+			},
+			Line {
+				fields: vec![
+					unquoted("Previous"),
+					unquoted(event.previous.map_or("None", job_state_name)),
+				],
+			},
+			Line {
+				fields: vec![unquoted("Current"), unquoted(job_state_name(event.current))],
+			},
+			Line {
+				fields: vec![unquoted("Changed"), unquoted(event.changed.to_string())],
+			},
+			Line {
+				fields: vec![unquoted("Last-Result"), quoted(&event.last_result)],
+			},
+			Line {
+				fields: vec![unquoted("End")],
+			},
+		]);
+	}
+	result(lines)
+}
+
+fn outbound_query_result(job: &OutboundJob, item_aware: bool, paths: bool) -> Vec<u8> {
+	let operation = if item_aware { "Query-Job" } else { "Query" };
+	let mut lines = vec![
+		Line {
+			fields: vec![unquoted(operation), unquoted("Completed")],
+		},
+		Line {
+			fields: vec![
+				unquoted("Job"),
+				unquoted(&job.job_id),
+				unquoted(job_state_name(job.state)),
+			],
+		},
+		Line {
+			fields: vec![unquoted("Application"), quoted(&job.application)],
+		},
+	];
+	if item_aware {
+		lines.push(Line {
+			fields: vec![
+				unquoted("Kind"),
+				unquoted(match job.kind {
+					JobKind::NetMail => "NetMail",
+					JobKind::EchoMail => "EchoMail",
+					JobKind::File => "File",
+				}),
+			],
+		});
+		lines.push(Line {
+			fields: vec![unquoted("Local-Identity"), quoted(&job.local_identity)],
+		});
+		match &job.target {
+			JobTarget::Destination(value) => lines.push(Line {
+				fields: vec![unquoted("Destination"), quoted(value)],
+			}),
+			JobTarget::Area(value) => lines.push(Line {
+				fields: vec![unquoted("Area"), quoted(value)],
+			}),
+		}
+		lines.extend([
+			Line {
+				fields: vec![unquoted("Created"), unquoted(job.created.to_string())],
+			},
+			Line {
+				fields: vec![unquoted("Changed"), unquoted(job.changed.to_string())],
+			},
+			Line {
+				fields: vec![unquoted("Attempts"), unquoted(job.attempts().to_string())],
+			},
+			Line {
+				fields: vec![unquoted("Last-Result"), quoted(&job.last_result)],
+			},
+		]);
+		for copy in &job.deliveries {
+			lines.push(Line {
+				fields: vec![
+					unquoted("Delivery"),
+					unquoted(copy.index.to_string()),
+					unquoted(job_state_name(copy.state)),
+				],
+			});
+			append_delivery(&mut lines, copy);
+			lines.extend([
+				Line {
+					fields: vec![unquoted("Attempts"), unquoted(copy.attempts.to_string())],
+				},
+				Line {
+					fields: vec![unquoted("Last-Result"), quoted(&copy.last_result)],
+				},
+				Line {
+					fields: vec![unquoted("End")],
+				},
+			]);
+		}
+		for source in &job.sources {
+			lines.push(Line {
+				fields: vec![
+					unquoted("Source"),
+					unquoted(source.index.to_string()),
+					unquoted(match source.kind {
+						tith_store::SourceKind::Attachment => "Attachment",
+						tith_store::SourceKind::File => "File",
+					}),
+					quoted(&source.wire_filename),
+					unquoted(cleanup_name(source.cleanup)),
+				],
+			});
+		}
+	} else {
+		let copy = &job.deliveries[0];
+		lines.extend([
+			Line {
+				fields: vec![unquoted("Origin"), quoted(&copy.local_identity)],
+			},
+			Line {
+				fields: vec![
+					unquoted("Destination"),
+					quoted(match &job.target {
+						JobTarget::Destination(value) => value,
+						JobTarget::Area(_) => unreachable!(),
+					}),
+				],
+			},
+		]);
+		append_delivery(&mut lines, copy);
+		lines.extend([
+			Line {
+				fields: vec![unquoted("Created"), unquoted(job.created.to_string())],
+			},
+			Line {
+				fields: vec![unquoted("Changed"), unquoted(job.changed.to_string())],
+			},
+			Line {
+				fields: vec![unquoted("Attempts"), unquoted(job.attempts().to_string())],
+			},
+			Line {
+				fields: vec![unquoted("Last-Result"), quoted(&job.last_result)],
+			},
+		]);
+		for source in &job.sources {
+			lines.push(Line {
+				fields: vec![
+					unquoted("Attachment"),
+					unquoted(source.index.to_string()),
+					quoted(&source.wire_filename),
+					unquoted(cleanup_name(source.cleanup)),
+				],
+			});
+		}
+	}
+	if paths {
+		for source in &job.sources {
+			if let Some(path) = &source.path {
+				lines.push(Line {
+					fields: vec![
+						unquoted("Source-Path"),
+						unquoted(source.index.to_string()),
+						quoted(path),
+					],
+				});
+			}
+		}
+	}
+	result(lines)
+}
+
+fn append_delivery(lines: &mut Vec<Line>, copy: &tith_store::DeliveryRecord) {
+	lines.extend([
+		Line {
+			fields: vec![
+				unquoted("Next-Hop"),
+				unquoted(match copy.mode {
+					DeliveryMode::Active => "Active",
+					DeliveryMode::Passive => "Passive",
+				}),
+				quoted(&copy.next_hop),
+			],
+		},
+		Line {
+			fields: vec![unquoted("Class"), quoted(&copy.class)],
+		},
+	]);
+	for (kind, policy) in [
+		"Unroutable",
+		"Loop",
+		"Relay-Denied",
+		"Rejected",
+		"Authentication",
+	]
+	.into_iter()
+	.zip(copy.policies)
+	{
+		lines.push(Line {
+			fields: vec![
+				unquoted("Failure-Policy"),
+				unquoted(kind),
+				unquoted(match policy.disposition {
+					FailureDisposition::DeadLetter => "Dead-Letter",
+					FailureDisposition::Discard => "Discard",
+				}),
+				unquoted("Notify"),
+				unquoted(match policy.notification {
+					FailureNotification::None => "None",
+					FailureNotification::Sender => "Sender",
+					FailureNotification::OriginSysop => "Origin-Sysop",
+					FailureNotification::Both => "Both",
+				}),
+			],
+		});
+	}
+}
+
+fn cleanup_name(value: tith_store::CleanupState) -> &'static str {
+	match value {
+		tith_store::CleanupState::NotRequested => "NotRequested",
+		tith_store::CleanupState::Pending => "Pending",
+		tith_store::CleanupState::Complete => "Complete",
+		tith_store::CleanupState::NotFound => "NotFound",
+		tith_store::CleanupState::Replaced => "Replaced",
+		tith_store::CleanupState::Failed => "Failed",
+	}
+}
 fn job_state_name(value: JobState) -> &'static str {
 	match value {
 		JobState::Queued => "Queued",
@@ -603,7 +984,7 @@ fn claim_result(claim: &tith_store::Claim, path: &Path) -> Vec<u8> {
 	let path = path
 		.to_str()
 		.expect("export roots are checked for UTF-8 at service construction");
-	result(vec![
+	let mut lines = vec![
 		Line {
 			fields: vec![unquoted("Claim-Inbound"), unquoted("Completed")],
 		},
@@ -659,10 +1040,16 @@ fn claim_result(claim: &tith_store::Claim, path: &Path) -> Vec<u8> {
 				quoted(STANDARD_NO_PAD.encode(record.payload_hash.as_bytes())),
 			],
 		},
-		Line {
-			fields: vec![unquoted("Payload-Path"), quoted(path)],
-		},
-	])
+	];
+	if let Some(job_id) = &record.forward_job {
+		lines.push(Line {
+			fields: vec![unquoted("Forward-Job"), unquoted(job_id)],
+		});
+	}
+	lines.push(Line {
+		fields: vec![unquoted("Payload-Path"), quoted(path)],
+	});
+	result(lines)
 }
 
 fn query_result(record: &tith_store::InboundRecord) -> Vec<u8> {
@@ -733,6 +1120,11 @@ fn query_result(record: &tith_store::InboundRecord) -> Vec<u8> {
 	if let Some(value) = &record.last_result {
 		lines.push(Line {
 			fields: vec![unquoted("Last-Result"), quoted(value)],
+		});
+	}
+	if let Some(job_id) = &record.forward_job {
+		lines.push(Line {
+			fields: vec![unquoted("Forward-Job"), unquoted(job_id)],
 		});
 	}
 	result(lines)

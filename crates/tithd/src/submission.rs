@@ -25,7 +25,7 @@ use tith_wire::address::Address;
 use tith_wire::bundle::{Identity, KeyResolver};
 use tith_wire::item::{
 	AttachmentData, MessageData, StandaloneFileData, build_originated_file,
-	build_originated_message, validate_item,
+	build_originated_message, forward_item, validate_item,
 };
 
 const SOFTWARE: &str = "tithd 0.1.0";
@@ -72,7 +72,7 @@ impl SubmissionEngine {
 				})
 			})
 			.collect::<Result<_, tith_crypto::CryptoError>>()?;
-		store.commit_batch(&identities, |classes| {
+		store.commit_batch(&identities, |classes, context| {
 			let mut jobs = Vec::new();
 			for (position, ((request_job, identity), class)) in request
 				.jobs
@@ -85,7 +85,7 @@ impl SubmissionEngine {
 					continue;
 				};
 				let job = self
-					.build_job(job_id, request_job, identity)
+					.build_job(job_id, request_job, identity, context)
 					.map_err(|failure| StoreError::JobBuild {
 						position: position + 1,
 						kind: failure.kind,
@@ -97,11 +97,112 @@ impl SubmissionEngine {
 		})
 	}
 
+	pub fn reroute_delivery(
+		&self,
+		job: &tith_store::OutboundJob,
+		item: &[u8],
+		next_hop: &NextHop,
+		failure_policy: Option<FailureOverride>,
+	) -> Result<NewDelivery, StoreError> {
+		let failure = |failure: BuildFailure| StoreError::JobBuild {
+			position: 1,
+			kind: failure.kind,
+			description: failure.description,
+		};
+		if job.kind != JobKind::NetMail {
+			return Err(failure(BuildFailure::invalid(
+				"Reroute applies only to NetMail",
+			)));
+		}
+		let signer = self
+			.signers
+			.values()
+			.find(|signer| signer.identity.address.to_string() == job.local_identity)
+			.ok_or_else(|| {
+				failure(BuildFailure::invalid(
+					"Job local identity is no longer configured",
+				))
+			})?;
+		let parsed = tith_wire::tlv::parse_sequence(item)
+			.map_err(|error| failure(BuildFailure::invalid(error.to_string())))?;
+		let validated = parsed
+			.first()
+			.ok_or_else(|| failure(BuildFailure::invalid("Job item is missing")))
+			.and_then(|value| {
+				validate_item(value, self.nodelist.as_ref())
+					.map_err(|error| failure(BuildFailure::invalid(error.to_string())))
+			})?
+			.ok_or_else(|| failure(BuildFailure::invalid("Job item is not a deliverable item")))?;
+		let destination = validated
+			.destination
+			.ok_or_else(|| failure(BuildFailure::invalid("NetMail item has no Destination")))?;
+		let routes = routes_for(&self.configuration, &signer.reference).ok_or_else(|| {
+			failure(BuildFailure::permanent(
+				"local identity has no Routes block",
+			))
+		})?;
+		let (target, mode, route_rule) = match next_hop {
+			NextHop::Route => {
+				let commitment = route_netmail(
+					&self.configuration,
+					routes,
+					&destination,
+					&[],
+					&self.nodelist,
+				)
+				.map_err(|error| failure(BuildFailure::permanent(format!("{error:?}"))))?;
+				(
+					commitment.next_hop,
+					if commitment.passive {
+						DeliveryMode::Passive
+					} else {
+						DeliveryMode::Active
+					},
+					commitment.route_rule,
+				)
+			}
+			NextHop::Active(value) => {
+				if !self.has_usable_endpoint(value) {
+					return Err(failure(BuildFailure::permanent(
+						"explicit Active next hop has no usable endpoint",
+					)));
+				}
+				(
+					self.resolve_identity(value).map_err(failure)?,
+					DeliveryMode::Active,
+					None,
+				)
+			}
+			NextHop::Passive(value) => (
+				self.resolve_identity(value).map_err(failure)?,
+				DeliveryMode::Passive,
+				None,
+			),
+		};
+		let configured = failure_policies(
+			&self.configuration,
+			routes,
+			&signer.identity,
+			&target,
+			route_rule,
+			&self.nodelist,
+		);
+		Ok(NewDelivery {
+			local_identity: signer.identity.address.to_string(),
+			next_hop: target.address.to_string(),
+			mode,
+			class: job.deliveries[0].class.clone(),
+			retry_at: None,
+			policies: convert_policies(configured, failure_policy),
+		})
+	}
+
 	fn build_job(
 		&self,
 		job_id: &str,
 		job: &tith_ipc::SubmissionJob,
 		identity: &SubmissionIdentity,
+		context: &tith_store::BatchContext<'_>,
 	) -> Result<NewOutboundJob, BuildFailure> {
 		if job.application.is_empty() || job.idempotency_key.is_empty() {
 			return Err(BuildFailure::invalid(
@@ -113,9 +214,10 @@ impl SubmissionEngine {
 				self.build_message_job(job_id, identity.clone(), message)
 			}
 			SubmissionBody::File(file) => self.build_file_job(identity.clone(), file),
-			SubmissionBody::Forward { .. } => Err(BuildFailure::invalid(
-				"Forward submission is enabled with inbound association support",
-			)),
+			SubmissionBody::Forward {
+				inbound_id,
+				claim_token,
+			} => self.build_forward_job(identity.clone(), inbound_id, claim_token, context),
 		}
 	}
 
@@ -270,11 +372,13 @@ impl SubmissionEngine {
 			identity,
 			kind,
 			target,
+			local_identity: signer.identity.address.to_string(),
 			item: item.encode(),
 			deliveries,
 			sources,
 			created: timestamp,
 			forward_inbound: None,
+			forward_claim_token: None,
 		})
 	}
 
@@ -317,11 +421,103 @@ impl SubmissionEngine {
 			identity,
 			kind: JobKind::File,
 			target: JobTarget::Area(file.area.clone()),
+			local_identity: signer.identity.address.to_string(),
 			item: item.encode(),
 			deliveries,
 			sources: vec![source_record],
 			created,
 			forward_inbound: None,
+			forward_claim_token: None,
+		})
+	}
+
+	fn build_forward_job(
+		&self,
+		identity: SubmissionIdentity,
+		inbound_id: &str,
+		claim_token: &str,
+		context: &tith_store::BatchContext<'_>,
+	) -> Result<NewOutboundJob, BuildFailure> {
+		let created = now();
+		let inbound = context
+			.claimed_inbound(&identity.application, inbound_id, claim_token, created)
+			.map_err(|error| {
+				BuildFailure::invalid(format!("inbound claim is not current: {error}"))
+			})?;
+		if inbound.record.authentication != tith_store::ItemAuthentication::Valid {
+			return Err(BuildFailure::invalid(
+				"Forward requires a valid end-to-end item signature",
+			));
+		}
+		let signer = self
+			.signers
+			.values()
+			.find(|signer| signer.identity.address.to_string() == inbound.record.local_identity)
+			.ok_or_else(|| {
+				BuildFailure::invalid("inbound receiving identity is no longer configured")
+			})?;
+		let roots = tith_wire::tlv::parse_sequence(&inbound.payload)
+			.map_err(|error| BuildFailure::invalid(error.to_string()))?;
+		let root = roots
+			.first()
+			.filter(|_| roots.len() == 1)
+			.ok_or_else(|| BuildFailure::invalid("inbound payload is not one item"))?;
+		let validated = validate_item(root, self.nodelist.as_ref())
+			.map_err(|error| BuildFailure::invalid(error.to_string()))?
+			.ok_or_else(|| BuildFailure::invalid("inbound payload is not a forwardable item"))?;
+		let (kind, file_area) = match validated.kind {
+			tith_wire::item::ItemKind::EchoMail => (JobKind::EchoMail, false),
+			tith_wire::item::ItemKind::File => (JobKind::File, true),
+			_ => {
+				return Err(BuildFailure::invalid(
+					"Forward requires EchoMail or standalone File",
+				));
+			}
+		};
+		let area = validated
+			.area
+			.clone()
+			.ok_or_else(|| BuildFailure::invalid("distribution item has no Area"))?;
+		let children = tith_wire::tlv::parse_sequence(&root.value)
+			.map_err(|error| BuildFailure::invalid(error.to_string()))?;
+		let mut seen_by: BTreeSet<String> = children
+			.iter()
+			.filter(|child| child.type_code == tith_wire::types::SEEN_BY)
+			.map(|child| {
+				String::from_utf8(child.value.clone())
+					.map_err(|_| BuildFailure::invalid("SeenBy is not UTF-8"))
+			})
+			.collect::<Result<_, _>>()?;
+		let mut deliveries =
+			self.area_deliveries(&signer.reference, &signer.identity, &area, file_area)?;
+		deliveries.retain(|copy| {
+			copy.next_hop != inbound.record.peer && !seen_by.contains(&copy.next_hop)
+		});
+		seen_by.insert(signer.identity.address.to_string());
+		seen_by.extend(deliveries.iter().map(|copy| copy.next_hop.clone()));
+		let item = forward_item(
+			root,
+			&signer.identity,
+			random_u64()?,
+			created,
+			SOFTWARE,
+			&seen_by.into_iter().collect::<Vec<_>>(),
+		)
+		.map_err(|error| BuildFailure::invalid(error.to_string()))?;
+		validate_item(&item, self.nodelist.as_ref())
+			.map_err(|error| BuildFailure::invalid(error.to_string()))?
+			.ok_or_else(|| BuildFailure::invalid("forwarding did not construct an item"))?;
+		Ok(NewOutboundJob {
+			identity,
+			kind,
+			target: JobTarget::Area(area),
+			local_identity: signer.identity.address.to_string(),
+			item: item.encode(),
+			deliveries,
+			sources: Vec::new(),
+			created,
+			forward_inbound: Some(inbound_id.to_owned()),
+			forward_claim_token: Some(claim_token.to_owned()),
 		})
 	}
 

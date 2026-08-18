@@ -14,8 +14,8 @@ use tith_wire::{tlv::parse_sequence, types};
 mod outbound;
 pub use outbound::*;
 
-const RECORDS: TableDefinition<&str, &[u8]> = TableDefinition::new("inbound-records");
-const PAYLOADS: TableDefinition<&str, &[u8]> = TableDefinition::new("inbound-payloads");
+pub(crate) const RECORDS: TableDefinition<&str, &[u8]> = TableDefinition::new("inbound-records");
+pub(crate) const PAYLOADS: TableDefinition<&str, &[u8]> = TableDefinition::new("inbound-payloads");
 const DUPLICATES: TableDefinition<&[u8], &str> = TableDefinition::new("inbound-duplicates");
 const CLAIM_KEYS: TableDefinition<&[u8], &[u8]> = TableDefinition::new("inbound-claim-keys");
 const RESOLVED_TOKENS: TableDefinition<&str, &[u8]> =
@@ -94,6 +94,7 @@ pub struct InboundRecord {
 	pub claim_token: Option<String>,
 	pub claim_expires: Option<u64>,
 	pub last_result: Option<String>,
+	pub forward_job: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -262,6 +263,7 @@ impl InboundStore {
 			claim_token: None,
 			claim_expires: None,
 			last_result: None,
+			forward_job: None,
 		};
 		{
 			let mut records = write.open_table(RECORDS)?;
@@ -652,7 +654,7 @@ fn take_string(input: &mut &[u8]) -> Result<String, StoreError> {
 	String::from_utf8(take_bytes(input)?.to_vec()).map_err(|_| StoreError::CorruptRecord)
 }
 
-fn encode_record(value: &InboundRecord) -> Vec<u8> {
+pub(crate) fn encode_record(value: &InboundRecord) -> Vec<u8> {
 	let mut out = Vec::new();
 	for text in [
 		&value.inbound_id,
@@ -692,9 +694,16 @@ fn encode_record(value: &InboundRecord) -> Vec<u8> {
 		}
 		None => out.push(0),
 	}
+	match &value.forward_job {
+		Some(job_id) => {
+			out.push(1);
+			put_string(&mut out, job_id);
+		}
+		None => out.push(0),
+	}
 	out
 }
-fn decode_record(mut input: &[u8]) -> Result<InboundRecord, StoreError> {
+pub(crate) fn decode_record(mut input: &[u8]) -> Result<InboundRecord, StoreError> {
 	let inbound_id = take_string(&mut input)?;
 	let application = take_string(&mut input)?;
 	let local_identity = take_string(&mut input)?;
@@ -727,6 +736,11 @@ fn decode_record(mut input: &[u8]) -> Result<InboundRecord, StoreError> {
 		1 => Some(take_u64(&mut input)?),
 		_ => return Err(StoreError::CorruptRecord),
 	};
+	let forward_job = if input.is_empty() {
+		None
+	} else {
+		take_optional_string(&mut input)?
+	};
 	if !input.is_empty() {
 		return Err(StoreError::CorruptRecord);
 	}
@@ -749,6 +763,7 @@ fn decode_record(mut input: &[u8]) -> Result<InboundRecord, StoreError> {
 		claim_token,
 		claim_expires,
 		last_result,
+		forward_job,
 	})
 }
 fn take_byte(input: &mut &[u8]) -> Result<u8, StoreError> {

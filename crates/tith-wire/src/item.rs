@@ -235,6 +235,45 @@ pub fn build_originated_file(
 	OwnedTlv::new(types::FILE, concatenate(&signed)).map_err(Into::into)
 }
 
+/// Rebuilds the unsigned routing suffix of an authenticated distribution item.
+pub fn forward_item(
+	item: &OwnedTlv,
+	receiving_identity: &Identity,
+	request_identifier: u64,
+	via_timestamp: u64,
+	software: &str,
+	seen_by: &[String],
+) -> Result<OwnedTlv, BundleError> {
+	if !matches!(item.type_code, types::MESSAGE | types::FILE) {
+		return Err(BundleError::Unexpected("forward item kind"));
+	}
+	let children = parse_sequence(&item.value)?;
+	let signature = children
+		.iter()
+		.position(|child| child.type_code == types::SIGNATURE)
+		.ok_or(BundleError::Missing("Signature"))?;
+	let mut output = children[..=signature].to_vec();
+	output.push(OwnedTlv::new(
+		types::REQUEST_IDENTIFIER,
+		crate::integer::encode_u64(request_identifier),
+	)?);
+	for child in &children[signature + 1..] {
+		if child.type_code == types::VIA || !types::is_defined(child.type_code) {
+			output.push(child.clone());
+		}
+	}
+	output.push(via_value(receiving_identity, via_timestamp, software)?);
+	for address in seen_by {
+		output.push(OwnedTlv::new(types::SEEN_BY, address.as_bytes().to_vec())?);
+	}
+	for child in &children[signature + 1..] {
+		if child.type_code == types::ADDITIONAL_KLUDGE_LINE {
+			output.push(child.clone());
+		}
+	}
+	OwnedTlv::new(item.type_code, concatenate(&output)).map_err(Into::into)
+}
+
 fn concatenate(values: &[OwnedTlv]) -> Vec<u8> {
 	let mut output = Vec::with_capacity(values.iter().map(OwnedTlv::encoded_len).sum());
 	for value in values {

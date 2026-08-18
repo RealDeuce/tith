@@ -110,6 +110,8 @@ impl Document {
 
 mod submit;
 pub use submit::*;
+mod control;
+pub use control::*;
 
 fn parse_line(input: &str, number: usize) -> Result<Line, IpcError> {
 	if input.is_empty()
