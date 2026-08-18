@@ -5,6 +5,7 @@ members = [
 	"crates/tith-config",
 	"crates/tith-exchange",
 	"crates/tith-ipc",
+	"crates/tith-ipc-tcp",
 	"crates/tith-nodelist",
 	"crates/tith-router",
 	"crates/tith-store",
@@ -26,6 +27,7 @@ redb = "=4.2.0"
 nix = { version = "=0.31.3", features = ["socket", "user"] }
 tith-crypto = { path = "crates/tith-crypto" }
 tith-config = { path = "crates/tith-config" }
+tith-ipc-tcp = { path = "crates/tith-ipc-tcp" }
 tith-nodelist = { path = "crates/tith-nodelist" }
 tith-wire = { path = "crates/tith-wire" }
 

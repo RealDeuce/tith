@@ -55,14 +55,24 @@ fn transaction(
 ) -> Result<(), Box<dyn Error>> {
 	let authorized = peer_uid(stream)? == geteuid();
 	let request = read_request(&mut stream)?;
-	let response = match ConsumeRequest::parse(&request) {
-		Ok(request) if authorized => dispatch(request, store, exports, application),
-		Ok(_) => error_result("NotAuthorized", "caller is not authorized"),
-		Err(error) => error_result("Invalid", &error.to_string()),
-	};
+	let response = process_request(&request, authorized, store, exports, application);
 	stream.write_all(&response)?;
 	stream.flush()?;
 	Ok(())
+}
+
+pub(crate) fn process_request(
+	request: &[u8],
+	authorized: bool,
+	store: &InboundStore,
+	exports: &Path,
+	application: &str,
+) -> Vec<u8> {
+	match ConsumeRequest::parse(request) {
+		Ok(request) if authorized => dispatch(request, store, exports, application),
+		Ok(_) => error_result("NotAuthorized", "caller is not authorized"),
+		Err(error) => error_result("Invalid", &error.to_string()),
+	}
 }
 
 #[cfg(any(

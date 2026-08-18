@@ -71,6 +71,7 @@ The implementation is divided by responsibility rather than by document:
 | `tith-router` | Deterministic route selection and commitment |
 | `tith-store` | Pure-Rust `redb` durable state and atomic claims |
 | `tith-ipc` | Canonical local IPC request and result documents |
+| `tith-ipc-tcp` | TSP-0009 authenticated key exchange and encrypted IPC records |
 | `tithd` | FreeBSD-first reference service and host bindings |
 
 Rust 1.97.1 is pinned by [`rust-toolchain.toml`](rust-toolchain.toml). To build
@@ -103,6 +104,24 @@ cargo run -p tithd -- serve-unix /var/run/tith.sock \
 This is an early, local-only interface. It authenticates clients using their
 operating-system credentials and grants access only to the configured service
 user.
+
+For authenticated loopback TCP, generate dedicated server and client IPC keys
+and retain each printed public key in trusted configuration:
+
+```sh
+cargo run -p tithd -- generate-ipc-key /secure/path/server-ipc.secret
+cargo run -p tithd -- generate-ipc-key /secure/path/client-ipc.secret
+```
+
+Then start the same consumption service over TSP-0009. The address must be an
+IPv4 or IPv6 loopback address, and the two public-key arguments are the values
+printed by the preceding commands:
+
+```sh
+cargo run -p tithd -- serve-tcp 127.0.0.1:24556 \
+    /var/db/tith/state.redb /var/db/tith/exports tosser \
+    SERVER-PUBLIC-KEY /secure/path/server-ipc.secret CLIENT-PUBLIC-KEY
+```
 
 The original C proof of concept is retained for historical reference and can
 still be built with:

@@ -1,5 +1,5 @@
 [package]
-name = "tithd"
+name = "tith-ipc-tcp"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -7,13 +7,9 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
-base64.workspace = true
-nix.workspace = true
-tith-config.workspace = true
 tith-crypto.workspace = true
 tith-ipc = { path = "../tith-ipc" }
-tith-ipc-tcp.workspace = true
-tith-store = { path = "../tith-store" }
+tith-wire.workspace = true
 
 [lints]
 workspace = true

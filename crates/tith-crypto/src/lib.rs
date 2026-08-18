@@ -351,6 +351,11 @@ impl KxSecretKey {
 	pub const fn from_bytes(bytes: [u8; KX_SECRET_KEY_BYTES]) -> Self {
 		Self(bytes)
 	}
+
+	#[must_use]
+	pub const fn as_bytes(&self) -> &[u8; KX_SECRET_KEY_BYTES] {
+		&self.0
+	}
 }
 
 impl Drop for KxSecretKey {
