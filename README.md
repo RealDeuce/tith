@@ -107,6 +107,21 @@ This is an early, local-only interface. It authenticates clients using their
 operating-system credentials and grants access only to the configured service
 user.
 
+To enable outbound `Submit`, `Submit-Items`, and `Lookup-Submission` on the
+Unix endpoint, run the mailer form with its routing configuration, nodelist,
+local identity, and matching signing key:
+
+```sh
+cargo run -p tithd -- serve-unix-mailer /var/run/tith.sock \
+    /var/db/tith/state.redb /var/db/tith/exports mailer \
+    /usr/local/etc/tith fidonet /var/db/tith/nodelist.txt \
+    fidonet#1:123/45 /secure/path/node.secret
+```
+
+Submission ingests path Sources into immutable Job contents before returning
+`New`. The current service deliberately omits the optional Move, Delete,
+Truncate, and native-handle features from `Capabilities`.
+
 For authenticated loopback TCP, generate dedicated server and client IPC keys
 and retain each printed public key in trusted configuration:
 

@@ -3,7 +3,8 @@
 #![forbid(unsafe_code)]
 
 use tith_config::{
-	BranchKind, ConfigurationSet, IdentityRef, IndependentKind, Peer, RouteMethod, Routes, Selector,
+	BranchKind, ConfigurationSet, FailureKind, FailurePolicy, IdentityRef, IndependentKind, Peer,
+	RouteMethod, Routes, Selector,
 };
 use tith_nodelist::{Keyword, Nodelist};
 use tith_wire::bundle::Identity;
@@ -261,6 +262,40 @@ fn selector_matches(
 #[must_use]
 pub fn routes_for<'a>(config: &'a ConfigurationSet, local: &IdentityRef) -> Option<&'a Routes> {
 	config.routes.iter().find(|routes| &routes.local == local)
+}
+
+#[must_use]
+pub fn failure_policies(
+	config: &ConfigurationSet,
+	routes: &Routes,
+	origin: &Identity,
+	destination: &Identity,
+	route_rule: Option<usize>,
+	nodelist: &Nodelist,
+) -> [FailurePolicy; 5] {
+	let kinds = [
+		FailureKind::Unroutable,
+		FailureKind::Loop,
+		FailureKind::RelayDenied,
+		FailureKind::Rejected,
+		FailureKind::Authentication,
+	];
+	let route_override = route_rule
+		.and_then(|index| routes.routes.get(index))
+		.and_then(|rule| rule.on_failure);
+	kinds.map(|kind| {
+		route_override.unwrap_or_else(|| {
+			routes
+				.failures
+				.iter()
+				.find(|rule| {
+					(matches!(rule.kind, FailureKind::Any) || rule.kind == kind)
+						&& selector_matches(&rule.origin, origin, config, nodelist)
+						&& selector_matches(&rule.destination, destination, config, nodelist)
+				})
+				.map_or(routes.failure_default, |rule| rule.policy)
+		})
+	})
 }
 
 #[cfg(test)]

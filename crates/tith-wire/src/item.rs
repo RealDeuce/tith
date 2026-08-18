@@ -2,7 +2,9 @@
 
 use std::fmt;
 
-use tith_crypto::{PublicKey, SIGNATURE_BYTES, Signature, TlvHash, verify_tlv};
+use tith_crypto::{
+	PublicKey, SIGNATURE_BYTES, SecretKey, Signature, TlvHash, sign_tlv, verify_tlv,
+};
 
 use crate::address::Address;
 use crate::bundle::{BundleError, Identity, KeyResolver, VerifiedSignedTlv};
@@ -48,6 +50,241 @@ pub enum RejectionReason {
 	Authentication = 2,
 	Condition = 3,
 	Temporary = 4,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AttachmentData {
+	pub filename: String,
+	pub timestamp: Option<u64>,
+	pub contents: Vec<u8>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MessageData {
+	pub destination: Option<Identity>,
+	pub timestamp: u64,
+	pub to_user: String,
+	pub from_user: String,
+	pub subject: String,
+	pub text: String,
+	pub area: Option<String>,
+	pub attachments: Vec<AttachmentData>,
+	pub legacy_attributes: Option<u64>,
+	pub timestamp_offset: Option<i64>,
+	pub tear_line: Option<String>,
+	pub origin_line: Option<String>,
+	pub message_id: Option<String>,
+	pub reply_to: Option<(Address, String)>,
+	pub additional_kludge_lines: Vec<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct StandaloneFileData {
+	pub filename: String,
+	pub timestamp: Option<u64>,
+	pub contents: Vec<u8>,
+	pub area: String,
+	pub short_description: Option<String>,
+	pub long_description_lines: Vec<String>,
+	pub tear_line: Option<String>,
+	pub magic_word: Option<String>,
+	pub replaces: Option<String>,
+}
+
+pub fn build_originated_message(
+	data: MessageData,
+	origin: &Identity,
+	secret: &SecretKey,
+	request_identifier: u64,
+	via_timestamp: u64,
+	software: &str,
+	seen_by: &[String],
+) -> Result<OwnedTlv, BundleError> {
+	if data.destination.is_some() == data.area.is_some() {
+		return Err(BundleError::Unexpected(
+			"Message Destination/Area combination",
+		));
+	}
+	let mut signed = Vec::new();
+	push_identity(&mut signed, types::ORIGIN, origin)?;
+	if let Some(destination) = &data.destination {
+		push_identity(&mut signed, types::DESTINATION, destination)?;
+	}
+	signed.extend([
+		OwnedTlv::new(types::TIMESTAMP, crate::integer::encode_u64(data.timestamp))?,
+		OwnedTlv::new(types::TO_USER_NAME, data.to_user.into_bytes())?,
+		OwnedTlv::new(types::FROM_USER_NAME, data.from_user.into_bytes())?,
+		OwnedTlv::new(types::SUBJECT, data.subject.into_bytes())?,
+		OwnedTlv::new(types::MESSAGE_TEXT, data.text.into_bytes())?,
+	]);
+	if let Some(area) = data.area {
+		signed.push(area_value(&area)?);
+	}
+	for attachment in data.attachments {
+		let mut children = vec![OwnedTlv::new(
+			types::FILENAME,
+			attachment.filename.into_bytes(),
+		)?];
+		if let Some(timestamp) = attachment.timestamp {
+			children.push(OwnedTlv::new(
+				types::TIMESTAMP,
+				crate::integer::encode_u64(timestamp),
+			)?);
+		}
+		children.push(OwnedTlv::new(types::CONTENTS, attachment.contents)?);
+		signed.push(OwnedTlv::new(types::FILE, concatenate(&children))?);
+	}
+	if let Some(value) = data.legacy_attributes {
+		signed.push(OwnedTlv::new(
+			types::LEGACY_ATTRIBUTES,
+			crate::integer::encode_u64(value),
+		)?);
+	}
+	if let Some(value) = data.timestamp_offset {
+		signed.push(OwnedTlv::new(
+			types::TIMESTAMP_OFFSET,
+			crate::integer::encode_i64(value),
+		)?);
+	}
+	for (type_code, value) in [
+		(types::TEAR_LINE, data.tear_line),
+		(types::ORIGIN_LINE, data.origin_line),
+		(types::MESSAGE_ID, data.message_id),
+	] {
+		if let Some(value) = value {
+			signed.push(OwnedTlv::new(type_code, value.into_bytes())?);
+		}
+	}
+	if let Some((address, identifier)) = data.reply_to {
+		let mut value = OwnedTlv::new(types::ADDRESS, address.to_string().into_bytes())?.encode();
+		value.extend_from_slice(identifier.as_bytes());
+		signed.push(OwnedTlv::new(types::REPLY_TO, value)?);
+	}
+	let signature = sign_tlv(&concatenate(&signed), secret)?;
+	signed.push(OwnedTlv::new(
+		types::SIGNATURE,
+		signature.as_bytes().to_vec(),
+	)?);
+	signed.push(OwnedTlv::new(
+		types::REQUEST_IDENTIFIER,
+		crate::integer::encode_u64(request_identifier),
+	)?);
+	signed.push(via_value(origin, via_timestamp, software)?);
+	for value in seen_by {
+		signed.push(OwnedTlv::new(types::SEEN_BY, value.as_bytes().to_vec())?);
+	}
+	for value in data.additional_kludge_lines {
+		signed.push(OwnedTlv::new(
+			types::ADDITIONAL_KLUDGE_LINE,
+			value.into_bytes(),
+		)?);
+	}
+	OwnedTlv::new(types::MESSAGE, concatenate(&signed)).map_err(Into::into)
+}
+
+pub fn build_originated_file(
+	data: StandaloneFileData,
+	origin: &Identity,
+	secret: &SecretKey,
+	request_identifier: u64,
+	via_timestamp: u64,
+	software: &str,
+	seen_by: &[String],
+) -> Result<OwnedTlv, BundleError> {
+	let mut signed = vec![OwnedTlv::new(types::FILENAME, data.filename.into_bytes())?];
+	if let Some(timestamp) = data.timestamp {
+		signed.push(OwnedTlv::new(
+			types::TIMESTAMP,
+			crate::integer::encode_u64(timestamp),
+		)?);
+	}
+	signed.push(OwnedTlv::new(types::CONTENTS, data.contents)?);
+	signed.push(area_value(&data.area)?);
+	push_identity(&mut signed, types::ORIGIN, origin)?;
+	if let Some(value) = data.short_description {
+		signed.push(OwnedTlv::new(types::SHORT_DESCRIPTION, value.into_bytes())?);
+	}
+	for value in data.long_description_lines {
+		signed.push(OwnedTlv::new(
+			types::LONG_DESCRIPTION_LINE,
+			value.into_bytes(),
+		)?);
+	}
+	for (type_code, value) in [
+		(types::TEAR_LINE, data.tear_line),
+		(types::MAGIC_WORD, data.magic_word),
+		(types::REPLACES, data.replaces),
+	] {
+		if let Some(value) = value {
+			signed.push(OwnedTlv::new(type_code, value.into_bytes())?);
+		}
+	}
+	let signature = sign_tlv(&concatenate(&signed), secret)?;
+	signed.push(OwnedTlv::new(
+		types::SIGNATURE,
+		signature.as_bytes().to_vec(),
+	)?);
+	signed.push(OwnedTlv::new(
+		types::REQUEST_IDENTIFIER,
+		crate::integer::encode_u64(request_identifier),
+	)?);
+	signed.push(via_value(origin, via_timestamp, software)?);
+	for value in seen_by {
+		signed.push(OwnedTlv::new(types::SEEN_BY, value.as_bytes().to_vec())?);
+	}
+	OwnedTlv::new(types::FILE, concatenate(&signed)).map_err(Into::into)
+}
+
+fn concatenate(values: &[OwnedTlv]) -> Vec<u8> {
+	let mut output = Vec::with_capacity(values.iter().map(OwnedTlv::encoded_len).sum());
+	for value in values {
+		value.write_to(&mut output).expect("Vec writes cannot fail");
+	}
+	output
+}
+
+fn push_identity(
+	output: &mut Vec<OwnedTlv>,
+	type_code: u64,
+	identity: &Identity,
+) -> Result<(), BundleError> {
+	output.push(OwnedTlv::new(
+		type_code,
+		identity.address.to_string().into_bytes(),
+	)?);
+	if identity.address.is_unlisted() {
+		output.push(OwnedTlv::new(
+			types::PUBLIC_KEY,
+			identity.public_key.as_bytes().to_vec(),
+		)?);
+	}
+	Ok(())
+}
+
+fn area_value(name: &str) -> Result<OwnedTlv, BundleError> {
+	let child = OwnedTlv::new(types::AREA_NAME, name.as_bytes().to_vec())?;
+	OwnedTlv::new(types::AREA, child.encode()).map_err(Into::into)
+}
+
+fn via_value(identity: &Identity, timestamp: u64, software: &str) -> Result<OwnedTlv, BundleError> {
+	let mut children = Vec::new();
+	children.push(OwnedTlv::new(
+		types::ADDRESS,
+		identity.address.to_string().into_bytes(),
+	)?);
+	if identity.address.is_unlisted() {
+		children.push(OwnedTlv::new(
+			types::PUBLIC_KEY,
+			identity.public_key.as_bytes().to_vec(),
+		)?);
+	}
+	children.push(OwnedTlv::new(
+		types::TIMESTAMP,
+		crate::integer::encode_u64(timestamp),
+	)?);
+	let mut value = concatenate(&children);
+	value.extend_from_slice(software.as_bytes());
+	OwnedTlv::new(types::VIA, value).map_err(Into::into)
 }
 
 #[derive(Debug)]

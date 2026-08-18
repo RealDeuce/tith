@@ -28,6 +28,25 @@ pub struct Line {
 	pub fields: Vec<Field>,
 }
 
+impl Line {
+	#[must_use]
+	pub fn encode(&self) -> Vec<u8> {
+		let mut output = String::new();
+		for (index, field) in self.fields.iter().enumerate() {
+			if index != 0 {
+				output.push(' ');
+			}
+			if field.quoted {
+				output.push_str(&quote(&field.text));
+			} else {
+				output.push_str(&field.text);
+			}
+		}
+		output.push('\n');
+		output.into_bytes()
+	}
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum EnvelopeKind {
 	Request,
@@ -82,22 +101,15 @@ impl Document {
 			EnvelopeKind::Result => "TITH-IPC-Result 1\n",
 		});
 		for line in &self.lines {
-			for (index, field) in line.fields.iter().enumerate() {
-				if index != 0 {
-					output.push(' ');
-				}
-				if field.quoted {
-					output.push_str(&quote(&field.text));
-				} else {
-					output.push_str(&field.text);
-				}
-			}
-			output.push('\n');
+			output.push_str(std::str::from_utf8(&line.encode()).expect("line encoding is UTF-8"));
 		}
 		output.push_str("End\n");
 		output.into_bytes()
 	}
 }
+
+mod submit;
+pub use submit::*;
 
 fn parse_line(input: &str, number: usize) -> Result<Line, IpcError> {
 	if input.is_empty()

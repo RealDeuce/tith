@@ -25,6 +25,8 @@ pub const SECRETBOX_HEADER_BYTES: usize = hydro::hydro_secretbox_HEADERBYTES as 
 const SIGN_TLV_CONTEXT: &[u8; 8] = b"SignTLV\0";
 const HASH_TLV_CONTEXT: &[u8; 8] = b"HashTLV\0";
 const INBOUND_ITEM_CONTEXT: &[u8; 8] = b"InItem1\0";
+const SUBMISSION_JOB_CONTEXT: &[u8; 8] = b"SubJob1\0";
+const SUBMISSION_FILE_CONTEXT: &[u8; 8] = b"SubFile\0";
 const TITH_IPC_CONTEXT: &[u8; 8] = b"TITHIPC\0";
 
 static INITIALIZED: OnceLock<bool> = OnceLock::new();
@@ -318,6 +320,18 @@ pub fn hash_tlv(bytes: &[u8]) -> Result<TlvHash, CryptoError> {
 
 pub fn hash_inbound_item(bytes: &[u8]) -> Result<TlvHash, CryptoError> {
 	let mut hasher = TlvHasher::with_context(INBOUND_ITEM_CONTEXT)?;
+	hasher.update(bytes)?;
+	hasher.finish()
+}
+
+pub fn hash_submission_job(bytes: &[u8]) -> Result<TlvHash, CryptoError> {
+	let mut hasher = TlvHasher::with_context(SUBMISSION_JOB_CONTEXT)?;
+	hasher.update(bytes)?;
+	hasher.finish()
+}
+
+pub fn hash_submission_file(bytes: &[u8]) -> Result<TlvHash, CryptoError> {
+	let mut hasher = TlvHasher::with_context(SUBMISSION_FILE_CONTEXT)?;
 	hasher.update(bytes)?;
 	hasher.finish()
 }

@@ -128,6 +128,18 @@ pub enum StoreError {
 	NotFound,
 	Stale(InboundState),
 	JobStale(JobState),
+	JobBuild {
+		position: usize,
+		kind: JobBuildFailure,
+		description: String,
+	},
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum JobBuildFailure {
+	Invalid,
+	Permanent,
+	Temporary,
 }
 
 impl fmt::Display for StoreError {

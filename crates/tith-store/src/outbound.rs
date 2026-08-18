@@ -177,8 +177,9 @@ impl OutboundJob {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum SubmissionClass {
-	New,
+	New { job_id: String },
 	Existing { job_id: String, state: JobState },
+	Conflict,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -216,6 +217,7 @@ pub enum DeliveryOutcome {
 	Failed(String),
 }
 
+#[derive(Clone)]
 pub struct OutboundStore {
 	database: Arc<Database>,
 }
@@ -275,21 +277,35 @@ impl OutboundStore {
 						});
 					} else {
 						conflicts.push(position + 1);
-						classes.push(SubmissionClass::New);
+						classes.push(SubmissionClass::Conflict);
 					}
 				} else {
-					classes.push(SubmissionClass::New);
+					classes.push(SubmissionClass::New {
+						job_id: String::new(),
+					});
 				}
 			}
 		}
 		if !conflicts.is_empty() {
 			return Ok(BatchCommit::Conflict(conflicts));
 		}
+		let mut assigned = BTreeSet::new();
+		for class in &mut classes {
+			if let SubmissionClass::New { job_id } = class {
+				loop {
+					let candidate = unique_job_id(&write)?;
+					if assigned.insert(candidate.clone()) {
+						*job_id = candidate;
+						break;
+					}
+				}
+			}
+		}
 
 		let new_jobs = build(&classes)?;
 		let expected_new = classes
 			.iter()
-			.filter(|class| matches!(class, SubmissionClass::New))
+			.filter(|class| matches!(class, SubmissionClass::New { .. }))
 			.count();
 		if new_jobs.len() != expected_new {
 			return Err(StoreError::CorruptRecord);
@@ -304,14 +320,13 @@ impl OutboundStore {
 						state: *state,
 					});
 				}
-				SubmissionClass::New => {
+				SubmissionClass::New { job_id } => {
 					let value = new_jobs.next().ok_or(StoreError::CorruptRecord)?;
 					if value.identity != *identity {
 						return Err(StoreError::CorruptRecord);
 					}
 					validate_new_job(&value)?;
 					let item = value.item.clone();
-					let job_id = unique_job_id(&write)?;
 					let job = make_job(job_id.clone(), value);
 					{
 						let mut jobs = write.open_table(JOBS)?;
@@ -322,14 +337,15 @@ impl OutboundStore {
 						let key = submission_key(&identity.application, &identity.idempotency_key);
 						submissions.insert(
 							key.as_slice(),
-							encode_submission(&job_id, &identity.digest).as_slice(),
+							encode_submission(job_id, &identity.digest).as_slice(),
 						)?;
 					}
 					outcomes.push(CommitOutcome::New {
-						job_id,
+						job_id: job_id.clone(),
 						state: job.state,
 					});
 				}
+				SubmissionClass::Conflict => return Err(StoreError::CorruptRecord),
 			}
 		}
 		write.commit()?;

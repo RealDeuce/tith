@@ -373,6 +373,7 @@ dependencies = [
  "tith-ipc",
  "tith-ipc-tcp",
  "tith-nodelist",
+ "tith-router",
  "tith-store",
  "tith-wire",
 ]

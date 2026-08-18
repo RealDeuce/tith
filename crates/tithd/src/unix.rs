@@ -9,19 +9,25 @@ use std::sync::Arc;
 use nix::unistd::{Uid, geteuid};
 
 use crate::ipc::{IpcService, Principal};
+use crate::submission::SubmissionEngine;
 
 pub fn serve(
 	socket: &Path,
 	database: &Path,
 	exports: &Path,
 	application: String,
+	submission: Option<Arc<SubmissionEngine>>,
 ) -> Result<(), Box<dyn Error>> {
 	if socket.exists() {
 		return Err("refusing to replace an existing socket path".into());
 	}
 	let listener = UnixListener::bind(socket)?;
 	fs::set_permissions(socket, fs::Permissions::from_mode(0o600))?;
-	let service = Arc::new(IpcService::create(database, exports)?);
+	let mut service = IpcService::create(database, exports)?;
+	if let Some(submission) = submission {
+		service = service.with_submission(submission);
+	}
+	let service = Arc::new(service);
 	let principal = Arc::new(Principal::single(
 		format!("uid:{}", geteuid().as_raw()),
 		application,

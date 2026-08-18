@@ -3,6 +3,7 @@
 mod ipc;
 #[cfg(unix)]
 mod mail;
+mod submission;
 #[cfg(unix)]
 mod tcp;
 #[cfg(unix)]
@@ -13,6 +14,7 @@ use std::fs;
 #[cfg(unix)]
 use std::net::SocketAddr;
 use std::path::Path;
+use std::sync::Arc;
 
 #[cfg(unix)]
 use base64::Engine as _;
@@ -80,7 +82,49 @@ fn run() -> Result<(), Box<dyn Error>> {
 			let exports = arguments.next().ok_or("usage: tithd serve-unix SOCKET DATABASE EXPORT-DIRECTORY APPLICATION")?;
 			let application = arguments.next().ok_or("usage: tithd serve-unix SOCKET DATABASE EXPORT-DIRECTORY APPLICATION")?;
 			if arguments.next().is_some() { return Err("usage: tithd serve-unix SOCKET DATABASE EXPORT-DIRECTORY APPLICATION".into()); }
-			unix::serve(Path::new(&socket), Path::new(&database), Path::new(&exports), application)
+			unix::serve(Path::new(&socket), Path::new(&database), Path::new(&exports), application, None)
+		}
+		#[cfg(unix)]
+		Some("serve-unix-mailer") => {
+			let usage = "usage: tithd serve-unix-mailer SOCKET DATABASE EXPORT-DIRECTORY APPLICATION CONFIG-DIRECTORY NODELIST-DOMAIN NODELIST-FILE LOCAL-IDENTITY NODE-SECRET-FILE";
+			let socket = arguments.next().ok_or(usage)?;
+			let database = arguments.next().ok_or(usage)?;
+			let exports = arguments.next().ok_or(usage)?;
+			let application = arguments.next().ok_or(usage)?;
+			let config_directory = arguments.next().ok_or(usage)?;
+			let nodelist_domain = arguments.next().ok_or(usage)?;
+			let nodelist_file = arguments.next().ok_or(usage)?;
+			let local_name = arguments.next().ok_or(usage)?;
+			let secret_file = arguments.next().ok_or(usage)?;
+			if arguments.next().is_some() {
+				return Err(usage.into());
+			}
+			let configuration = Arc::new(load_config(Path::new(&config_directory))?);
+			let nodelist = Arc::new(Nodelist::parse(
+				&nodelist_domain,
+				&fs::read_to_string(nodelist_file)?,
+			)?);
+			let (local_ref, local) = resolve_local(&local_name, &configuration, &nodelist)?;
+			let secret = Arc::new(mail::read_secret(Path::new(&secret_file))?);
+			let submission = Arc::new(submission::SubmissionEngine::new(
+				Arc::clone(&configuration),
+				Arc::clone(&nodelist),
+				[(
+					local_name,
+					submission::LocalSigner {
+						reference: local_ref,
+						identity: local,
+						secret,
+					},
+				)],
+			));
+			unix::serve(
+				Path::new(&socket),
+				Path::new(&database),
+				Path::new(&exports),
+				application,
+				Some(submission),
+			)
 		}
 		#[cfg(unix)]
 		Some("serve-mail") => {
@@ -141,7 +185,7 @@ fn run() -> Result<(), Box<dyn Error>> {
 				client_public,
 			)
 		}
-		_ => Err("usage: tithd check-config DIRECTORY | generate-node-key SECRET-FILE | generate-ipc-key SECRET-FILE | serve-mail ADDRESS DATABASE APPLICATION CONFIG-DIRECTORY NODELIST-DOMAIN NODELIST-FILE LOCAL-IDENTITY NODE-SECRET-FILE | serve-unix SOCKET DATABASE EXPORT-DIRECTORY APPLICATION | serve-tcp ADDRESS DATABASE EXPORT-DIRECTORY APPLICATION SERVER-PUBLIC-KEY SERVER-SECRET-FILE CLIENT-PUBLIC-KEY".into()),
+		_ => Err("usage: tithd check-config DIRECTORY | generate-node-key SECRET-FILE | generate-ipc-key SECRET-FILE | serve-mail ADDRESS DATABASE APPLICATION CONFIG-DIRECTORY NODELIST-DOMAIN NODELIST-FILE LOCAL-IDENTITY NODE-SECRET-FILE | serve-unix SOCKET DATABASE EXPORT-DIRECTORY APPLICATION | serve-unix-mailer SOCKET DATABASE EXPORT-DIRECTORY APPLICATION CONFIG-DIRECTORY NODELIST-DOMAIN NODELIST-FILE LOCAL-IDENTITY NODE-SECRET-FILE | serve-tcp ADDRESS DATABASE EXPORT-DIRECTORY APPLICATION SERVER-PUBLIC-KEY SERVER-SECRET-FILE CLIENT-PUBLIC-KEY".into()),
 	}
 }
 

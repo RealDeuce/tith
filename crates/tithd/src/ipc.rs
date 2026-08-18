@@ -11,8 +11,16 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD_NO_PAD;
-use tith_ipc::{ConsumeRequest, Document, EnvelopeKind, Field, Line, Presentation, capabilities};
-use tith_store::{ClaimResult, InboundState, InboundStore, Resolution, StoreError};
+use tith_ipc::{
+	ConsumeRequest, Document, EnvelopeKind, Field, Line, LookupSubmission, Presentation,
+	SubmissionRequest, capabilities,
+};
+use tith_store::{
+	BatchCommit, ClaimResult, CommitOutcome, InboundState, InboundStore, JobBuildFailure, JobState,
+	OutboundStore, Resolution, StoreError, SubmissionLookup,
+};
+
+use crate::submission::SubmissionEngine;
 
 const CLAIM_DURATION: u64 = 300;
 const WAIT_POLL_INTERVAL: Duration = Duration::from_millis(100);
@@ -33,7 +41,7 @@ impl Principal {
 		}
 	}
 
-	fn authorizes(&self, application: &str) -> bool {
+	pub(crate) fn authorizes(&self, application: &str) -> bool {
 		self.applications.contains(application)
 	}
 
@@ -48,7 +56,9 @@ impl Principal {
 
 pub struct IpcService {
 	store: Arc<InboundStore>,
+	outbound: OutboundStore,
 	exports: PathBuf,
+	submission: Option<Arc<SubmissionEngine>>,
 }
 
 impl IpcService {
@@ -59,27 +69,83 @@ impl IpcService {
 		fs::create_dir_all(exports)?;
 		#[cfg(unix)]
 		fs::set_permissions(exports, fs::Permissions::from_mode(0o700))?;
+		let store = Arc::new(InboundStore::create(database)?);
+		let outbound = store.outbound()?;
 		Ok(Self {
-			store: Arc::new(InboundStore::create(database)?),
+			store,
+			outbound,
 			exports: exports.to_path_buf(),
+			submission: None,
 		})
 	}
 
 	#[cfg(test)]
 	pub(crate) fn from_store(store: Arc<InboundStore>, exports: PathBuf) -> Self {
-		Self { store, exports }
+		let outbound = store.outbound().expect("test outbound store");
+		Self {
+			store,
+			outbound,
+			exports,
+			submission: None,
+		}
+	}
+
+	#[must_use]
+	pub fn with_submission(mut self, submission: Arc<SubmissionEngine>) -> Self {
+		self.submission = Some(submission);
+		self
 	}
 
 	#[must_use]
 	pub fn process_request(&self, request: &[u8], principal: Option<&Principal>) -> Vec<u8> {
-		let parsed = match ConsumeRequest::parse(request) {
+		let document = match Document::parse(request, EnvelopeKind::Request) {
 			Ok(value) => value,
 			Err(error) => return error_result("Invalid", &error.to_string()),
 		};
 		let Some(principal) = principal else {
 			return error_result("NotAuthorized", "caller is not authorized");
 		};
-		self.dispatch(parsed, principal)
+		let Some(operation) = document
+			.lines
+			.first()
+			.and_then(|line| line.fields.first())
+			.filter(|field| !field.quoted)
+			.map(|field| field.text.as_str())
+		else {
+			return error_result("Invalid", "missing operation");
+		};
+		match operation {
+			"Capabilities" if document.lines.len() == 1 => self.capabilities(),
+			"Claim-Inbound"
+			| "Renew-Inbound"
+			| "Acknowledge-Inbound"
+			| "Release-Inbound"
+			| "Defer-Inbound"
+			| "Reject-Inbound"
+			| "Query-Inbound" => match ConsumeRequest::parse(request) {
+				Ok(parsed) => self.dispatch(parsed, principal),
+				Err(error) => error_result("Invalid", &error.to_string()),
+			},
+			"Submit" | "Submit-Items" => self.submit(request, principal),
+			"Lookup-Submission" => self.lookup_submission(request, principal),
+			_ => error_result("Invalid", "unknown or malformed operation"),
+		}
+	}
+
+	fn capabilities(&self) -> Vec<u8> {
+		let mut operations = vec![
+			"Acknowledge-Inbound",
+			"Claim-Inbound",
+			"Defer-Inbound",
+			"Query-Inbound",
+			"Reject-Inbound",
+			"Release-Inbound",
+			"Renew-Inbound",
+		];
+		if self.submission.is_some() {
+			operations.extend(["Lookup-Submission", "Submit", "Submit-Items"]);
+		}
+		capabilities(operations.into_iter().map(str::to_owned), [])
 	}
 
 	fn dispatch(&self, request: ConsumeRequest, principal: &Principal) -> Vec<u8> {
@@ -104,19 +170,7 @@ impl IpcService {
 		}
 		self.store.refresh_expirations(now())?;
 		match request {
-			ConsumeRequest::Capabilities => Ok(capabilities(
-				[
-					"Acknowledge-Inbound",
-					"Claim-Inbound",
-					"Defer-Inbound",
-					"Query-Inbound",
-					"Reject-Inbound",
-					"Release-Inbound",
-					"Renew-Inbound",
-				]
-				.map(str::to_owned),
-				[],
-			)),
+			ConsumeRequest::Capabilities => Ok(self.capabilities()),
 			ConsumeRequest::Claim {
 				application,
 				wait,
@@ -193,6 +247,102 @@ impl IpcService {
 				let record = self.store.query_for(application, &inbound_id)?;
 				Ok(query_result(&record))
 			}
+		}
+	}
+
+	fn submit(&self, request: &[u8], principal: &Principal) -> Vec<u8> {
+		let parsed = match SubmissionRequest::parse(request) {
+			Ok(value) => value,
+			Err(error) => return error_result("Invalid", &error.to_string()),
+		};
+		let operation = match parsed.operation {
+			tith_ipc::SubmitOperation::Submit => "Submit",
+			tith_ipc::SubmitOperation::SubmitItems => "Submit-Items",
+		};
+		if let Some((position, _)) = parsed
+			.jobs
+			.iter()
+			.enumerate()
+			.find(|(_, job)| !principal.authorizes(&job.application))
+		{
+			return submit_failure(
+				operation,
+				position + 1,
+				"Invalid",
+				"Application is not authorized for this caller",
+			);
+		}
+		let Some(engine) = &self.submission else {
+			return submit_failure(
+				operation,
+				1,
+				"Invalid",
+				"submission is not configured for this service",
+			);
+		};
+		match engine.submit(&parsed, &self.outbound) {
+			Ok(BatchCommit::Committed(outcomes)) => submit_committed(operation, &outcomes),
+			Ok(BatchCommit::Conflict(positions)) => {
+				let lines = positions
+					.into_iter()
+					.map(|position| Line {
+						fields: vec![
+							unquoted("Failure"),
+							unquoted(position.to_string()),
+							unquoted("Conflict"),
+							quoted("Idempotency-Key maps to another JobDigest"),
+						],
+					})
+					.collect();
+				submit_not_committed(operation, lines)
+			}
+			Err(StoreError::JobBuild {
+				position,
+				kind,
+				description,
+			}) => submit_failure(
+				operation,
+				position,
+				match kind {
+					JobBuildFailure::Invalid => "Invalid",
+					JobBuildFailure::Permanent => "PermanentFailure",
+					JobBuildFailure::Temporary => "TemporaryFailure",
+				},
+				&description,
+			),
+			Err(error) => submit_failure(operation, 1, "TemporaryFailure", &error.to_string()),
+		}
+	}
+
+	fn lookup_submission(&self, request: &[u8], principal: &Principal) -> Vec<u8> {
+		let parsed = match LookupSubmission::parse(request) {
+			Ok(value) => value,
+			Err(error) => return error_result("Invalid", &error.to_string()),
+		};
+		if !principal.authorizes(&parsed.application) {
+			return operation_result("Lookup-Submission", &["NotAuthorized"]);
+		}
+		match self.outbound.lookup(&parsed.application, &parsed.keys) {
+			Ok(values) => {
+				let mut lines = vec![Line {
+					fields: vec![unquoted("Lookup-Submission"), unquoted("Completed")],
+				}];
+				for (index, value) in values.into_iter().enumerate() {
+					let mut fields =
+						vec![unquoted("Submission"), unquoted((index + 1).to_string())];
+					match value {
+						SubmissionLookup::Existing { job_id, state } => fields.extend([
+							unquoted("Existing"),
+							unquoted(job_id),
+							unquoted(job_state_name(state)),
+						]),
+						SubmissionLookup::NotFound => fields.push(unquoted("NotFound")),
+					}
+					lines.push(Line { fields });
+				}
+				result(lines)
+			}
+			Err(_) => operation_result("Lookup-Submission", &["TemporaryFailure"]),
 		}
 	}
 
@@ -366,10 +516,62 @@ fn operation_result_owned(operation: &str, values: Vec<String>) -> Vec<u8> {
 	fields.extend(values.into_iter().map(unquoted));
 	result(vec![Line { fields }])
 }
+fn submit_committed(operation: &str, outcomes: &[CommitOutcome]) -> Vec<u8> {
+	let mut lines = vec![Line {
+		fields: vec![unquoted(operation), unquoted("Committed")],
+	}];
+	for (index, outcome) in outcomes.iter().enumerate() {
+		let (kind, job_id, state) = match outcome {
+			CommitOutcome::New { job_id, state } => ("New", job_id, *state),
+			CommitOutcome::Existing { job_id, state } => ("Existing", job_id, *state),
+		};
+		lines.push(Line {
+			fields: vec![
+				unquoted("Job"),
+				unquoted((index + 1).to_string()),
+				unquoted(kind),
+				unquoted(job_id),
+				unquoted(job_state_name(state)),
+			],
+		});
+	}
+	result(lines)
+}
+fn submit_not_committed(operation: &str, failures: Vec<Line>) -> Vec<u8> {
+	let mut lines = vec![Line {
+		fields: vec![unquoted(operation), unquoted("Not-Committed")],
+	}];
+	lines.extend(failures);
+	result(lines)
+}
+fn submit_failure(operation: &str, position: usize, kind: &str, description: &str) -> Vec<u8> {
+	submit_not_committed(
+		operation,
+		vec![Line {
+			fields: vec![
+				unquoted("Failure"),
+				unquoted(position.to_string()),
+				unquoted(kind),
+				quoted(description),
+			],
+		}],
+	)
+}
 fn error_result(kind: &str, description: &str) -> Vec<u8> {
 	result(vec![Line {
 		fields: vec![unquoted("Error"), unquoted(kind), quoted(description)],
 	}])
+}
+fn job_state_name(value: JobState) -> &'static str {
+	match value {
+		JobState::Queued => "Queued",
+		JobState::Active => "Active",
+		JobState::Deferred => "Deferred",
+		JobState::Delivered => "Delivered",
+		JobState::Rejected => "Rejected",
+		JobState::Failed => "Failed",
+		JobState::Cancelled => "Cancelled",
+	}
 }
 fn state_name(value: InboundState) -> &'static str {
 	match value {
