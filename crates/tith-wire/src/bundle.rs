@@ -239,6 +239,11 @@ pub fn verify_signed_tlv(
 	})
 }
 
+pub fn unauthenticated_signed_data(value: &OwnedTlv) -> Result<Vec<OwnedTlv>, BundleError> {
+	let (_, _, signed_data, _) = signed_tlv_parts(value)?;
+	parse_sequence(&signed_data.value).map_err(Into::into)
+}
+
 impl Bundle {
 	pub fn parse(encoded: &[u8], resolver: &impl KeyResolver) -> Result<Self, BundleError> {
 		let top = parse_sequence(encoded)?;

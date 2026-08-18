@@ -36,7 +36,18 @@ pub struct ValidatedItem {
 	pub request_identifier: u64,
 	pub duplicate_identity: Option<SignedItemIdentity>,
 	pub response_to: Option<TlvHash>,
+	pub destination: Option<Identity>,
+	pub area: Option<String>,
 	pub raw: OwnedTlv,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(u64)]
+pub enum RejectionReason {
+	Permanent = 1,
+	Authentication = 2,
+	Condition = 3,
+	Temporary = 4,
 }
 
 #[derive(Debug)]
@@ -199,28 +210,58 @@ fn encoded_prefix(values: &[OwnedTlv], end: usize) -> Vec<u8> {
 	encoded
 }
 
-fn validate_area(value: &OwnedTlv) -> Result<(), BundleError> {
+fn validate_area(value: &OwnedTlv) -> Result<String, BundleError> {
 	let children = parse_sequence(&value.value)?;
 	let mut cursor = Cursor::new(&children);
-	text(cursor.take(types::AREA_NAME, "AreaName")?.1)?;
+	let name = text(cursor.take(types::AREA_NAME, "AreaName")?.1)?.to_owned();
 	if let Some((_, description)) = cursor.optional(types::AREA_DESCRIPTION) {
 		text(description)?;
 	}
-	cursor.finish()
+	cursor.finish()?;
+	Ok(name)
 }
 
 fn validate_via(value: &OwnedTlv) -> Result<(), BundleError> {
-	let children = parse_sequence(&value.value)?;
-	let mut cursor = Cursor::new(&children);
-	let (_, address_value) = cursor.take(types::ADDRESS, "Via Address")?;
-	let address = parse_address(address_value)?;
-	conditional_public_key(&mut cursor, &address)?;
-	decode_u64(&cursor.take(types::TIMESTAMP, "Via Timestamp")?.1.value)?;
-	let (_, software) = cursor
-		.next_defined()
-		.ok_or(BundleError::Missing("Via software string"))?;
-	text(software)?;
-	cursor.finish()
+	let (address_value, address_bytes) = take_encoded_tlv(&value.value)?;
+	if address_value.type_code != types::ADDRESS {
+		return Err(BundleError::Missing("Via Address"));
+	}
+	let address = parse_address(&address_value)?;
+	let mut offset = address_bytes;
+	let (next, next_bytes) = take_encoded_tlv(&value.value[offset..])?;
+	if address.is_unlisted() {
+		if next.type_code != types::PUBLIC_KEY {
+			return Err(BundleError::Missing("PublicKey after unlisted Via Address"));
+		}
+		parse_public_key(&next)?;
+		offset += next_bytes;
+	} else if next.type_code == types::PUBLIC_KEY {
+		return Err(BundleError::Unexpected(
+			"PublicKey after listed Via Address",
+		));
+	}
+	let (timestamp, timestamp_bytes) = if address.is_unlisted() {
+		take_encoded_tlv(&value.value[offset..])?
+	} else {
+		(next, next_bytes)
+	};
+	if timestamp.type_code != types::TIMESTAMP {
+		return Err(BundleError::Missing("Via Timestamp"));
+	}
+	decode_u64(&timestamp.value)?;
+	offset += timestamp_bytes;
+	std::str::from_utf8(&value.value[offset..]).map_err(|_| BundleError::InvalidUtf8)?;
+	Ok(())
+}
+
+fn validate_reply_to(value: &OwnedTlv) -> Result<(), BundleError> {
+	let (address, used) = take_encoded_tlv(&value.value)?;
+	if address.type_code != types::ADDRESS {
+		return Err(BundleError::Missing("ReplyTo Address"));
+	}
+	parse_address(&address)?;
+	std::str::from_utf8(&value.value[used..]).map_err(|_| BundleError::InvalidUtf8)?;
+	Ok(())
 }
 
 fn validate_message(
@@ -240,8 +281,8 @@ fn validate_message(
 	let destination = if cursor.peek_type() == Some(types::DESTINATION) {
 		let (_, destination) = cursor.take(types::DESTINATION, "Destination")?;
 		let address = parse_address(destination)?;
-		conditional_public_key(&mut cursor, &address)?;
-		Some(address)
+		let key = conditional_public_key(&mut cursor, &address)?;
+		Some(parse_identity(destination, key, resolver)?)
 	} else {
 		None
 	};
@@ -254,10 +295,12 @@ fn validate_message(
 	] {
 		text(cursor.take(type_code, name)?.1)?;
 	}
-	let area = cursor.optional(types::AREA).map(|(_, value)| value);
-	match (&destination, area) {
-		(Some(_), None) => {}
-		(None, Some(area)) => validate_area(area)?,
+	let area = cursor
+		.optional(types::AREA)
+		.map(|(_, value)| validate_area(value))
+		.transpose()?;
+	match (&destination, &area) {
+		(Some(_), None) | (None, Some(_)) => {}
 		_ => {
 			return Err(BundleError::Unexpected(
 				"Message Destination/Area combination",
@@ -279,27 +322,18 @@ fn validate_message(
 		}
 	}
 	if let Some((_, reply)) = cursor.optional(types::REPLY_TO) {
-		let reply_children = parse_sequence(&reply.value)?;
-		let mut reply_cursor = Cursor::new(&reply_children);
-		parse_address(reply_cursor.take(types::ADDRESS, "ReplyTo Address")?.1)?;
-		let (_, message_id) = reply_cursor
-			.next_defined()
-			.ok_or(BundleError::Missing("ReplyTo MessageID"))?;
-		text(message_id)?;
-		reply_cursor.finish()?;
+		validate_reply_to(reply)?;
 	}
 	if let Some((_, value)) = cursor.optional(types::ORIGINAL_CHARACTER_SET) {
 		text(value)?;
 	}
 	let (signature_index, signature_value) = cursor.take(types::SIGNATURE, "Message Signature")?;
 	let signature = parse_signature(signature_value)?;
-	if !verify_tlv(
+	let authenticated = verify_tlv(
 		&encoded_prefix(&children, signature_index),
 		&signature,
 		&origin.public_key,
-	)? {
-		return Err(BundleError::InvalidSignature);
-	}
+	)?;
 	let request_identifier = decode_u64(
 		&cursor
 			.take(types::REQUEST_IDENTIFIER, "Message RequestIdentifier")?
@@ -327,12 +361,14 @@ fn validate_message(
 			ItemKind::EchoMail
 		},
 		request_identifier,
-		duplicate_identity: Some(SignedItemIdentity {
+		duplicate_identity: authenticated.then_some(SignedItemIdentity {
 			type_code: types::MESSAGE,
 			origin,
 			signature,
 		}),
 		response_to: None,
+		destination,
+		area,
 		raw: value.clone(),
 	})
 }
@@ -354,10 +390,10 @@ fn validate_file(
 		decode_u64(&timestamp.value)?;
 	}
 	cursor.take(types::CONTENTS, "File Contents")?;
-	let area = cursor.optional(types::AREA).map(|(_, value)| value);
-	if let Some(area) = area {
-		validate_area(area)?;
-	}
+	let area = cursor
+		.optional(types::AREA)
+		.map(|(_, value)| validate_area(value))
+		.transpose()?;
 	let origin_value = cursor.optional(types::ORIGIN).map(|(_, value)| value);
 	if standalone && origin_value.is_none() {
 		return Err(BundleError::Missing("standalone File Origin"));
@@ -394,14 +430,12 @@ fn validate_file(
 	let signature = if let Some((signature_index, signature_value)) = signature_entry {
 		let signature = parse_signature(signature_value)?;
 		let origin = origin.as_ref().expect("combination checked above");
-		if !verify_tlv(
+		let authenticated = verify_tlv(
 			&encoded_prefix(&children, signature_index),
 			&signature,
 			&origin.public_key,
-		)? {
-			return Err(BundleError::InvalidSignature);
-		}
-		Some(signature)
+		)?;
+		Some((signature, authenticated))
 	} else {
 		None
 	};
@@ -433,12 +467,16 @@ fn validate_file(
 	Ok(request_identifier.map(|request_identifier| ValidatedItem {
 		kind: ItemKind::File,
 		request_identifier,
-		duplicate_identity: Some(SignedItemIdentity {
-			type_code: types::FILE,
-			origin: origin.expect("standalone file has Origin"),
-			signature: signature.expect("standalone file has Signature"),
-		}),
+		duplicate_identity: signature.filter(|(_, authenticated)| *authenticated).map(
+			|(signature, _)| SignedItemIdentity {
+				type_code: types::FILE,
+				origin: origin.expect("standalone file has Origin"),
+				signature,
+			},
+		),
 		response_to: None,
+		destination: None,
+		area,
 		raw: value.clone(),
 	}))
 }
@@ -458,6 +496,8 @@ fn simple_request(value: &OwnedTlv, kind: ItemKind) -> Result<ValidatedItem, Bun
 		request_identifier,
 		duplicate_identity: None,
 		response_to: None,
+		destination: None,
+		area: None,
 		raw: value.clone(),
 	})
 }
@@ -484,6 +524,8 @@ fn validate_file_request(value: &OwnedTlv) -> Result<ValidatedItem, BundleError>
 		request_identifier,
 		duplicate_identity: None,
 		response_to: None,
+		destination: None,
+		area: None,
 		raw: value.clone(),
 	})
 }
@@ -516,6 +558,8 @@ fn validate_response(value: &OwnedTlv, accepted: bool) -> Result<ValidatedItem, 
 			request_identifier,
 			duplicate_identity: None,
 			response_to: Some(response_to),
+			destination: None,
+			area: None,
 			raw: value.clone(),
 		});
 	}
@@ -555,6 +599,8 @@ fn validate_response(value: &OwnedTlv, accepted: bool) -> Result<ValidatedItem, 
 		request_identifier,
 		duplicate_identity: None,
 		response_to: Some(response_to),
+		destination: None,
+		area: None,
 		raw: value.clone(),
 	})
 }
@@ -576,23 +622,75 @@ fn take_encoded_tlv(bytes: &[u8]) -> Result<(OwnedTlv, usize), BundleError> {
 	Ok((OwnedTlv::new(type_code, value.to_vec())?, end))
 }
 
+pub fn accepted(request_identifier: u64, response_to: TlvHash) -> Result<OwnedTlv, BundleError> {
+	let children = [
+		OwnedTlv::new(
+			types::REQUEST_IDENTIFIER,
+			crate::integer::encode_u64(request_identifier),
+		)?,
+		OwnedTlv::new(types::TLV_HASH, response_to.as_bytes().to_vec())?,
+	];
+	OwnedTlv::new(types::ACCEPTED, encoded_prefix(&children, children.len())).map_err(Into::into)
+}
+
+pub fn rejected(
+	request_identifier: u64,
+	response_to: TlvHash,
+	timestamp: Option<u64>,
+	reason: RejectionReason,
+	description: &str,
+) -> Result<OwnedTlv, BundleError> {
+	let mut value = Vec::new();
+	OwnedTlv::new(
+		types::REQUEST_IDENTIFIER,
+		crate::integer::encode_u64(request_identifier),
+	)?
+	.write_to(&mut value)?;
+	OwnedTlv::new(types::TLV_HASH, response_to.as_bytes().to_vec())?.write_to(&mut value)?;
+	if let Some(timestamp) = timestamp {
+		OwnedTlv::new(types::TIMESTAMP, crate::integer::encode_u64(timestamp))?
+			.write_to(&mut value)?;
+	}
+	value.extend_from_slice(&crate::integer::encode_u64(reason as u64));
+	value.extend_from_slice(description.as_bytes());
+	OwnedTlv::new(types::REJECTED, value).map_err(Into::into)
+}
+
+#[must_use]
+pub fn request_identifier(value: &OwnedTlv) -> Option<u64> {
+	let children = parse_sequence(&value.value).ok()?;
+	let mut identifiers = children
+		.iter()
+		.filter(|child| child.type_code == types::REQUEST_IDENTIFIER)
+		.map(|child| decode_u64(&child.value));
+	let identifier = identifiers.next()?.ok()?;
+	identifiers.next().is_none().then_some(identifier)
+}
+
+pub fn validate_item(
+	value: &OwnedTlv,
+	resolver: &impl KeyResolver,
+) -> Result<Option<ValidatedItem>, BundleError> {
+	match value.type_code {
+		types::MESSAGE => validate_message(value, resolver).map(Some),
+		types::FILE => validate_file(value, true, resolver),
+		types::FILE_REQUEST => validate_file_request(value).map(Some),
+		types::ACCEPTED => validate_response(value, true).map(Some),
+		types::REJECTED => validate_response(value, false).map(Some),
+		types::POLL_MESSAGES => simple_request(value, ItemKind::PollMessages).map(Some),
+		types::POLL_FILES => simple_request(value, ItemKind::PollFiles).map(Some),
+		types::POLL_FILE_REQUESTS => simple_request(value, ItemKind::PollFileRequests).map(Some),
+		_ => Ok(None),
+	}
+}
+
 pub fn validate_payload(
 	payload: &VerifiedSignedTlv,
 	resolver: &impl KeyResolver,
 ) -> Result<Vec<ValidatedItem>, PayloadError> {
 	let mut validated = Vec::new();
 	for (index, item) in payload.data.iter().enumerate().skip(1) {
-		let result = match item.type_code {
-			types::MESSAGE => validate_message(item, resolver).map(Some),
-			types::FILE => validate_file(item, true, resolver),
-			types::FILE_REQUEST => validate_file_request(item).map(Some),
-			types::ACCEPTED => validate_response(item, true).map(Some),
-			types::REJECTED => validate_response(item, false).map(Some),
-			types::POLL_MESSAGES => simple_request(item, ItemKind::PollMessages).map(Some),
-			types::POLL_FILES => simple_request(item, ItemKind::PollFiles).map(Some),
-			types::POLL_FILE_REQUESTS => simple_request(item, ItemKind::PollFileRequests).map(Some),
-			_ => Ok(None),
-		};
+		let result = validate_item(item, resolver);
 		match result {
 			Ok(Some(item)) => validated.push(item),
 			Ok(None) => {}
@@ -688,5 +786,52 @@ mod tests {
 			validate_message(&message, &|_: &Address| None),
 			Err(BundleError::Missing("PublicKey after unlisted address"))
 		));
+	}
+
+	#[test]
+	fn via_and_reply_to_use_raw_utf8_suffixes() {
+		let mut via_value = Vec::new();
+		OwnedTlv::new(types::ADDRESS, b"fidonet#1/2".to_vec())
+			.unwrap()
+			.write_to(&mut via_value)
+			.unwrap();
+		OwnedTlv::new(types::TIMESTAMP, crate::integer::encode_u64(123))
+			.unwrap()
+			.write_to(&mut via_value)
+			.unwrap();
+		via_value.extend_from_slice("tith тест 1.0".as_bytes());
+		let via = OwnedTlv::new(types::VIA, via_value).unwrap();
+		validate_via(&via).unwrap();
+
+		let mut reply_value = Vec::new();
+		OwnedTlv::new(types::ADDRESS, b"fidonet#1/3".to_vec())
+			.unwrap()
+			.write_to(&mut reply_value)
+			.unwrap();
+		reply_value.extend_from_slice(b"message-id@example");
+		let reply = OwnedTlv::new(types::REPLY_TO, reply_value).unwrap();
+		validate_reply_to(&reply).unwrap();
+
+		let mut invalid = via;
+		invalid.value.push(0xff);
+		assert!(matches!(
+			validate_via(&invalid),
+			Err(BundleError::InvalidUtf8)
+		));
+	}
+
+	#[test]
+	fn unlisted_via_requires_its_public_key_before_the_raw_suffix() {
+		let address = Address::unlisted("p2p".to_owned()).unwrap();
+		let mut value = Vec::new();
+		for child in [
+			OwnedTlv::new(types::ADDRESS, address.to_string().into_bytes()).unwrap(),
+			OwnedTlv::new(types::PUBLIC_KEY, vec![7; 32]).unwrap(),
+			OwnedTlv::new(types::TIMESTAMP, crate::integer::encode_u64(456)).unwrap(),
+		] {
+			child.write_to(&mut value).unwrap();
+		}
+		value.extend_from_slice(b"tith 1.0");
+		validate_via(&OwnedTlv::new(types::VIA, value).unwrap()).unwrap();
 	}
 }

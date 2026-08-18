@@ -36,6 +36,10 @@ leaving the discovery only in chat, a commit message, or a code comment.
 - If GitHub access or authentication prevents filing the issue, preserve the
   complete issue text locally and report the blocker rather than dropping the
   finding.
+- Pass issue bodies to GitHub with real newline characters, not literal `\n`
+  escape sequences. Shell and JSON quoting can double-escape multiline text;
+  after creating or updating an issue, read its body back and verify that the
+  Markdown contains no unintended literal newline escapes.
 
 ## Why TITH Exists
 
@@ -178,6 +182,9 @@ lengths and outstanding-response accounting cannot resolve.
 - `crates/tith-ipc` owns canonical local IPC text; binding code carries those
   bytes without inventing another grammar.
 - `crates/tithd` is the blocking reference service and contains host bindings.
+  Its native mail listener accepts only operations whose wire grammar and
+  durable behavior are implemented; unsupported work receives an explicit
+  response rather than being discarded.
 - `poc/tith.c` handles command-line dispatch and key generation.
 - `poc/tith-common.c` owns TLV parsing, construction, signing, validation, and
   process-wide cleanup state.

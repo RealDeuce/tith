@@ -5,9 +5,13 @@
 use std::fmt;
 use std::io::{self, Read, Write};
 
-use tith_crypto::{TlvHash, hash_tlv};
-use tith_wire::bundle::{Bundle, Identity, KeyResolver};
+use tith_crypto::{SecretKey, TlvHash, hash_tlv};
+use tith_wire::bundle::{
+	Bundle, BundleError, Identity, KeyResolver, build_bundle, build_signed_tlv,
+};
 use tith_wire::item::{ItemKind, PayloadError, ValidatedItem, validate_payload};
+use tith_wire::tlv::{OwnedTlv, parse_sequence};
+use tith_wire::types;
 
 pub trait ExchangeIo: Read + Write {
 	fn shutdown_write(&mut self) -> io::Result<()>;
@@ -56,6 +60,8 @@ pub struct CompletedResponse {
 pub enum ExchangeError {
 	Crypto(tith_crypto::CryptoError),
 	Payload(PayloadError),
+	Bundle(BundleError),
+	WrongDestination,
 	WrongReplyOrigin,
 	WrongReplyDestination,
 	UnexpectedResponse,
@@ -70,6 +76,8 @@ impl fmt::Display for ExchangeError {
 		match self {
 			Self::Crypto(error) => write!(f, "cryptographic error: {error}"),
 			Self::Payload(error) => write!(f, "invalid payload: {error}"),
+			Self::Bundle(error) => write!(f, "invalid bundle: {error}"),
+			Self::WrongDestination => f.write_str("Bundle has the wrong Destination"),
 			Self::WrongReplyOrigin => f.write_str("Reply Bundle has the wrong Origin"),
 			Self::WrongReplyDestination => f.write_str("Reply Bundle has the wrong Destination"),
 			Self::UnexpectedResponse => {
@@ -96,6 +104,12 @@ impl From<tith_crypto::CryptoError> for ExchangeError {
 impl From<PayloadError> for ExchangeError {
 	fn from(value: PayloadError) -> Self {
 		Self::Payload(value)
+	}
+}
+
+impl From<BundleError> for ExchangeError {
+	fn from(value: BundleError) -> Self {
+		Self::Bundle(value)
 	}
 }
 
@@ -239,6 +253,58 @@ pub fn send_bundle(
 		io.shutdown_write()?;
 	}
 	Ok(())
+}
+
+#[derive(Clone, Debug)]
+pub struct ServerReply {
+	prefix: Vec<u8>,
+	header_hash: TlvHash,
+	pub origin: Identity,
+	pub destination: Identity,
+}
+
+impl ServerReply {
+	pub fn for_request(
+		request: &Bundle,
+		local: &Identity,
+		local_secret: &SecretKey,
+		timestamp: u64,
+	) -> Result<Self, ExchangeError> {
+		if request.destination != *local {
+			return Err(ExchangeError::WrongDestination);
+		}
+		let prefix = build_bundle(local, local_secret, &request.origin, timestamp, Vec::new())?;
+		let top = parse_sequence(&prefix).map_err(BundleError::from)?;
+		let header = top
+			.iter()
+			.find(|value| value.type_code == types::SIGNED_TLV)
+			.ok_or(BundleError::Missing("Reply Header SignedTLV"))?;
+		Ok(Self {
+			header_hash: hash_tlv(&header.encode())?,
+			prefix,
+			origin: local.clone(),
+			destination: request.origin.clone(),
+		})
+	}
+
+	#[must_use]
+	pub fn prefix(&self) -> &[u8] {
+		&self.prefix
+	}
+
+	pub fn payload(
+		&self,
+		responses: Vec<OwnedTlv>,
+		local_secret: &SecretKey,
+	) -> Result<Vec<u8>, ExchangeError> {
+		let mut data = Vec::with_capacity(responses.len() + 1);
+		data.push(
+			OwnedTlv::new(types::TLV_HASH, self.header_hash.as_bytes().to_vec())
+				.map_err(BundleError::from)?,
+		);
+		data.extend(responses);
+		Ok(build_signed_tlv(&data, None, local_secret)?.encode())
+	}
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

@@ -11,9 +11,12 @@ base64.workspace = true
 nix.workspace = true
 tith-config.workspace = true
 tith-crypto.workspace = true
+tith-exchange = { path = "../tith-exchange" }
 tith-ipc = { path = "../tith-ipc" }
 tith-ipc-tcp.workspace = true
+tith-nodelist.workspace = true
 tith-store = { path = "../tith-store" }
+tith-wire.workspace = true
 
 [lints]
 workspace = true

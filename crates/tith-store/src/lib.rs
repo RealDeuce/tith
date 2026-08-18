@@ -7,10 +7,12 @@ use std::path::Path;
 
 use redb::{Database, ReadableDatabase, ReadableTable, TableDefinition};
 use tith_crypto::{CryptoError, PublicKey, TlvHash, hash_inbound_item, random_bytes};
+use tith_wire::item::SignedItemIdentity;
 use tith_wire::{tlv::parse_sequence, types};
 
 const RECORDS: TableDefinition<&str, &[u8]> = TableDefinition::new("inbound-records");
 const PAYLOADS: TableDefinition<&str, &[u8]> = TableDefinition::new("inbound-payloads");
+const DUPLICATES: TableDefinition<&[u8], &str> = TableDefinition::new("inbound-duplicates");
 const CLAIM_KEYS: TableDefinition<&[u8], &[u8]> = TableDefinition::new("inbound-claim-keys");
 const RESOLVED_TOKENS: TableDefinition<&str, &[u8]> =
 	TableDefinition::new("inbound-resolved-tokens");
@@ -90,6 +92,12 @@ pub struct InboundRecord {
 	pub last_result: Option<String>,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum AcceptResult {
+	Stored(Box<InboundRecord>),
+	Duplicate { inbound_id: String },
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Resolution<'a> {
 	Acknowledge,
@@ -152,6 +160,7 @@ impl InboundStore {
 		{
 			write.open_table(RECORDS)?;
 			write.open_table(PAYLOADS)?;
+			write.open_table(DUPLICATES)?;
 			write.open_table(CLAIM_KEYS)?;
 			write.open_table(RESOLVED_TOKENS)?;
 		}
@@ -160,6 +169,17 @@ impl InboundStore {
 	}
 
 	pub fn insert(&self, value: NewInbound<'_>) -> Result<InboundRecord, StoreError> {
+		match self.accept(value, None)? {
+			AcceptResult::Stored(record) => Ok(*record),
+			AcceptResult::Duplicate { .. } => unreachable!("no duplicate identity was supplied"),
+		}
+	}
+
+	pub fn accept(
+		&self,
+		value: NewInbound<'_>,
+		duplicate_identity: Option<&SignedItemIdentity>,
+	) -> Result<AcceptResult, StoreError> {
 		let parsed = parse_sequence(value.payload).map_err(|_| StoreError::InvalidPayload)?;
 		if parsed.len() != 1 {
 			return Err(StoreError::InvalidPayload);
@@ -175,8 +195,24 @@ impl InboundStore {
 		{
 			return Err(StoreError::InvalidPayload);
 		}
+		if let Some(identity) = duplicate_identity
+			&& (identity.type_code != parsed[0].type_code
+				|| matches!(kind, ItemKind::FileRequest)
+				|| value.authentication != ItemAuthentication::Valid)
+		{
+			return Err(StoreError::InvalidPayload);
+		}
 		let hash = hash_inbound_item(value.payload)?;
 		let write = self.database.begin_write()?;
+		let duplicate_key = duplicate_identity.map(encode_duplicate_identity);
+		if let Some(key) = duplicate_key.as_ref() {
+			let duplicates = write.open_table(DUPLICATES)?;
+			if let Some(existing) = duplicates.get(key.as_slice())? {
+				return Ok(AcceptResult::Duplicate {
+					inbound_id: existing.value().to_owned(),
+				});
+			}
+		}
 		let id = {
 			let records = write.open_table(RECORDS)?;
 			loop {
@@ -211,9 +247,13 @@ impl InboundStore {
 			records.insert(id.as_str(), encode_record(&record).as_slice())?;
 			let mut payloads = write.open_table(PAYLOADS)?;
 			payloads.insert(id.as_str(), value.payload)?;
+			if let Some(key) = duplicate_key.as_ref() {
+				let mut duplicates = write.open_table(DUPLICATES)?;
+				duplicates.insert(key.as_slice(), id.as_str())?;
+			}
 		}
 		write.commit()?;
-		Ok(record)
+		Ok(AcceptResult::Stored(Box::new(record)))
 	}
 
 	pub fn claim(
@@ -479,6 +519,16 @@ fn random_identifier(prefix: char) -> Result<String, StoreError> {
 	}
 	Ok(output)
 }
+
+fn encode_duplicate_identity(value: &SignedItemIdentity) -> Vec<u8> {
+	let mut output = Vec::new();
+	put_u64(&mut output, value.type_code);
+	put_string(&mut output, &value.origin.address.to_string());
+	output.extend_from_slice(value.origin.public_key.as_bytes());
+	output.extend_from_slice(value.signature.as_bytes());
+	output
+}
+
 fn claim_from(record: InboundRecord) -> Result<Claim, StoreError> {
 	Ok(Claim {
 		inbound_id: record.inbound_id.clone(),
@@ -697,6 +747,8 @@ fn decode_token_resolution(mut input: &[u8]) -> Result<(String, InboundState), S
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use tith_crypto::Signature;
+	use tith_wire::bundle::Identity;
 	use tith_wire::tlv::OwnedTlv;
 
 	#[test]
@@ -810,6 +862,55 @@ mod tests {
 		assert_eq!(
 			store.query(&item.inbound_id).unwrap().claim_token,
 			Some(third.claim_token)
+		);
+		drop(store);
+		std::fs::remove_file(path).unwrap();
+	}
+
+	#[test]
+	fn signed_item_acceptance_is_durable_and_idempotent() {
+		let path = std::env::temp_dir().join(format!(
+			"tith-store-{}.redb",
+			random_identifier('T').unwrap()
+		));
+		let payload = OwnedTlv::new(types::MESSAGE, b"exact item".to_vec())
+			.unwrap()
+			.encode();
+		let identity = SignedItemIdentity {
+			type_code: types::MESSAGE,
+			origin: Identity {
+				address: "fidonet#1/2".parse().unwrap(),
+				public_key: PublicKey::from_bytes([9; 32]),
+			},
+			signature: Signature::from_bytes([10; 64]),
+		};
+		let inbound = || NewInbound {
+			application: "tosser",
+			local_identity: "fidonet#1/1",
+			peer: "fidonet#1/2",
+			peer_key: PublicKey::from_bytes([9; 32]),
+			received: 10,
+			authentication: ItemAuthentication::Valid,
+			payload: &payload,
+		};
+		let stored_id = {
+			let store = InboundStore::create(&path).unwrap();
+			let AcceptResult::Stored(record) = store.accept(inbound(), Some(&identity)).unwrap()
+			else {
+				panic!("first acceptance must store the item")
+			};
+			record.inbound_id.clone()
+		};
+		let store = InboundStore::create(&path).unwrap();
+		assert_eq!(
+			store.accept(inbound(), Some(&identity)).unwrap(),
+			AcceptResult::Duplicate {
+				inbound_id: stored_id.clone()
+			}
+		);
+		assert_eq!(
+			store.query(&stored_id).unwrap().payload_hash,
+			hash_inbound_item(&payload).unwrap()
 		);
 		drop(store);
 		std::fs::remove_file(path).unwrap();

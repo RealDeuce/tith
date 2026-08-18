@@ -52,10 +52,12 @@ addresses, signed bundles, exchange behavior, and the distribution nodelist.
 The Rust workspace implements those foundations plus configuration, routing,
 durable storage, and local IPC building blocks.
 
-The reference daemon is not yet a production mailer. Native network receipt,
-outbound delivery, and the complete application-facing workflow remain under
-construction. The C implementation under [`poc/`](poc/) is a frozen historical
-proof of concept; new implementation work belongs in Rust.
+The reference daemon is not yet a production mailer. It has an initial native
+network listener with durable local Message and standalone File acceptance,
+duplicate handling, and authenticated replies. Outbound delivery and Poll and
+FileRequest handling remain under construction. The C implementation under
+[`poc/`](poc/) is a frozen historical proof of concept; new implementation work
+belongs in Rust.
 
 ## Rust workspace
 
@@ -122,6 +124,31 @@ cargo run -p tithd -- serve-tcp 127.0.0.1:24556 \
     /var/db/tith/state.redb /var/db/tith/exports tosser \
     SERVER-PUBLIC-KEY /secure/path/server-ipc.secret CLIENT-PUBLIC-KEY
 ```
+
+To exercise native TTS-0006 receipt, generate a dedicated node signing key and
+place its printed public key in the applicable nodelist IIH entry or unlisted
+Peer configuration:
+
+```sh
+cargo run -p tithd -- generate-node-key /secure/path/node.secret
+```
+
+The initial mail listener loads the normal four-file configuration set and one
+TTS-5000 domain nodelist. `LOCAL-IDENTITY` is a listed canonical address or an
+unlisted Peer reference such as `@point`:
+
+```sh
+cargo run -p tithd -- serve-mail 0.0.0.0:24555 \
+    /var/db/tith/state.redb tosser /usr/local/etc/tith \
+    fidonet /var/db/tith/nodelist.txt fidonet#1:123/45 \
+    /secure/path/node.secret
+```
+
+Local Messages and standalone Files are durably stored before `Accepted` is
+sent, and signed-item duplicates receive `Accepted` without creating another
+inbound item. Unsupported relay, Poll, and FileRequest work receives a retryable
+rejection. EchoMail and area Files are accepted only from configured
+`Receive-From` peers.
 
 The original C proof of concept is retained for historical reference and can
 still be built with:

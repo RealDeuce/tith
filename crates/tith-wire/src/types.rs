@@ -45,7 +45,7 @@ pub const MAGIC_WORD: u64 = 120;
 pub const REPLACES: u64 = 121;
 
 #[must_use]
-pub(crate) const fn is_defined(type_code: u64) -> bool {
+pub const fn is_defined(type_code: u64) -> bool {
 	matches!(type_code, 0..=8 | 64..=71 | 96..=99 | 101..=121)
 }
 

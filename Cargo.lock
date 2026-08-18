@@ -369,9 +369,12 @@ dependencies = [
  "nix",
  "tith-config",
  "tith-crypto",
+ "tith-exchange",
  "tith-ipc",
  "tith-ipc-tcp",
+ "tith-nodelist",
  "tith-store",
+ "tith-wire",
 ]
 
 [[package]]
