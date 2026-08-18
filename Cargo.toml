@@ -24,6 +24,17 @@ repository = "https://github.com/RealDeuce/tith"
 base64 = "=0.22.1"
 libhydrogen-sys = "=0.9.4"
 redb = "=4.2.0"
+windows-sys = { version = "=0.61.2", features = [
+	"Win32_Foundation",
+	"Win32_Security",
+	"Win32_Security_Authorization",
+	"Win32_Storage_FileSystem",
+	"Win32_System_IO",
+	"Win32_System_Pipes",
+	"Win32_System_Memory",
+	"Win32_System_RemoteDesktop",
+	"Win32_System_Threading",
+] }
 nix = { version = "=0.31.3", features = ["socket", "user"] }
 tith-crypto = { path = "crates/tith-crypto" }
 tith-config = { path = "crates/tith-config" }
@@ -32,7 +43,7 @@ tith-nodelist = { path = "crates/tith-nodelist" }
 tith-wire = { path = "crates/tith-wire" }
 
 [workspace.lints.rust]
-unsafe_code = "forbid"
+unsafe_code = "deny"
 
 [workspace.lints.clippy]
 all = { level = "warn", priority = -1 }

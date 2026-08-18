@@ -165,6 +165,21 @@ cargo run -p tithd -- serve-tcp-mailer 127.0.0.1:24556 \
     fidonet#1:123/45 /secure/path/node.secret
 ```
 
+On Windows, the named-pipe service uses the TSP-0010 binary preambles and
+authenticates the client through its impersonation token, process creation
+time, logon identity, and session before reading an IPC document:
+
+```powershell
+cargo run -p tithd -- serve-named-pipe \\.\pipe\tith `
+    C:\ProgramData\TITH\state.redb C:\ProgramData\TITH\exports tosser
+```
+
+`serve-named-pipe-mailer` adds the same routing and signing arguments as the
+other mailer forms. Native handle tables are rejected and their optional
+capabilities are not advertised; path presentation and path Sources work over
+the pipe. The Windows CI job runs the named-pipe transaction test in addition
+to the binding-independent workspace tests.
+
 To exercise native TTS-0006 receipt, generate a dedicated node signing key and
 place its printed public key in the applicable nodelist IIH entry or unlisted
 Peer configuration:

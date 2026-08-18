@@ -19,5 +19,8 @@ tith-router = { path = "../tith-router" }
 tith-store = { path = "../tith-store" }
 tith-wire.workspace = true
 
+[target.'cfg(windows)'.dependencies]
+windows-sys.workspace = true
+
 [lints]
 workspace = true

@@ -1,4 +1,4 @@
-#![forbid(unsafe_code)]
+#![deny(unsafe_code)]
 
 mod filesystem;
 mod ipc;
@@ -9,6 +9,9 @@ mod submission;
 mod tcp;
 #[cfg(unix)]
 mod unix;
+#[cfg(windows)]
+#[allow(unsafe_code)]
+mod windows;
 
 use std::error::Error;
 use std::fs;
@@ -22,15 +25,13 @@ use base64::Engine as _;
 #[cfg(unix)]
 use base64::engine::general_purpose::STANDARD_NO_PAD;
 use tith_config::ConfigurationSet;
-#[cfg(unix)]
 use tith_config::IdentityRef;
 #[cfg(unix)]
 use tith_crypto::{KX_PUBLIC_KEY_BYTES, KxKeyPair, KxPublicKey, SigningKeyPair};
-#[cfg(unix)]
+#[cfg(windows)]
+use tith_crypto::{SECRET_KEY_BYTES, SecretKey};
 use tith_nodelist::Nodelist;
-#[cfg(unix)]
 use tith_wire::address::Address;
-#[cfg(unix)]
 use tith_wire::bundle::{Identity, KeyResolver};
 
 fn main() {
@@ -84,6 +85,39 @@ fn run() -> Result<(), Box<dyn Error>> {
 			let application = arguments.next().ok_or(usage)?;
 			if arguments.next().is_some() { return Err(usage.into()); }
 			filesystem::serve(Path::new(&root), Path::new(&database), Path::new(&exports), application, None)
+		}
+		#[cfg(windows)]
+		Some("serve-named-pipe") => {
+			let usage = "usage: tithd serve-named-pipe PIPE-NAME DATABASE EXPORT-DIRECTORY APPLICATION";
+			let pipe = arguments.next().ok_or(usage)?;
+			let database = arguments.next().ok_or(usage)?;
+			let exports = arguments.next().ok_or(usage)?;
+			let application = arguments.next().ok_or(usage)?;
+			if arguments.next().is_some() { return Err(usage.into()); }
+			windows::serve(&pipe, Path::new(&database), Path::new(&exports), application, None)
+		}
+		#[cfg(windows)]
+		Some("serve-named-pipe-mailer") => {
+			let usage = "usage: tithd serve-named-pipe-mailer PIPE-NAME DATABASE EXPORT-DIRECTORY APPLICATION CONFIG-DIRECTORY NODELIST-DOMAIN NODELIST-FILE LOCAL-IDENTITY NODE-SECRET-FILE";
+			let pipe = arguments.next().ok_or(usage)?;
+			let database = arguments.next().ok_or(usage)?;
+			let exports = arguments.next().ok_or(usage)?;
+			let application = arguments.next().ok_or(usage)?;
+			let config_directory = arguments.next().ok_or(usage)?;
+			let nodelist_domain = arguments.next().ok_or(usage)?;
+			let nodelist_file = arguments.next().ok_or(usage)?;
+			let local_name = arguments.next().ok_or(usage)?;
+			let secret_file = arguments.next().ok_or(usage)?;
+			if arguments.next().is_some() { return Err(usage.into()); }
+			let configuration = Arc::new(load_config(Path::new(&config_directory))?);
+			let nodelist = Arc::new(Nodelist::parse(&nodelist_domain, &fs::read_to_string(nodelist_file)?)?);
+			let (local_ref, local) = resolve_local(&local_name, &configuration, &nodelist)?;
+			let secret: [u8; SECRET_KEY_BYTES] = fs::read(secret_file)?.try_into().map_err(|_| "node secret key file has the wrong length")?;
+			let submission = Arc::new(submission::SubmissionEngine::new(
+				Arc::clone(&configuration), Arc::clone(&nodelist),
+				[(local_name, submission::LocalSigner { reference: local_ref, identity: local, secret: Arc::new(SecretKey::from_bytes(secret)) })],
+			));
+			windows::serve(&pipe, Path::new(&database), Path::new(&exports), application, Some(submission))
 		}
 		#[cfg(unix)]
 		Some("serve-files-mailer") => {
@@ -256,7 +290,6 @@ fn run() -> Result<(), Box<dyn Error>> {
 	}
 }
 
-#[cfg(unix)]
 fn resolve_local(
 	value: &str,
 	configuration: &ConfigurationSet,
