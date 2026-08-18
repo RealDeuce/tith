@@ -122,6 +122,20 @@ Submission ingests path Sources into immutable Job contents before returning
 `New`. The current service deliberately omits the optional Move, Delete,
 Truncate, and native-handle features from `Capabilities`.
 
+For programs which use atomic filesystem rendezvous instead of sockets, one
+configured principal can be served from an endpoint root containing
+`requests`, `claimed`, `results`, and `acknowledgements`:
+
+```sh
+cargo run -p tithd -- serve-files /var/run/tith-files \
+    /var/db/tith/state.redb /var/db/tith/exports tosser
+```
+
+Use `serve-files-mailer` with the same five trailing routing arguments shown
+for `serve-unix-mailer` to enable the complete mailer operation set. Results
+remain in `results/<token>.rsp` until the client durably publishes the empty
+`acknowledgements/<token>.ack` file required by TSP-0008.
+
 For authenticated loopback TCP, generate dedicated server and client IPC keys
 and retain each printed public key in trusted configuration:
 
