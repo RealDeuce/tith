@@ -2,6 +2,7 @@
 
 #![deny(unsafe_code)]
 
+pub mod cli;
 mod filesystem;
 #[cfg(unix)]
 mod unix;

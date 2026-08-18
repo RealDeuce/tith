@@ -1,9 +1,11 @@
 *.o
 *.d
 tith.cfg
-tith
-tith-bundle
-nodelist
+# Anchored to the proof-of-concept build outputs. Unanchored, "tith" and
+# "nodelist" also match crate directories such as crates/tith.
+/poc/tith
+/poc/tith-bundle
+/poc/nodelist
 TITH-*
 _site/
 __pycache__/

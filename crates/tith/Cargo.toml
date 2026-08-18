@@ -1,0 +1,16 @@
+[package]
+name = "tith"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+tith-nodelist.workspace = true
+tith-nodelist-legacy = { path = "../tith-nodelist-legacy" }
+tith-submit = { path = "../tith-submit" }
+
+[lints]
+workspace = true

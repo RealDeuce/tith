@@ -1,6 +1,7 @@
 [workspace]
 resolver = "3"
 members = [
+	"crates/tith",
 	"crates/tith-crypto",
 	"crates/tith-config",
 	"crates/tith-exchange",
@@ -8,6 +9,7 @@ members = [
 	"crates/tith-submit",
 	"crates/tith-ipc-tcp",
 	"crates/tith-nodelist",
+	"crates/tith-nodelist-legacy",
 	"crates/tith-router",
 	"crates/tith-store",
 	"crates/tith-wire",

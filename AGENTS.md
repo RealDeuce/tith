@@ -184,7 +184,15 @@ lengths and outstanding-response accounting cannot resolve.
 - `crates/tith-ipc` owns canonical local IPC text; binding code carries those
   bytes without inventing another grammar.
 - `crates/tith-submit` owns the command-line IPC client, the reusable client
-  bindings, and the binding-independent conformance check.
+  bindings, and the binding-independent conformance check. Its CLI is the
+  `cli` module rather than a binary; `tith` reaches it.
+- `crates/tith-nodelist-legacy` converts an FTS-5000.005 nodelist to TTS-5000.
+  It is a legacy conversion boundary and must not be folded into
+  `tith-nodelist`, and it must not depend on it.
+- `crates/tith` is the client multiplexer binary. It carries no protocol logic
+  and only dispatches subcommands. `tith-submit` is installed as a link to it,
+  so the file stem of `argv[0]` may select the submit client directly; keep
+  dispatch an exact match with no abbreviations or aliases.
 - `crates/tithd` is the blocking reference service and contains host bindings.
   Its native mail listener accepts only operations whose wire grammar and
   durable behavior are implemented; unsupported work receives an explicit

@@ -69,6 +69,7 @@ The implementation is divided by responsibility rather than by document:
 | `tith-crypto` | Libhydrogen keys, signatures, hashes, and encrypted transport primitives; the only crate permitted to use `unsafe` |
 | `tith-wire` | Canonical integers, addresses, TLVs, Bundles, and payload items |
 | `tith-nodelist` | TTS-5000 nodelist parsing, endpoints, and public-key lookup |
+| `tith-nodelist-legacy` | FTS-5000.005 to TTS-5000 nodelist conversion |
 | `tith-exchange` | Blocking TTS-0006 exchange state and response tracking |
 | `tith-config` | Canonical reference-mailer configuration parsing |
 | `tith-router` | Deterministic route selection and commitment |
@@ -76,6 +77,7 @@ The implementation is divided by responsibility rather than by document:
 | `tith-ipc` | Canonical local IPC request and result documents |
 | `tith-ipc-tcp` | TSP-0009 authenticated key exchange and encrypted IPC records |
 | `tith-submit` | TSP-0006 command-line client and reusable clients for every IPC binding |
+| `tith` | The `tith` client multiplexer binary |
 | `tithd` | Reference service and host bindings |
 
 Rust 1.97.1 is pinned by [`rust-toolchain.toml`](rust-toolchain.toml). To build
@@ -185,17 +187,37 @@ capabilities are not advertised; path presentation and path Sources work over
 the pipe. The Windows CI job runs the named-pipe transaction test in addition
 to the binding-independent workspace tests.
 
-## Using `tith-submit`
+## The `tith` client binary
 
-`tith-submit` reads an exact canonical `Submit` or `Submit-Items` document,
+Client tools share one binary. Rust links its internal crates statically, so
+each separate executable would re-embed the runtime and the shared protocol
+crates; multiplexing keeps a single copy.
+
+```sh
+tith submit ...
+tith nodelist convert ...
+```
+
+Install `tith-submit` as a link to `tith`. The file stem of `argv[0]` selects
+the submit client directly, so `tith-submit submit request.ipc` and
+`tith submit request.ipc` reach identical code, and the client named by
+TSP-0006 section 9 keeps working unchanged:
+
+```sh
+ln -s tith /usr/local/bin/tith-submit
+```
+
+## Using `tith submit`
+
+`tith submit` reads an exact canonical `Submit` or `Submit-Items` document,
 sends one transaction, and writes only the complete IPC result to standard
 output. It also constructs the standard query, lookup, control, and
 capabilities requests. Select the configured carrier before the operation:
 
 ```sh
-cargo run -p tith-submit -- --unix /var/run/tith.sock capabilities
-cargo run -p tith-submit -- --files /var/run/tith-files query-job JOB-ID
-cargo run -p tith-submit -- --tcp 127.0.0.1:24556 \
+cargo run -p tith -- submit --unix /var/run/tith.sock capabilities
+cargo run -p tith -- submit --files /var/run/tith-files query-job JOB-ID
+cargo run -p tith -- submit --tcp 127.0.0.1:24556 \
     CLIENT-PUBLIC-KEY /secure/path/client-ipc.secret SERVER-PUBLIC-KEY \
     submit request.ipc
 ```
@@ -205,7 +227,7 @@ the client verifies the connected server process token before sending its
 preamble or request:
 
 ```powershell
-cargo run -p tith-submit -- --named-pipe \\.\pipe\tith S-1-5-21-... `
+cargo run -p tith -- submit --named-pipe \\.\pipe\tith S-1-5-21-... `
     submit-items request.ipc
 ```
 
@@ -220,6 +242,29 @@ The `tith-submit` library exposes the same binding clients plus one shared
 `check_capabilities` conformance check. The daemon tests run that identical
 check end-to-end through atomic files, Unix sockets, authenticated TCP, and,
 in Windows CI, named pipes.
+
+## Using `tith nodelist convert`
+
+`tith nodelist convert` reads an FTS-5000.005 nodelist on standard input and
+writes the TTS-5000 form on standard output. It substitutes spaces for
+underscores in the name, location, and sysop fields, replaces `-Unpublished-`
+with the empty phone number, drops the DCE speed field, and sorts each flag
+into the TTS-5000 field that section 5.2 assigns it. Diagnostics go to
+standard error.
+
+```sh
+cargo run -p tith -- nodelist convert --verify fidonet \
+    < fidonet.230 > fidonet-nodelist.230
+```
+
+`--verify DOMAIN` parses the generated output back through `tith-nodelist`
+before writing it, so the converter demonstrates that its result is a nodelist
+the native parser accepts. Optional trailing arguments name override files,
+each a `zone:net/node` line followed by `NN`, `LO`, `SN`, or `FL` directives
+that replace the node name, location, or sysop name, or append flags.
+
+The input must be the 7-bit ASCII that FTS-5000.005 specifies; a byte outside
+that range is refused with its line number rather than decoded by guess.
 
 To exercise native TTS-0006 receipt, generate a dedicated node signing key and
 place its printed public key in the applicable nodelist IIH entry or unlisted

@@ -5,17 +5,17 @@ use std::io::{self, Read, Write};
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 
+#[cfg(windows)]
+use crate::NamedPipeBinding;
+#[cfg(unix)]
+use crate::UnixBinding;
+use crate::{Binding, ConfiguredBinding, FilesystemBinding, TcpBinding, validate};
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD_NO_PAD;
 use tith_crypto::{KX_PUBLIC_KEY_BYTES, KX_SECRET_KEY_BYTES, KxKeyPair, KxPublicKey, KxSecretKey};
 use tith_ipc::{Document, EnvelopeKind, Field, SubmissionRequest, SubmitOperation, quote};
-#[cfg(windows)]
-use tith_submit::NamedPipeBinding;
-#[cfg(unix)]
-use tith_submit::UnixBinding;
-use tith_submit::{Binding, ConfiguredBinding, FilesystemBinding, TcpBinding, validate};
 
-const USAGE: &str = "usage: tith-submit (--files ROOT | --tcp ADDRESS CLIENT-PUBLIC CLIENT-SECRET-FILE SERVER-PUBLIC | --unix SOCKET | --named-pipe PIPE SERVICE-SID) (submit FILE|- | submit-items FILE|- | query JOB-ID | query-job JOB-ID | lookup APPLICATION KEY... | cancel JOB-ID | retry JOB-ID | reroute JOB-ID route|active NEXT-HOP|passive NEXT-HOP | capabilities)";
+pub const USAGE: &str = "usage: tith-submit (--files ROOT | --tcp ADDRESS CLIENT-PUBLIC CLIENT-SECRET-FILE SERVER-PUBLIC | --unix SOCKET | --named-pipe PIPE SERVICE-SID) (submit FILE|- | submit-items FILE|- | query JOB-ID | query-job JOB-ID | lookup APPLICATION KEY... | cancel JOB-ID | retry JOB-ID | reroute JOB-ID route|active NEXT-HOP|passive NEXT-HOP | capabilities)";
 
 #[derive(Clone, Copy)]
 struct SubmissionCommand {
@@ -23,18 +23,9 @@ struct SubmissionCommand {
 	job_count: usize,
 }
 
-fn main() {
-	match run() {
-		Ok(status) => std::process::exit(status),
-		Err(error) => {
-			eprintln!("tith-submit: {error}");
-			std::process::exit(2);
-		}
-	}
-}
-
-fn run() -> Result<i32, Box<dyn Error>> {
-	let mut arguments = std::env::args().skip(1);
+/// Runs the TSP-0006 section 9 command-line client over already-skipped
+/// arguments, returning the exit status that section assigns.
+pub fn run(arguments: &mut impl Iterator<Item = String>) -> Result<i32, Box<dyn Error>> {
 	let binding = match arguments.next().as_deref() {
 		Some("--files") => ConfiguredBinding::Filesystem(FilesystemBinding::new(PathBuf::from(
 			arguments.next().ok_or(USAGE)?,
@@ -64,7 +55,7 @@ fn run() -> Result<i32, Box<dyn Error>> {
 		)?),
 		_ => return Err(USAGE.into()),
 	};
-	let (request, submission) = request(&mut arguments)?;
+	let (request, submission) = request(arguments)?;
 	let result = binding.transact(&request)?;
 	let document = validate(&result, EnvelopeKind::Result)?;
 	io::stdout().write_all(&result)?;
