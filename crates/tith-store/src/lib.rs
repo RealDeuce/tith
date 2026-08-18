@@ -4,11 +4,15 @@
 
 use std::fmt;
 use std::path::Path;
+use std::sync::Arc;
 
 use redb::{Database, ReadableDatabase, ReadableTable, TableDefinition};
 use tith_crypto::{CryptoError, PublicKey, TlvHash, hash_inbound_item, random_bytes};
 use tith_wire::item::SignedItemIdentity;
 use tith_wire::{tlv::parse_sequence, types};
+
+mod outbound;
+pub use outbound::*;
 
 const RECORDS: TableDefinition<&str, &[u8]> = TableDefinition::new("inbound-records");
 const PAYLOADS: TableDefinition<&str, &[u8]> = TableDefinition::new("inbound-payloads");
@@ -123,6 +127,7 @@ pub enum StoreError {
 	CorruptRecord,
 	NotFound,
 	Stale(InboundState),
+	JobStale(JobState),
 }
 
 impl fmt::Display for StoreError {
@@ -150,12 +155,12 @@ from_error!(Commit, redb::CommitError);
 from_error!(Crypto, CryptoError);
 
 pub struct InboundStore {
-	database: Database,
+	database: Arc<Database>,
 }
 
 impl InboundStore {
 	pub fn create(path: impl AsRef<Path>) -> Result<Self, StoreError> {
-		let database = Database::create(path)?;
+		let database = Arc::new(Database::create(path)?);
 		let write = database.begin_write()?;
 		{
 			write.open_table(RECORDS)?;
@@ -166,6 +171,10 @@ impl InboundStore {
 		}
 		write.commit()?;
 		Ok(Self { database })
+	}
+
+	pub fn outbound(&self) -> Result<OutboundStore, StoreError> {
+		OutboundStore::new(Arc::clone(&self.database))
 	}
 
 	pub fn insert(&self, value: NewInbound<'_>) -> Result<InboundRecord, StoreError> {
@@ -565,7 +574,7 @@ impl InboundStore {
 	}
 }
 
-fn random_identifier(prefix: char) -> Result<String, StoreError> {
+pub(crate) fn random_identifier(prefix: char) -> Result<String, StoreError> {
 	let mut bytes = [0_u8; 16];
 	random_bytes(&mut bytes)?;
 	let mut output = String::with_capacity(33);
