@@ -113,7 +113,12 @@ fn usable(identity: &Identity, config: &ConfigurationSet, nodelist: &Nodelist) -
 	nodelist
 		.get(&identity.address)
 		.and_then(|entry| entry.tith.as_ref())
-		.is_some_and(|service| service.endpoint.server.is_some())
+		.is_some_and(|service| {
+			service
+				.endpoints
+				.iter()
+				.any(tith_nodelist::Endpoint::is_usable)
+		})
 }
 
 fn named_peer(name: &str, config: &ConfigurationSet, nodelist: &Nodelist) -> Option<Identity> {

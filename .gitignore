@@ -2,6 +2,7 @@
 *.d
 tith.cfg
 tith
+tith-bundle
 nodelist
 TITH-*
 _site/

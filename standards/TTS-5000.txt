@@ -3,7 +3,7 @@ TITH                                              THIS ISN'T THAT HARD
 **********************************************************************
 
 Publication:  TTS‑5000
-Revision:     1
+Revision:     2
 Title:        The Distribution Nodelist
 Author(s):    FTSC Members, Administrator, Honoured Guests and
               Stephen Hurd
@@ -376,14 +376,48 @@ Contents
      restrictions specified in that document.
 
      In addition to the flags specified in FTS‑5001.006, the TITH
-     nodelist
-     supports the IIH Internet Protocol Flag.  This flag is in the
-     form IIH[:<server address>][:<port>]:<PublicKey> where
+     nodelist supports the IIH Internet Protocol Flag.  An IIH flag has
+     exactly one of these four forms:
+
+       IIH:<PublicKey>
+       IIH:<server address>:<PublicKey>
+       IIH::<port>:<PublicKey>
+       IIH:<server address>:<port>:<PublicKey>
+
      <PublicKey> is a 43‑character base 64 encoded public key with the
      trailing equals sign (U+3D) removed, representing the 32‑byte
      public key of the node.  This is the key used to authenticate TITH
-     data whose Origin is that node's address.  If the IIH flag is
-     present, the public key MUST be included.
+     data whose Origin is that node's address.
+
+     <server address> uses the syntax specified for Internet Protocol
+     Flags by FTS‑5001.006: an FQDN, an IPv4 dotted quad, or an IPv6
+     address enclosed in Square Brackets (U+5B and U+5D).  An FQDN
+     consists of labels separated by Full Stop (U+2E), with no empty
+     label or trailing Full Stop.  Each label contains one to 63 ASCII
+     letters, digits, or Hyphen‐Minus (U+2D), and MUST begin and end
+     with a letter or digit.  Its complete length MUST NOT exceed 253
+     characters.  An IPv4 dotted quad MUST contain exactly four
+     decimal octets from 0 through 255.  A bracketed value MUST contain
+     a syntactically valid IPv6 address and its closing bracket MUST be
+     the final character of <server address>.
+
+     When <server address> is omitted, the first Server Address Flag
+     specified by FTS‑5001.006 in this field supplies the address.  The
+     only such flag currently defined is INA.  If there is no such
+     flag, the IIH value still publishes its PublicKey but does not
+     supply a usable server endpoint.
+
+     <port> is a decimal integer from 1 through 65535 with no leading
+     zero.  When it is omitted, it means the registered default TITH
+     service port.  No such port is assigned by this revision, so an
+     IIH value with no explicit port does not currently supply a usable
+     endpoint.  Implementations MUST NOT substitute the default port
+     of another protocol.
+
+     IIH MAY occur more than once.  Each occurrence adds one endpoint,
+     and implementations MUST attempt those endpoints in Field 9 order.
+     Every IIH occurrence on one data line MUST contain the same
+     PublicKey.  A line containing different IIH PublicKeys is invalid.
 
      When a node is first listed following an application from the
      unlisted address defined in TTS‑0004, this PublicKey MUST be
@@ -481,5 +515,9 @@ B. History
 
    Rev.1, 2025‑11‑14: Initial Release. Slightly modified from
    FTS‑5000.005
+
+   Rev.2, 2026‑08‑17: Defined unambiguous IIH endpoint syntax, default
+   address and port behaviour, IPv6 delimiters, and ordered repeated
+   endpoints.
 
 **********************************************************************

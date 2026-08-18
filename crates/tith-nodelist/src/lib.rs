@@ -4,6 +4,7 @@
 
 use std::collections::BTreeMap;
 use std::fmt;
+use std::net::{Ipv4Addr, Ipv6Addr};
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD_NO_PAD;
@@ -26,12 +27,35 @@ pub enum Keyword {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Endpoint {
 	pub server: Option<String>,
-	pub port: Option<u16>,
+	pub port: EndpointPort,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum EndpointPort {
+	RegisteredDefault,
+	Explicit(u16),
+}
+
+pub const REGISTERED_TITH_PORT: Option<u16> = None;
+
+impl Endpoint {
+	#[must_use]
+	pub fn resolved_port(&self) -> Option<u16> {
+		match self.port {
+			EndpointPort::RegisteredDefault => REGISTERED_TITH_PORT,
+			EndpointPort::Explicit(port) => Some(port),
+		}
+	}
+
+	#[must_use]
+	pub fn is_usable(&self) -> bool {
+		self.server.is_some() && self.resolved_port().is_some()
+	}
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TithService {
-	pub endpoint: Endpoint,
+	pub endpoints: Vec<Endpoint>,
 	pub public_key: PublicKey,
 }
 
@@ -144,12 +168,95 @@ fn flags(value: &str) -> Result<Vec<String>, NodelistErrorKind> {
 	}
 }
 
-fn parse_iih(flag: &str) -> Result<TithService, NodelistErrorKind> {
-	let fields: Vec<_> = flag.split(':').collect();
-	if fields.first() != Some(&"IIH") || !(2..=4).contains(&fields.len()) {
-		return Err(NodelistErrorKind::InvalidFlag);
+fn parse_port(value: &str) -> Result<u16, NodelistErrorKind> {
+	let port: u16 = value
+		.parse()
+		.map_err(|_| NodelistErrorKind::InvalidEndpoint)?;
+	if port == 0 || port.to_string() != value {
+		return Err(NodelistErrorKind::InvalidEndpoint);
 	}
-	let key_text = fields.last().expect("length was checked");
+	Ok(port)
+}
+
+fn parse_server(value: &str) -> Result<String, NodelistErrorKind> {
+	if let Some(address) = value
+		.strip_prefix('[')
+		.and_then(|value| value.strip_suffix(']'))
+	{
+		address
+			.parse::<Ipv6Addr>()
+			.map_err(|_| NodelistErrorKind::InvalidEndpoint)?;
+	} else if value.parse::<Ipv4Addr>().is_err() && !valid_dns_name(value) {
+		return Err(NodelistErrorKind::InvalidEndpoint);
+	}
+	Ok(value.to_owned())
+}
+
+fn valid_dns_name(value: &str) -> bool {
+	!value.is_empty()
+		&& value.len() <= 253
+		&& value.split('.').all(|label| {
+			(1..=63).contains(&label.len())
+				&& label
+					.bytes()
+					.all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+				&& label
+					.as_bytes()
+					.first()
+					.is_some_and(u8::is_ascii_alphanumeric)
+				&& label
+					.as_bytes()
+					.last()
+					.is_some_and(u8::is_ascii_alphanumeric)
+		})
+}
+
+fn parse_endpoint(
+	value: &str,
+	default_server: Option<&str>,
+) -> Result<Endpoint, NodelistErrorKind> {
+	let (server, port) = if value.is_empty() {
+		(None, EndpointPort::RegisteredDefault)
+	} else if value.starts_with('[') {
+		let close = value.find(']').ok_or(NodelistErrorKind::InvalidEndpoint)?;
+		let server = parse_server(&value[..=close])?;
+		let suffix = &value[close + 1..];
+		let port = if suffix.is_empty() {
+			EndpointPort::RegisteredDefault
+		} else {
+			EndpointPort::Explicit(parse_port(
+				suffix
+					.strip_prefix(':')
+					.ok_or(NodelistErrorKind::InvalidEndpoint)?,
+			)?)
+		};
+		(Some(server), port)
+	} else if let Some((server, port)) = value.rsplit_once(':') {
+		let server = if server.is_empty() {
+			None
+		} else {
+			Some(parse_server(server)?)
+		};
+		(server, EndpointPort::Explicit(parse_port(port)?))
+	} else {
+		(Some(parse_server(value)?), EndpointPort::RegisteredDefault)
+	};
+	let server = match (server, default_server) {
+		(Some(server), _) => Some(server),
+		(None, Some(server)) => Some(parse_server(server)?),
+		(None, None) => None,
+	};
+	Ok(Endpoint { server, port })
+}
+
+fn parse_iih(
+	flag: &str,
+	default_server: Option<&str>,
+) -> Result<(Endpoint, PublicKey), NodelistErrorKind> {
+	let value = flag
+		.strip_prefix("IIH:")
+		.ok_or(NodelistErrorKind::InvalidFlag)?;
+	let (endpoint, key_text) = value.rsplit_once(':').unwrap_or(("", value));
 	if key_text.len() != 43 || key_text.contains('=') {
 		return Err(NodelistErrorKind::InvalidPublicKey);
 	}
@@ -158,24 +265,10 @@ fn parse_iih(flag: &str) -> Result<TithService, NodelistErrorKind> {
 		.map_err(|_| NodelistErrorKind::InvalidPublicKey)?
 		.try_into()
 		.map_err(|_| NodelistErrorKind::InvalidPublicKey)?;
-	let (server, port) = match fields.as_slice() {
-		[_, _] => (None, None),
-		[_, server, _] if !server.is_empty() => (Some((*server).to_owned()), None),
-		[_, server, port_text, _] if !server.is_empty() => {
-			let port: u16 = port_text
-				.parse()
-				.map_err(|_| NodelistErrorKind::InvalidEndpoint)?;
-			if port == 0 || port.to_string() != *port_text {
-				return Err(NodelistErrorKind::InvalidEndpoint);
-			}
-			(Some((*server).to_owned()), Some(port))
-		}
-		_ => return Err(NodelistErrorKind::InvalidEndpoint),
-	};
-	Ok(TithService {
-		endpoint: Endpoint { server, port },
-		public_key: PublicKey::from_bytes(key),
-	})
+	Ok((
+		parse_endpoint(endpoint, default_server)?,
+		PublicKey::from_bytes(key),
+	))
 }
 
 fn validate_phone(phone: &str) -> bool {
@@ -301,17 +394,29 @@ impl Nodelist {
 			{
 				return Err(fail(line_number, NodelistErrorKind::InvalidFlag));
 			}
-			let mut services = internet_flags
+			let default_server = internet_flags
 				.iter()
-				.filter(|flag| flag.starts_with("IIH:"));
-			let tith = services
-				.next()
-				.map(|flag| parse_iih(flag))
-				.transpose()
+				.find_map(|flag| flag.strip_prefix("INA:"));
+			let services = internet_flags
+				.iter()
+				.filter(|flag| flag.starts_with("IIH:"))
+				.map(|flag| parse_iih(flag, default_server))
+				.collect::<Result<Vec<_>, _>>()
 				.map_err(|kind| fail(line_number, kind))?;
-			if services.next().is_some() {
-				return Err(fail(line_number, NodelistErrorKind::InvalidFlag));
-			}
+			let tith = if let Some((_, public_key)) = services.first() {
+				if services.iter().any(|(_, key)| key != public_key) {
+					return Err(fail(line_number, NodelistErrorKind::InvalidPublicKey));
+				}
+				Some(TithService {
+					endpoints: services
+						.iter()
+						.map(|(endpoint, _)| endpoint.clone())
+						.collect(),
+					public_key: *public_key,
+				})
+			} else {
+				None
+			};
 			let zone_address = Address::new(
 				domain.to_owned(),
 				hierarchy.zone.expect("a valid data line has a Zone"),
@@ -400,7 +505,10 @@ mod tests {
 			entry.branch.hub.as_ref().unwrap().to_string(),
 			"fidonet#1:100/20"
 		);
-		assert_eq!(entry.tith.as_ref().unwrap().endpoint.port, Some(24_554));
+		assert_eq!(
+			entry.tith.as_ref().unwrap().endpoints[0].port,
+			EndpointPort::Explicit(24_554)
+		);
 		assert_eq!(
 			list.public_key(&address),
 			Some(PublicKey::from_bytes([9; 32]))
@@ -421,6 +529,71 @@ mod tests {
 			Nodelist::parse("fidonet", &input),
 			Err(NodelistError {
 				kind: NodelistErrorKind::DuplicateAddress,
+				..
+			})
+		));
+	}
+
+	#[test]
+	fn parses_ordered_iih_endpoints_and_inherits_ina() {
+		let key = STANDARD_NO_PAD.encode([10; 32]);
+		let internet =
+			format!("INA:default.example,IIH::1234:{key},IIH:[2001:db8::1]:5678:{key},IIH:{key}");
+		let input = [line("Zone", 1, ""), line("", 2, &internet)].concat();
+		let list = Nodelist::parse("fidonet", &input).unwrap();
+		let address: Address = "fidonet#1/2".parse().unwrap();
+		let service = list.get(&address).unwrap().tith.as_ref().unwrap();
+		assert_eq!(
+			service.endpoints,
+			vec![
+				Endpoint {
+					server: Some("default.example".to_owned()),
+					port: EndpointPort::Explicit(1234),
+				},
+				Endpoint {
+					server: Some("[2001:db8::1]".to_owned()),
+					port: EndpointPort::Explicit(5678),
+				},
+				Endpoint {
+					server: Some("default.example".to_owned()),
+					port: EndpointPort::RegisteredDefault,
+				},
+			]
+		);
+		assert!(service.endpoints[0].is_usable());
+		assert!(!service.endpoints[2].is_usable());
+	}
+
+	#[test]
+	fn rejects_unbracketed_ipv6_and_different_iih_keys() {
+		let first_key = STANDARD_NO_PAD.encode([11; 32]);
+		let second_key = STANDARD_NO_PAD.encode([12; 32]);
+		let invalid_ipv6 = [
+			line("Zone", 1, ""),
+			line("", 2, &format!("IIH:2001:db8::1:1234:{first_key}")),
+		]
+		.concat();
+		assert!(matches!(
+			Nodelist::parse("fidonet", &invalid_ipv6),
+			Err(NodelistError {
+				kind: NodelistErrorKind::InvalidEndpoint,
+				..
+			})
+		));
+
+		let different_keys = [
+			line("Zone", 1, ""),
+			line(
+				"",
+				2,
+				&format!("IIH:a.example:1234:{first_key},IIH:b.example:1234:{second_key}"),
+			),
+		]
+		.concat();
+		assert!(matches!(
+			Nodelist::parse("fidonet", &different_keys),
+			Err(NodelistError {
+				kind: NodelistErrorKind::InvalidPublicKey,
 				..
 			})
 		));
