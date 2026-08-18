@@ -189,13 +189,20 @@ lengths and outstanding-response accounting cannot resolve.
 - `crates/tith-nodelist-legacy` converts an FTS-5000.005 nodelist to TTS-5000.
   It is a legacy conversion boundary and must not be folded into
   `tith-nodelist`, and it must not depend on it.
-- `crates/tith-message-legacy` reads the TSP-0003 section 4 stored `.msg` and
-  resolves attachment disposition. It is likewise a legacy boundary and must
+- `crates/tith-message-legacy` reads the TSP-0003 section 4 stored `.msg`, the
+  section 5 packed message, and the section 6 Type-2+ packet, and resolves
+  attachment disposition. It is likewise a legacy boundary and must
   not depend on the native protocol layer. The two post-send conventions,
   FTS-5005.003 Subject FileSpec prefixes and FSC-0053.002 FLAGS `KFS`/`TFS`,
   differ in granularity as well as syntax and are never inferred from the
   bytes; the caller states which applies. `K/S` is the message, not its
   attachments.
+- `crates/tith-bso` owns the FTS-5005.003 Binkley Style Outbound layout, flow
+  file naming and flavour order, reference files, and the `.bsy` and `.hld`
+  control files. It is a legacy boundary like the two crates above. It follows
+  FTS-5005 as written rather than any one implementation's documented
+  limitations: derived names are matched in either case, and the default zone
+  is searched under both the bare root and its zone-suffixed form.
 - `crates/tith` is the client multiplexer binary. It carries no protocol logic
   and only dispatches subcommands. `tith-submit` is installed as a link to it,
   so the file stem of `argv[0]` may select the submit client directly; keep
@@ -206,6 +213,12 @@ lengths and outstanding-response accounting cannot resolve.
   existence before creating. It must not retire a legacy object before a
   Committed result, and treats a duplicate submission as preferable to a lost
   or corrupted message.
+  `tith bso scan` holds the same invariant through the `.bsy` lock, which is
+  taken with an exclusive create and released on every exit path. It reads an
+  outbound and submits from it; it never lays one down. It deletes a packet and
+  rewrites a reference file only after Committed, and never deletes or
+  truncates a referenced payload — that directive is carried to the service as
+  a `Source-Disposition` and performed there, after delivery.
 - `crates/tithd` is the blocking reference service and contains host bindings.
   Its native mail listener accepts only operations whose wire grammar and
   durable behavior are implemented; unsupported work receives an explicit

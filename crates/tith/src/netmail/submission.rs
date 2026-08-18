@@ -208,6 +208,136 @@ pub fn build(message: &StoredMessage, context: &Context<'_>) -> Result<Submissio
 	})
 }
 
+/// Converts one packed message from a BSO packet into a Submit request.
+///
+/// The packet supplies the message and the reference file supplies the
+/// attachments, so unlike the stored-message path the caller has already
+/// resolved which files this message owns.
+pub fn build_packed(
+	message: &tith_message_legacy::PackedMessage,
+	attachments: &[tith_message_legacy::Attachment],
+	context: &Context<'_>,
+) -> Result<Submission, BuildError> {
+	if let Some(msgid) = message.control("MSGID")
+		&& let Some((origin, _)) = msgid.value.rsplit_once(' ')
+		&& origin != context.origin
+		&& Some(origin) != context.legacy_origin.as_deref()
+	{
+		return Err(BuildError::NotLocalOrigin {
+			origin: origin.to_owned(),
+		});
+	}
+
+	let (idempotency_key, key_is_generated) = match message.idempotency_key() {
+		Some(key) => (key, false),
+		None => (context.fallback_key.to_owned(), true),
+	};
+
+	// TSP-0006 gives EchoMail its own Job kind, keyed on the Area that
+	// TSP-0003 section 7 read from the AREA line.
+	let echo = message.area.as_deref();
+	let mut lines = vec![
+		line(vec![unquoted("Submit")]),
+		match echo {
+			Some(_) => line(vec![unquoted("Job"), unquoted("EchoMail")]),
+			None => line(vec![unquoted("Job")]),
+		},
+		line(vec![unquoted("Application"), quoted(context.application)]),
+		line(vec![unquoted("Idempotency-Key"), quoted(&idempotency_key)]),
+		line(vec![unquoted("Origin"), quoted(context.origin)]),
+	];
+	if let Some(area) = echo {
+		lines.push(line(vec![unquoted("Area"), quoted(area)]));
+	} else {
+		let destination = message
+			.control("MSGTO")
+			.map_or_else(|| message.destination.to_string(), |c| c.value.clone());
+		lines.push(line(vec![unquoted("Destination"), quoted(&destination)]));
+	}
+	lines.push(line(vec![unquoted("To-User"), quoted(&message.to_user)]));
+	lines.push(line(vec![
+		unquoted("From-User"),
+		quoted(&message.from_user),
+	]));
+
+	// With the attach attribute set the Subject is a FileList, not a subject.
+	if !message.has_file_attached() && !message.subject.is_empty() {
+		lines.push(line(vec![unquoted("Subject"), quoted(&message.subject)]));
+	}
+	if !message.text.is_empty() {
+		lines.push(line(vec![unquoted("Message-Text"), quoted(&message.text)]));
+	}
+	lines.push(line(vec![
+		unquoted("Legacy-Attributes"),
+		unquoted(&message.attributes.to_string()),
+	]));
+	if let Some(msgid) = message.control("MSGID") {
+		lines.push(line(vec![unquoted("Message-ID"), quoted(&msgid.value)]));
+	}
+	for control in &message.controls {
+		if matches!(
+			control.name.to_ascii_uppercase().as_str(),
+			"MSGID" | "MSGTO" | "REPLY" | "CHRS" | "CHARSET"
+		) {
+			continue;
+		}
+		lines.push(line(vec![
+			unquoted("Additional-Kludge-Line"),
+			quoted(&control.raw),
+		]));
+	}
+	push_attachments(&mut lines, attachments, context)?;
+	lines.push(line(vec![unquoted("End")]));
+	Ok(Submission {
+		request: Document {
+			kind: EnvelopeKind::Request,
+			lines,
+		}
+		.encode(),
+		idempotency_key,
+		key_is_generated,
+	})
+}
+
+/// Emits one Attachment block per file, gating each disposition on the
+/// feature TSP-0006 requires for it.
+fn push_attachments(
+	lines: &mut Vec<Line>,
+	attachments: &[tith_message_legacy::Attachment],
+	context: &Context<'_>,
+) -> Result<(), BuildError> {
+	for attachment in attachments {
+		let path = context.directory.join(&attachment.name);
+		if !path.is_file() {
+			return Err(BuildError::MissingAttachment {
+				file: attachment.name.clone(),
+			});
+		}
+		if let Some(feature) = attachment.disposition.required_feature()
+			&& !context.features.contains(feature)
+		{
+			return Err(BuildError::MissingFeature {
+				feature,
+				file: attachment.name.clone(),
+			});
+		}
+		lines.push(line(vec![unquoted("Attachment")]));
+		lines.push(line(vec![
+			unquoted("Source-Path"),
+			quoted(&path.to_string_lossy()),
+		]));
+		lines.push(line(vec![unquoted("Ingestion"), unquoted("Copy")]));
+		if attachment.disposition != Disposition::Keep {
+			lines.push(line(vec![
+				unquoted("Source-Disposition"),
+				unquoted(attachment.disposition.ipc_value()),
+			]));
+		}
+		lines.push(line(vec![unquoted("End")]));
+	}
+	Ok(())
+}
+
 #[cfg(test)]
 mod tests {
 	use super::*;

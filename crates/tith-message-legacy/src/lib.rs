@@ -9,10 +9,14 @@
 #![forbid(unsafe_code)]
 
 mod attach;
+mod packet;
 
 use std::fmt;
 
 pub use attach::{AttachError, AttachStyle, Attachment, Disposition, attachments, file_list};
+pub use packet::{
+	Endpoint, PACKED_HEADER_BYTES, PACKET_HEADER_BYTES, PackedMessage, Packet, PacketError,
+};
 
 /// Total size of the TSP-0003 section 4 stored header.
 pub const HEADER_BYTES: usize = 190;
@@ -88,7 +92,7 @@ fn field(bytes: &[u8], offset: usize, width: usize) -> Result<String, MessageErr
 /// ASCII and valid UTF-8 are accepted. TSP-0003 section 3 also defines CP437,
 /// LATIN-1, and other conversions which this crate does not implement yet, so
 /// anything else is refused rather than decoded by guess.
-fn text(bytes: &[u8]) -> Result<String, MessageError> {
+pub(crate) fn text(bytes: &[u8]) -> Result<String, MessageError> {
 	std::str::from_utf8(bytes)
 		.map(str::to_owned)
 		.map_err(|_| MessageError::UnsupportedEncoding)
@@ -99,7 +103,7 @@ fn u16_at(bytes: &[u8], offset: usize) -> u16 {
 }
 
 /// Splits leading control paragraphs from the body.
-fn split_controls(text: &str) -> (Vec<Control>, String) {
+pub(crate) fn split_controls(text: &str) -> (Vec<Control>, String) {
 	let mut controls = Vec::new();
 	let mut rest = text;
 	while let Some(after) = rest.strip_prefix('\u{1}') {

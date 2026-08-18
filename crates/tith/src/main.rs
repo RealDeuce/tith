@@ -6,11 +6,12 @@
 //!
 //! TSP-0006 section 9 asks for a client named "tith-submit" invoked as
 //! `tith-submit submit <file>`. Installing `tith-submit` as a link to this
-//! binary satisfies that: the file stem of argv[0] selects the submit client
+//! binary satisfies that: the file stem of `argv[0]` selects the submit client
 //! directly, so both spellings reach the same code.
 
 #![forbid(unsafe_code)]
 
+mod bso;
 mod netmail;
 mod nodelist;
 
@@ -18,7 +19,8 @@ use std::error::Error;
 use std::path::Path;
 use std::process::ExitCode;
 
-const USAGE: &str = "usage: tith (submit ... | nodelist convert ... | netmail scan ...)";
+const USAGE: &str =
+	"usage: tith (submit ... | nodelist convert ... | netmail scan ... | bso scan ...)";
 
 fn main() -> ExitCode {
 	let mut arguments = std::env::args();
@@ -52,6 +54,7 @@ fn run(
 		Some("submit") => ("tith-submit", tith_submit::cli::run(arguments)),
 		Some("nodelist") => ("tith nodelist", nodelist::run(arguments)),
 		Some("netmail") => ("tith netmail", netmail::run(arguments)),
+		Some("bso") => ("tith bso", bso::run(arguments)),
 		_ => ("tith", Err(USAGE.into())),
 	}
 }

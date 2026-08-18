@@ -2,6 +2,7 @@
 resolver = "3"
 members = [
 	"crates/tith",
+	"crates/tith-bso",
 	"crates/tith-crypto",
 	"crates/tith-config",
 	"crates/tith-exchange",

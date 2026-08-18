@@ -70,7 +70,8 @@ The implementation is divided by responsibility rather than by document:
 | `tith-wire` | Canonical integers, addresses, TLVs, Bundles, and payload items |
 | `tith-nodelist` | TTS-5000 nodelist parsing, endpoints, and public-key lookup |
 | `tith-nodelist-legacy` | FTS-5000.005 to TTS-5000 nodelist conversion |
-| `tith-message-legacy` | Legacy stored `.msg` reading and attachment disposition |
+| `tith-message-legacy` | Legacy stored `.msg`, packed messages, and Type-2+ packets |
+| `tith-bso` | FTS-5005 Binkley Style Outbound layout and control files |
 | `tith-exchange` | Blocking TTS-0006 exchange state and response tracking |
 | `tith-config` | Canonical reference-mailer configuration parsing |
 | `tith-router` | Deterministic route selection and commitment |
@@ -198,6 +199,7 @@ crates; multiplexing keeps a single copy.
 tith submit ...
 tith nodelist convert ...
 tith netmail scan ...
+tith bso scan ...
 ```
 
 Install `tith-submit` as a link to `tith`. The file stem of `argv[0]` selects
@@ -346,6 +348,68 @@ still be built with:
 ```sh
 gmake -C poc
 ```
+
+## Using `tith bso scan`
+
+`tith bso scan` reads an FTS-5005 Binkley Style Outbound, unpacks each queued
+packet into native messages, and submits them through TSP-0006 with the files
+their reference file carries.
+
+```sh
+tith bso scan --files /var/run/tith-files --origin fidonet#1:104/36 \
+    --outbound /sbbs/fido/outbound
+```
+
+It searches the outbound root, every `<root>.<zzz>` zone directory, and each
+`*.pnt` subdirectory beneath them, accepting upper and lower case throughout.
+For the default zone both the bare root and its zone-suffixed form are checked,
+as FTS-5005 section 2 recommends. `--domain-root NAME=PATH` gives a domain its
+own root, covering the BinkIT `outboundMap` extension. `--zone` and `--domain`
+state which zone the bare root belongs to and which mapped root to prefer.
+
+`--binkley` reads a Subject FileSpec under the FTS-5005 convention, where a
+leading `#`, `^`, `-`, `~`, `!`, or `@` is a directive rather than part of the
+name. Without it the FSC-0053.002 FLAGS reading applies and the whole Subject
+word is the filename. The two are never inferred from the bytes because the
+same Subject means different things under each. Either way the reference
+file's own directive is what becomes the `Source-Disposition`, since that is
+what a mailer would have acted on.
+
+Flow files are processed in the section 3.2 order — Immediate, Continuous,
+Direct, Normal — under the node's `.bsy`, which is created with an exclusive
+create so two scanners cannot both hold it. Hold flavoured files are left alone
+because Hold means wait for the remote to poll; `--include-hold` overrides that.
+A `.hld` naming a future expiry skips the node, and one that has expired is
+deleted per section 5.3.
+
+### What it correlates
+
+A file attach in FTN is already a NetMail, so the packet supplies the message
+and the reference file supplies the payload and its post-send directive. Each
+reference entry becomes one of:
+
+- an `Attachment` on the message whose Subject FileList names it, carrying the
+  reference file's directive as a `Source-Disposition`;
+- reported as a TIC area distribution, when a `.tic` accompanies it;
+- reported and left in place otherwise, an ARCmail bundle being the usual case.
+
+That last row is a submission-side gap, not a protocol one: a peer-addressed
+standalone File is something TTS-0005 carries and TSP-0011 receives, but
+TSP-0006 has no Job that can originate one
+([#17](https://github.com/RealDeuce/tith/issues/17)). `.req` file requests are
+likewise unconvertible today
+([#16](https://github.com/RealDeuce/tith/issues/16)).
+
+### What it changes
+
+Consuming an outbound is not read-only, which is why section 5.1 makes `.bsy`
+required. After a Committed result the packet is deleted and the reference file
+is rewritten without the consumed lines, or deleted when nothing is left.
+Anything short of Committed leaves every byte alone.
+
+The scanner never deletes or truncates the files a reference names. That
+directive travels as a TSP-0006 `Source-Disposition` and the service performs
+it after confirmed delivery, which is the only point at which it is correct.
 
 ## Repository layout
 

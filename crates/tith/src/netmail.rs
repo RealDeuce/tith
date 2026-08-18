@@ -1,6 +1,6 @@
 //! `tith netmail` subcommands.
 
-mod submission;
+pub(crate) mod submission;
 
 use std::collections::BTreeSet;
 use std::error::Error;
@@ -449,7 +449,7 @@ fn submit(
 ///
 /// MSGID carries a legacy address, so recognising our own messages means
 /// comparing in that space rather than against the native text.
-fn legacy_form(origin: &str) -> Option<String> {
+pub(crate) fn legacy_form(origin: &str) -> Option<String> {
 	let address: Address = origin.parse().ok()?;
 	if address.is_unlisted() {
 		return None;
@@ -462,7 +462,7 @@ fn legacy_form(origin: &str) -> Option<String> {
 	})
 }
 
-fn generated_key() -> Result<String, Box<dyn Error>> {
+pub(crate) fn generated_key() -> Result<String, Box<dyn Error>> {
 	let mut bytes = [0_u8; 16];
 	random_bytes(&mut bytes)?;
 	let mut encoded = String::from("generated:");
