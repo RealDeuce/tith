@@ -1,0 +1,41 @@
+[workspace]
+resolver = "3"
+members = [
+	"crates/tith-crypto",
+	"crates/tith-config",
+	"crates/tith-exchange",
+	"crates/tith-ipc",
+	"crates/tith-nodelist",
+	"crates/tith-router",
+	"crates/tith-store",
+	"crates/tith-wire",
+	"crates/tithd",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.97"
+license = "ISC"
+repository = "https://github.com/RealDeuce/tith"
+
+[workspace.dependencies]
+base64 = "=0.22.1"
+libhydrogen-sys = "=0.9.4"
+redb = "=4.2.0"
+nix = { version = "=0.31.3", features = ["socket", "user"] }
+tith-crypto = { path = "crates/tith-crypto" }
+tith-config = { path = "crates/tith-config" }
+tith-nodelist = { path = "crates/tith-nodelist" }
+tith-wire = { path = "crates/tith-wire" }
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+module_name_repetitions = "allow"
+too_many_lines = "allow"

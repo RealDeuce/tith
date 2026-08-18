@@ -2,14 +2,15 @@
 
 ## Scope
 
-This repository contains the draft TITH standards and a proof-of-concept C11
-implementation under `poc/`.  These instructions apply throughout the
-repository, including `standards/` and the vendored `poc/hydro/` sources.
+This repository contains the TITH standards, a Rust reference implementation
+under `crates/`, and a frozen proof-of-concept C11 implementation under
+`poc/`. These instructions apply throughout the repository, including
+`standards/` and the vendored `poc/hydro/` sources.
 
-The standards describe the intended protocol.  The implementation is useful
-for testing those ideas, but prototype behaviour is not automatically
-normative.  When the two disagree, identify the disagreement instead of
-silently changing one to match the other.
+The standards describe the intended protocol. Neither reference nor prototype
+behaviour is automatically normative. When code and a document disagree,
+identify the disagreement and open a GitHub issue instead of silently changing
+one to match the other.
 
 ## Why TITH Exists
 
@@ -142,6 +143,16 @@ lengths and outstanding-response accounting cannot resolve.
 
 ## Source Map
 
+- `crates/tith-crypto` is the only Rust crate permitted to contain `unsafe`
+  code or call libhydrogen.
+- `crates/tith-wire`, `tith-nodelist`, and `tith-exchange` implement the
+  normative TTS protocol layer.
+- `crates/tith-config` and `tith-router` implement local routing policy.
+- `crates/tith-store` owns durable database layout and transactions. Callers
+  must not depend on its redb table representation.
+- `crates/tith-ipc` owns canonical local IPC text; binding code carries those
+  bytes without inventing another grammar.
+- `crates/tithd` is the blocking reference service and contains host bindings.
 - `poc/tith.c` handles command-line dispatch and key generation.
 - `poc/tith-common.c` owns TLV parsing, construction, signing, validation, and
   process-wide cleanup state.
@@ -159,6 +170,9 @@ lengths and outstanding-response accounting cannot resolve.
   behaviour.
 
 ## C Style and Error Handling
+
+The rules in this section apply to the historical C code only. Do not extend
+the C proof of concept to implement new reference-mailer features.
 
 - All TITH-owned code except the host-supplied transport, logging, and
   filesystem callbacks declared in `poc/tith-interface.h` MUST be strict ISO
@@ -229,6 +243,24 @@ type assignments.
   proposed wire or file syntax still needs deterministic parsing rules.
 
 ## Build and Validation
+
+For Rust changes, run all of:
+
+```sh
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
+```
+
+Rust code uses stable Rust 1.97.1, edition 2024, workspace dependencies, and
+the repository `rustfmt.toml`. Keep public protocol types strongly typed and
+keep platform code at binding boundaries. Do not add another unsafe crate.
+Use streaming APIs for untrusted or potentially large protocol values and
+offer owned convenience APIs only where they do not become a hidden limit.
+
+The reference store uses pure-Rust redb. Do not introduce SQLite or another C
+database dependency. libhydrogen remains isolated in `tith-crypto` until its
+cryptographic compatibility can be replaced deliberately.
 
 Use the strict build for development:
 

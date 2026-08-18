@@ -1,0 +1,17 @@
+[package]
+name = "tithd"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+base64.workspace = true
+nix.workspace = true
+tith-config.workspace = true
+tith-ipc = { path = "../tith-ipc" }
+tith-store = { path = "../tith-store" }
+
+[lints]
+workspace = true

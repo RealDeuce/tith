@@ -1,11 +1,49 @@
-This repository contains the TITH protocol standards and a proof-of-concept
-implementation.  The implementation lives in `poc/` and is not currently
-intended to be consumed as a portable library.
+This repository contains the TITH protocol standards and the Rust reference
+implementation. The original C experiment remains under `poc/` as historical
+proof-of-concept code; new implementation work belongs in the Cargo workspace.
 
 The generated standards archive is published at
 <https://realdeuce.github.io/tith/>.
 
-Build the proof of concept with `gmake -C poc`.
+The reference implementation is split into focused crates rather than one
+crate per standard:
+
+- `tith-crypto`: the only unsafe and libhydrogen-facing crate;
+- `tith-wire`: canonical integers, addresses, TLVs, Bundles, and items;
+- `tith-nodelist`: TTS-5000 parsing and key lookup;
+- `tith-exchange`: blocking TTS-0006 exchange state;
+- `tith-config` and `tith-router`: TSP-0002 policy;
+- `tith-store`: pure-Rust `redb` durable state;
+- `tith-ipc`: canonical TSP-0004 and TSP-0012 documents; and
+- `tithd`: the FreeBSD-first blocking service.
+
+Build and test the workspace with:
+
+```sh
+cargo test --workspace
+cargo clippy --workspace --all-targets -- -D warnings
+```
+
+Validate a four-file TSP-0002 configuration set whose directory contains
+`peers`, `routes`, `areas`, and `schedules`:
+
+```sh
+cargo run -p tithd -- check-config /path/to/config
+```
+
+Run the current Unix-domain TSP-0012 consumption service with path
+presentation:
+
+```sh
+cargo run -p tithd -- serve-unix /var/run/tith.sock \
+    /var/db/tith/state.redb /var/db/tith/exports tosser
+```
+
+The socket authenticates the operating-system peer and currently authorizes
+only the service user. Native network receipt and outbound submission remain
+under construction; the daemon is not yet a production mailer.
+
+Build the frozen proof of concept with `gmake -C poc`.
 
 Goals:
 - Simple to implement

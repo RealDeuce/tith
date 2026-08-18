@@ -1,0 +1,15 @@
+[package]
+name = "tith-config"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+base64.workspace = true
+tith-crypto.workspace = true
+tith-wire.workspace = true
+
+[lints]
+workspace = true
