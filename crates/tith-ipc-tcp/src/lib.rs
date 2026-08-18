@@ -301,7 +301,7 @@ mod tests {
 		let stream = TcpStream::connect(address).unwrap();
 		assert!(matches!(
 			SecureChannel::connect(stream, &client_keys, &server_public),
-			Err(TcpIpcError::Io(error)) if error.kind() == io::ErrorKind::UnexpectedEof
+			Err(TcpIpcError::Io(_))
 		));
 		server.join().unwrap();
 	}

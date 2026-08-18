@@ -1,18 +1,22 @@
 //! TSP-0010 Windows named-pipe service binding.
 
+// The Win32 API is expressed entirely in raw pointers. Keeping ordinary
+// borrows at the call sites makes this audited FFI boundary easier to read.
+#![allow(clippy::borrow_as_ptr)]
+
 use std::error::Error;
 use std::ffi::c_void;
 use std::io;
 use std::mem::{size_of, zeroed};
 use std::path::Path;
-use std::ptr::{null, null_mut};
+use std::ptr::null_mut;
 use std::sync::Arc;
 
 use tith_ipc::{Document, DocumentFramer, EnvelopeKind};
 use tith_wire::integer::{MAX_U64_BYTES, decode_u64, encode_u64};
 use windows_sys::Win32::Foundation::{
-	CloseHandle, ERROR_INSUFFICIENT_BUFFER, ERROR_PIPE_CONNECTED, FILETIME, GENERIC_ALL,
-	GetLastError, HANDLE, INVALID_HANDLE_VALUE, LocalFree,
+	CloseHandle, ERROR_INSUFFICIENT_BUFFER, ERROR_PIPE_CONNECTED, FILETIME, GetLastError, HANDLE,
+	INVALID_HANDLE_VALUE, LocalFree,
 };
 use windows_sys::Win32::Security::Authorization::{
 	ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1,
@@ -32,8 +36,8 @@ use windows_sys::Win32::System::Pipes::{
 };
 use windows_sys::Win32::System::RemoteDesktop::ProcessIdToSessionId;
 use windows_sys::Win32::System::Threading::{
-	GetCurrentProcess, GetCurrentThread, GetProcessTimes, OpenProcess, OpenProcessToken,
-	OpenThreadToken, PROCESS_QUERY_LIMITED_INFORMATION,
+	GetCurrentThread, GetProcessTimes, OpenProcess, OpenProcessToken, OpenThreadToken,
+	PROCESS_QUERY_LIMITED_INFORMATION,
 };
 
 use crate::ipc::{IpcService, Principal};
@@ -68,7 +72,7 @@ pub fn serve(
 	pipe_name: &str,
 	database: &Path,
 	exports: &Path,
-	application: String,
+	application: &str,
 	submission: Option<Arc<SubmissionEngine>>,
 ) -> Result<(), Box<dyn Error>> {
 	if !pipe_name.starts_with(r"\\.\pipe\") {
@@ -80,7 +84,7 @@ pub fn serve(
 	}
 	let name: Vec<u16> = pipe_name.encode_utf16().chain([0]).collect();
 	loop {
-		if let Err(error) = listen_once(&name, &service, &application) {
+		if let Err(error) = listen_once(&name, &service, application) {
 			eprintln!("tithd: named-pipe transaction failed: {error}");
 		}
 	}
@@ -232,8 +236,8 @@ fn authenticated_client(pipe: HANDLE, expected_creation: u64) -> Result<String, 
 	let thread_user = token_buffer(thread_token.0, TokenUser)?;
 	let process_user = token_buffer(process_token.0, TokenUser)?;
 	let thread_sid = unsafe { (*(thread_user.as_ptr().cast::<TOKEN_USER>())).User.Sid };
-	let process_sid = unsafe { (*(process_user.as_ptr().cast::<TOKEN_USER>())).User.Sid };
-	if unsafe { EqualSid(thread_sid, process_sid) } == 0 {
+	let client_process_sid = unsafe { (*(process_user.as_ptr().cast::<TOKEN_USER>())).User.Sid };
+	if unsafe { EqualSid(thread_sid, client_process_sid) } == 0 {
 		return Err("pipe and process token users differ".into());
 	}
 	let thread_stats: TOKEN_STATISTICS = token_value(thread_token.0, TokenStatistics)?;
@@ -349,12 +353,14 @@ fn write_all(pipe: HANDLE, mut input: &[u8]) -> io::Result<()> {
 mod tests {
 	use super::*;
 	use std::fs;
+	use std::ptr::null;
 	use std::time::{SystemTime, UNIX_EPOCH};
+	use windows_sys::Win32::Foundation::GENERIC_ALL;
 	use windows_sys::Win32::Storage::FileSystem::{
 		CreateFileW, OPEN_EXISTING, SECURITY_IMPERSONATION, SECURITY_SQOS_PRESENT,
 	};
 	use windows_sys::Win32::System::Pipes::{GetNamedPipeServerProcessId, WaitNamedPipeW};
-	use windows_sys::Win32::System::Threading::GetCurrentProcessId;
+	use windows_sys::Win32::System::Threading::{GetCurrentProcess, GetCurrentProcessId};
 
 	#[test]
 	fn carries_a_complete_authenticated_transaction() {

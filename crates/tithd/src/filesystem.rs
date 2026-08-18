@@ -1,5 +1,7 @@
 use std::error::Error;
-use std::fs::{self, File, OpenOptions};
+#[cfg(unix)]
+use std::fs::File;
+use std::fs::{self, OpenOptions};
 use std::io::{Read, Write};
 #[cfg(unix)]
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
@@ -205,6 +207,7 @@ fn sync_directory(path: &Path) -> Result<(), Box<dyn Error>> {
 }
 
 #[cfg(not(unix))]
+#[allow(clippy::unnecessary_wraps)]
 fn sync_directory(_: &Path) -> Result<(), Box<dyn Error>> {
 	Ok(())
 }

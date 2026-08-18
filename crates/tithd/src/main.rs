@@ -94,7 +94,7 @@ fn run() -> Result<(), Box<dyn Error>> {
 			let exports = arguments.next().ok_or(usage)?;
 			let application = arguments.next().ok_or(usage)?;
 			if arguments.next().is_some() { return Err(usage.into()); }
-			windows::serve(&pipe, Path::new(&database), Path::new(&exports), application, None)
+			windows::serve(&pipe, Path::new(&database), Path::new(&exports), &application, None)
 		}
 		#[cfg(windows)]
 		Some("serve-named-pipe-mailer") => {
@@ -117,7 +117,7 @@ fn run() -> Result<(), Box<dyn Error>> {
 				Arc::clone(&configuration), Arc::clone(&nodelist),
 				[(local_name, submission::LocalSigner { reference: local_ref, identity: local, secret: Arc::new(SecretKey::from_bytes(secret)) })],
 			));
-			windows::serve(&pipe, Path::new(&database), Path::new(&exports), application, Some(submission))
+			windows::serve(&pipe, Path::new(&database), Path::new(&exports), &application, Some(submission))
 		}
 		#[cfg(unix)]
 		Some("serve-files-mailer") => {
