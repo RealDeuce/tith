@@ -11,14 +11,14 @@
 
 #![forbid(unsafe_code)]
 
+mod netmail;
 mod nodelist;
 
 use std::error::Error;
 use std::path::Path;
 use std::process::ExitCode;
 
-const USAGE: &str =
-	"usage: tith (submit ... | nodelist convert [--verify DOMAIN] [OVERRIDES-FILE...])";
+const USAGE: &str = "usage: tith (submit ... | nodelist convert ... | netmail scan ...)";
 
 fn main() -> ExitCode {
 	let mut arguments = std::env::args();
@@ -51,6 +51,7 @@ fn run(
 	match arguments.next().as_deref() {
 		Some("submit") => ("tith-submit", tith_submit::cli::run(arguments)),
 		Some("nodelist") => ("tith nodelist", nodelist::run(arguments)),
+		Some("netmail") => ("tith netmail", netmail::run(arguments)),
 		_ => ("tith", Err(USAGE.into())),
 	}
 }

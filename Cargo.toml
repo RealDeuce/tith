@@ -8,6 +8,7 @@ members = [
 	"crates/tith-ipc",
 	"crates/tith-submit",
 	"crates/tith-ipc-tcp",
+	"crates/tith-message-legacy",
 	"crates/tith-nodelist",
 	"crates/tith-nodelist-legacy",
 	"crates/tith-router",

@@ -293,9 +293,13 @@ dependencies = [
 name = "tith"
 version = "0.1.0"
 dependencies = [
+ "tith-crypto",
+ "tith-ipc",
+ "tith-message-legacy",
  "tith-nodelist",
  "tith-nodelist-legacy",
  "tith-submit",
+ "tith-wire",
 ]
 
 [[package]]
@@ -334,6 +338,10 @@ dependencies = [
  "tith-ipc",
  "tith-wire",
 ]
+
+[[package]]
+name = "tith-message-legacy"
+version = "0.1.0"
 
 [[package]]
 name = "tith-nodelist"

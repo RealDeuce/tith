@@ -189,10 +189,23 @@ lengths and outstanding-response accounting cannot resolve.
 - `crates/tith-nodelist-legacy` converts an FTS-5000.005 nodelist to TTS-5000.
   It is a legacy conversion boundary and must not be folded into
   `tith-nodelist`, and it must not depend on it.
+- `crates/tith-message-legacy` reads the TSP-0003 section 4 stored `.msg` and
+  resolves attachment disposition. It is likewise a legacy boundary and must
+  not depend on the native protocol layer. The two post-send conventions,
+  FTS-5005.003 Subject FileSpec prefixes and FSC-0053.002 FLAGS `KFS`/`TFS`,
+  differ in granularity as well as syntax and are never inferred from the
+  bytes; the caller states which applies. `K/S` is the message, not its
+  attachments.
 - `crates/tith` is the client multiplexer binary. It carries no protocol logic
   and only dispatches subcommands. `tith-submit` is installed as a link to it,
   so the file stem of `argv[0]` may select the submit client directly; keep
   dispatch an exact match with no abbreviations or aliases.
+  `tith netmail scan` is safe to run concurrently with itself and must stay
+  that way. It claims each message by an atomic rename, restores or publishes
+  through a create that fails when the name is taken, and never checks
+  existence before creating. It must not retire a legacy object before a
+  Committed result, and treats a duplicate submission as preferable to a lost
+  or corrupted message.
 - `crates/tithd` is the blocking reference service and contains host bindings.
   Its native mail listener accepts only operations whose wire grammar and
   durable behavior are implemented; unsupported work receives an explicit

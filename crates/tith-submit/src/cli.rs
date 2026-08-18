@@ -26,15 +26,35 @@ struct SubmissionCommand {
 /// Runs the TSP-0006 section 9 command-line client over already-skipped
 /// arguments, returning the exit status that section assigns.
 pub fn run(arguments: &mut impl Iterator<Item = String>) -> Result<i32, Box<dyn Error>> {
-	let binding = match arguments.next().as_deref() {
+	let binding = binding(arguments, USAGE)?;
+	let (request, submission) = request(arguments)?;
+	let result = binding.transact(&request)?;
+	let document = validate(&result, EnvelopeKind::Result)?;
+	io::stdout().write_all(&result)?;
+	io::stdout().flush()?;
+	let Some(submission) = submission else {
+		return Ok(0);
+	};
+	submission_exit_status(&document, submission).map_err(Into::into)
+}
+
+/// Parses the leading carrier selection shared by every command-line client.
+///
+/// `usage` is the caller's own usage string so a failure names the command the
+/// user actually invoked.
+pub fn binding(
+	arguments: &mut impl Iterator<Item = String>,
+	usage: &'static str,
+) -> Result<ConfiguredBinding, Box<dyn Error>> {
+	Ok(match arguments.next().as_deref() {
 		Some("--files") => ConfiguredBinding::Filesystem(FilesystemBinding::new(PathBuf::from(
-			arguments.next().ok_or(USAGE)?,
+			arguments.next().ok_or(usage)?,
 		))),
 		Some("--tcp") => {
-			let address: SocketAddr = arguments.next().ok_or(USAGE)?.parse()?;
-			let client_public = decode_public(&arguments.next().ok_or(USAGE)?)?;
-			let client_secret = read_secret(Path::new(&arguments.next().ok_or(USAGE)?))?;
-			let server_public = decode_public(&arguments.next().ok_or(USAGE)?)?;
+			let address: SocketAddr = arguments.next().ok_or(usage)?.parse()?;
+			let client_public = decode_public(&arguments.next().ok_or(usage)?)?;
+			let client_secret = read_secret(Path::new(&arguments.next().ok_or(usage)?))?;
+			let server_public = decode_public(&arguments.next().ok_or(usage)?)?;
 			ConfiguredBinding::Tcp(TcpBinding::new(
 				address,
 				KxKeyPair {
@@ -46,24 +66,15 @@ pub fn run(arguments: &mut impl Iterator<Item = String>) -> Result<i32, Box<dyn 
 		}
 		#[cfg(unix)]
 		Some("--unix") => ConfiguredBinding::Unix(UnixBinding::new(PathBuf::from(
-			arguments.next().ok_or(USAGE)?,
+			arguments.next().ok_or(usage)?,
 		))),
 		#[cfg(windows)]
 		Some("--named-pipe") => ConfiguredBinding::NamedPipe(NamedPipeBinding::new(
-			&arguments.next().ok_or(USAGE)?,
-			&arguments.next().ok_or(USAGE)?,
+			&arguments.next().ok_or(usage)?,
+			&arguments.next().ok_or(usage)?,
 		)?),
-		_ => return Err(USAGE.into()),
-	};
-	let (request, submission) = request(arguments)?;
-	let result = binding.transact(&request)?;
-	let document = validate(&result, EnvelopeKind::Result)?;
-	io::stdout().write_all(&result)?;
-	io::stdout().flush()?;
-	let Some(submission) = submission else {
-		return Ok(0);
-	};
-	submission_exit_status(&document, submission).map_err(Into::into)
+		_ => return Err(usage.into()),
+	})
 }
 
 fn request(

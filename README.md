@@ -70,6 +70,7 @@ The implementation is divided by responsibility rather than by document:
 | `tith-wire` | Canonical integers, addresses, TLVs, Bundles, and payload items |
 | `tith-nodelist` | TTS-5000 nodelist parsing, endpoints, and public-key lookup |
 | `tith-nodelist-legacy` | FTS-5000.005 to TTS-5000 nodelist conversion |
+| `tith-message-legacy` | Legacy stored `.msg` reading and attachment disposition |
 | `tith-exchange` | Blocking TTS-0006 exchange state and response tracking |
 | `tith-config` | Canonical reference-mailer configuration parsing |
 | `tith-router` | Deterministic route selection and commitment |
@@ -196,6 +197,7 @@ crates; multiplexing keeps a single copy.
 ```sh
 tith submit ...
 tith nodelist convert ...
+tith netmail scan ...
 ```
 
 Install `tith-submit` as a link to `tith`. The file stem of `argv[0]` selects
@@ -265,6 +267,53 @@ that replace the node name, location, or sysop name, or append flags.
 
 The input must be the 7-bit ASCII that FTS-5000.005 specifies; a byte outside
 that range is refused with its line number rather than decoded by guess.
+
+## Using `tith netmail scan`
+
+`tith netmail scan` reads a legacy netmail directory, converts each `###.msg`
+according to TSP-0003, and submits it with its attached files through TSP-0006.
+It selects files whose stem is all digits and whose extension is `msg` in any
+case, and processes them in numeric order.
+
+```sh
+tith netmail scan --files /var/run/tith-files --origin fidonet#1:2/3 /var/spool/netmail
+```
+
+Two legacy conventions state what happens to an attached file after it is sent,
+and they cannot be told apart from the bytes, so the convention is selected
+rather than guessed:
+
+- by default, FSC-0053.002 `FLAGS KFS` or `TFS`, which apply to **every**
+  attachment of the message;
+- with `--binkley`, the FTS-5005.003 directive prefixed to each Subject
+  FileSpec — `#` truncate, `^` or `-` delete, `~` or `!` skip, `@` keep — which
+  applies **per file**.
+
+The same Subject reads differently under each. `^work.zip` is a delete
+directive on `work.zip` with `--binkley`, and a file literally named
+`^work.zip` without it.
+
+A disposition other than keep needs the service to advertise `Submit.Delete` or
+`Submit.Truncate`. When it does not, that message fails with a diagnostic
+naming the missing feature and the scan continues; TSP-0013 does not permit
+quietly dropping the cleanup the sender asked for.
+
+After a Committed result the message is marked Sent, or deleted when it carries
+K/S. `--kill-sent` deletes every committed message. K/S is about the message
+itself; `KFS` and `TFS` are about its attachments. Anything short of Committed
+leaves the `.msg` exactly as it was.
+
+Runs are safe to overlap. A message is claimed by an atomic rename before it is
+read, so exactly one scanner processes it, and the Sent bit stops a later run
+resubmitting it. A claim left by an interrupted run is picked up once it is
+older than `--recover-after` seconds (600 by default), following the same
+age-based rule FTS-5005.003 uses for bsy files. Resubmission is harmless
+because the Idempotency-Key is the message's FTS-0009.001 MSGID, so TSP-0006
+returns `Existing` without repeating any work. A message with no MSGID gets a
+generated key and is reported, since an interrupted run could send it twice.
+
+`--dry-run` prints the requests that would be sent and takes no claim and no
+write.
 
 To exercise native TTS-0006 receipt, generate a dedicated node signing key and
 place its printed public key in the applicable nodelist IIH entry or unlisted
