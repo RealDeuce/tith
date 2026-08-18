@@ -3,10 +3,10 @@ TITH                                              THIS ISN'T THAT HARD
 **********************************************************************
 
 Publication:  TSP‑0006
-Revision:     2
+Revision:     3
 Title:        Outbound Job Submission
 Author(s):    Stephen Hurd
-Date:         2026‑08‑17
+Date:         2026‑08‑18
 ══════════════════════════════════════════════════════════════════════
 
 Status of this document
@@ -698,10 +698,13 @@ Contents
     tith-submit submit <submission-file-or-hyphen>
     tith-submit submit-items <submission-file-or-hyphen>
 
-  Exit status zero means a complete Committed result was written, one
-  means a complete Not-Committed result was written, and two means no
-  complete result was received or written.  Exit status alone is never
-  evidence of commitment.
+  For either submission command, exit status zero means a complete
+  Committed result for the requested operation was written.  Status one
+  means a complete Not-Committed result for that operation or a
+  complete TSP‑0004 Error result was written.  Status two means no
+  complete result was received or written, or the received document did
+  not conform to one of those applicable result grammars.  Exit status
+  alone is never evidence of commitment.
 
   The same client SHOULD construct these other standard requests:
 
@@ -954,5 +957,8 @@ B. History
    Rev.2, 2026‑08‑17: Added item‐aware submission for EchoMail,
    standalone file distribution, and claimed forwarding without
    changing Submit grammar.
+
+   Rev.3, 2026‑08‑18: Assigned complete Error results command‐line
+   status one and invalid or mismatched results status two.
 
 **********************************************************************

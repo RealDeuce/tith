@@ -210,10 +210,10 @@ cargo run -p tith-submit -- --named-pipe \\.\pipe\tith S-1-5-21-... `
 
 Use `-` as the submission filename to read standard input. The remaining
 operations are `query`, `query-job`, `lookup`, `cancel`, `retry`, `reroute`,
-and `capabilities`. Exit status 0 means a submission committed, 1 means a
-complete rejection was written, and 2 means the transaction or local client
-failed. The status-1 treatment of a complete envelope-level `Error` is the
-temporary interpretation tracked by [GitHub issue #11](https://github.com/RealDeuce/tith/issues/11).
+and `capabilities`. For submission commands, exit status 0 means the
+submission committed, 1 means a complete operation rejection or envelope-level
+`Error` was written, and 2 means the transaction, result validation, or local
+client failed.
 
 The `tith-submit` library exposes the same binding clients plus one shared
 `check_capabilities` conformance check. The daemon tests run that identical
