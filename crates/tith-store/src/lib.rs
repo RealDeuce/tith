@@ -256,16 +256,7 @@ impl InboundStore {
 		Ok(AcceptResult::Stored(Box::new(record)))
 	}
 
-	pub fn claim(
-		&self,
-		application: &str,
-		claim_key: &str,
-		now: u64,
-		duration: u64,
-	) -> Result<ClaimResult, StoreError> {
-		if claim_key.is_empty() {
-			return Err(StoreError::CorruptRecord);
-		}
+	pub fn refresh_expirations(&self, now: u64) -> Result<(), StoreError> {
 		let write = self.database.begin_write()?;
 		let mut expired_mappings = Vec::new();
 		{
@@ -317,10 +308,26 @@ impl InboundStore {
 			for (_, token, id) in &expired_mappings {
 				tokens.insert(
 					token.as_str(),
-					encode_token_resolution(id, InboundState::Available).as_slice(),
+					encode_token_resolution(id, InboundState::Available, false).as_slice(),
 				)?;
 			}
 		}
+		write.commit()?;
+		Ok(())
+	}
+
+	pub fn claim(
+		&self,
+		application: &str,
+		claim_key: &str,
+		now: u64,
+		duration: u64,
+	) -> Result<ClaimResult, StoreError> {
+		if claim_key.is_empty() {
+			return Err(StoreError::CorruptRecord);
+		}
+		self.refresh_expirations(now)?;
+		let write = self.database.begin_write()?;
 		let mapping_key = claim_mapping_key(application, claim_key);
 		if let Some(mapped) = write.open_table(CLAIM_KEYS)?.get(mapping_key.as_slice())? {
 			let mapped = decode_mapping(mapped.value())?;
@@ -393,6 +400,7 @@ impl InboundStore {
 
 	pub fn resolve(
 		&self,
+		application: &str,
 		inbound_id: &str,
 		token: &str,
 		now: u64,
@@ -400,8 +408,17 @@ impl InboundStore {
 	) -> Result<InboundState, StoreError> {
 		let write = self.database.begin_write()?;
 		if let Some(value) = write.open_table(RESOLVED_TOKENS)?.get(token)? {
-			let (resolved_id, state) = decode_token_resolution(value.value())?;
-			return if resolved_id == inbound_id {
+			let (resolved_id, state, completed) = decode_token_resolution(value.value())?;
+			let authorized = {
+				let records = write.open_table(RECORDS)?;
+				let value = records
+					.get(resolved_id.as_str())?
+					.ok_or(StoreError::NotFound)?;
+				decode_record(value.value())?.application == application
+			};
+			return if !authorized {
+				Err(StoreError::NotFound)
+			} else if resolved_id == inbound_id && completed {
 				Ok(state)
 			} else {
 				Err(StoreError::Stale(state))
@@ -412,6 +429,9 @@ impl InboundStore {
 			let value = records.get(inbound_id)?.ok_or(StoreError::NotFound)?;
 			decode_record(value.value())?
 		};
+		if record.application != application {
+			return Err(StoreError::NotFound);
+		}
 		if record.state != InboundState::Claimed {
 			return if record.claim_token.as_deref() == Some(token) {
 				Ok(record.state)
@@ -457,7 +477,10 @@ impl InboundStore {
 				encode_mapping(inbound_id, token, Some(state)).as_slice(),
 			)?;
 			let mut tokens = write.open_table(RESOLVED_TOKENS)?;
-			tokens.insert(token, encode_token_resolution(inbound_id, state).as_slice())?;
+			tokens.insert(
+				token,
+				encode_token_resolution(inbound_id, state, true).as_slice(),
+			)?;
 		}
 		write.commit()?;
 		Ok(state)
@@ -465,6 +488,7 @@ impl InboundStore {
 
 	pub fn renew(
 		&self,
+		application: &str,
 		inbound_id: &str,
 		token: &str,
 		now: u64,
@@ -476,6 +500,9 @@ impl InboundStore {
 			let value = records.get(inbound_id)?.ok_or(StoreError::NotFound)?;
 			decode_record(value.value())?
 		};
+		if record.application != application {
+			return Err(StoreError::NotFound);
+		}
 		if record.state != InboundState::Claimed
 			|| record.claim_token.as_deref() != Some(token)
 			|| record.claim_expires.is_none_or(|expires| expires <= now)
@@ -484,7 +511,6 @@ impl InboundStore {
 		}
 		let expires = now.checked_add(duration).ok_or(StoreError::CorruptRecord)?;
 		record.claim_expires = Some(expires);
-		record.changed = now;
 		{
 			let mut records = write.open_table(RECORDS)?;
 			records.insert(inbound_id, encode_record(&record).as_slice())?;
@@ -493,11 +519,42 @@ impl InboundStore {
 		Ok(expires)
 	}
 
-	pub fn payload(&self, inbound_id: &str) -> Result<Vec<u8>, StoreError> {
+	pub fn claimed_payload(
+		&self,
+		application: &str,
+		inbound_id: &str,
+		token: &str,
+		now: u64,
+	) -> Result<Vec<u8>, StoreError> {
 		let read = self.database.begin_read()?;
-		let table = read.open_table(PAYLOADS)?;
-		let value = table.get(inbound_id)?.ok_or(StoreError::NotFound)?;
+		let records = read.open_table(RECORDS)?;
+		let value = records.get(inbound_id)?.ok_or(StoreError::NotFound)?;
+		let record = decode_record(value.value())?;
+		if record.application != application {
+			return Err(StoreError::NotFound);
+		}
+		if record.state != InboundState::Claimed
+			|| record.claim_token.as_deref() != Some(token)
+			|| record.claim_expires.is_none_or(|expires| expires <= now)
+		{
+			return Err(StoreError::Stale(record.state));
+		}
+		let payloads = read.open_table(PAYLOADS)?;
+		let value = payloads.get(inbound_id)?.ok_or(StoreError::NotFound)?;
 		Ok(value.value().to_vec())
+	}
+
+	pub fn query_for(
+		&self,
+		application: &str,
+		inbound_id: &str,
+	) -> Result<InboundRecord, StoreError> {
+		let record = self.query(inbound_id)?;
+		if record.application == application {
+			Ok(record)
+		} else {
+			Err(StoreError::NotFound)
+		}
 	}
 
 	pub fn query(&self, inbound_id: &str) -> Result<InboundRecord, StoreError> {
@@ -728,20 +785,26 @@ fn decode_mapping(mut input: &[u8]) -> Result<(String, String, Option<InboundSta
 	Ok((id, token, state))
 }
 
-fn encode_token_resolution(id: &str, state: InboundState) -> Vec<u8> {
+fn encode_token_resolution(id: &str, state: InboundState, completed: bool) -> Vec<u8> {
 	let mut output = Vec::new();
 	put_string(&mut output, id);
 	output.push(state as u8);
+	output.push(u8::from(completed));
 	output
 }
 
-fn decode_token_resolution(mut input: &[u8]) -> Result<(String, InboundState), StoreError> {
+fn decode_token_resolution(mut input: &[u8]) -> Result<(String, InboundState, bool), StoreError> {
 	let id = take_string(&mut input)?;
 	let state = decode_state(take_byte(&mut input)?)?;
+	let completed = match take_byte(&mut input)? {
+		0 => false,
+		1 => true,
+		_ => return Err(StoreError::CorruptRecord),
+	};
 	if !input.is_empty() {
 		return Err(StoreError::CorruptRecord);
 	}
-	Ok((id, state))
+	Ok((id, state, completed))
 }
 
 #[cfg(test)]
@@ -782,6 +845,7 @@ mod tests {
 		assert_eq!(
 			store
 				.resolve(
+					"tosser",
 					&inserted.inbound_id,
 					&first.claim_token,
 					13,
@@ -837,6 +901,7 @@ mod tests {
 		assert_eq!(
 			store
 				.resolve(
+					"tosser",
 					&item.inbound_id,
 					&second.claim_token,
 					5,
@@ -851,6 +916,7 @@ mod tests {
 		assert_eq!(
 			store
 				.resolve(
+					"tosser",
 					&item.inbound_id,
 					&second.claim_token,
 					7,
@@ -912,6 +978,43 @@ mod tests {
 			store.query(&stored_id).unwrap().payload_hash,
 			hash_inbound_item(&payload).unwrap()
 		);
+		drop(store);
+		std::fs::remove_file(path).unwrap();
+	}
+
+	#[test]
+	fn renewal_preserves_changed_and_claim_access_is_application_scoped() {
+		let path = std::env::temp_dir().join(format!(
+			"tith-store-{}.redb",
+			random_identifier('T').unwrap()
+		));
+		let store = InboundStore::create(&path).unwrap();
+		let payload = OwnedTlv::new(types::MESSAGE, Vec::new()).unwrap().encode();
+		let item = store
+			.insert(NewInbound {
+				application: "tosser",
+				local_identity: "fidonet#1",
+				peer: "fidonet#2",
+				peer_key: PublicKey::from_bytes([4; 32]),
+				received: 10,
+				authentication: ItemAuthentication::Valid,
+				payload: &payload,
+			})
+			.unwrap();
+		let ClaimResult::Completed(claim) = store.claim("tosser", "worker", 11, 60).unwrap() else {
+			panic!("claim expected");
+		};
+		assert_eq!(
+			store
+				.renew("tosser", &item.inbound_id, &claim.claim_token, 12, 60)
+				.unwrap(),
+			72
+		);
+		assert_eq!(store.query(&item.inbound_id).unwrap().changed, 11);
+		assert!(matches!(
+			store.claimed_payload("other", &item.inbound_id, &claim.claim_token, 12),
+			Err(StoreError::NotFound)
+		));
 		drop(store);
 		std::fs::remove_file(path).unwrap();
 	}

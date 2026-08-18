@@ -6,12 +6,12 @@ use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::Path;
 use std::sync::Arc;
 
+use crate::ipc::{IpcService, Principal};
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD_NO_PAD;
 use tith_crypto::{KX_SECRET_KEY_BYTES, KxKeyPair, KxPublicKey, KxSecretKey};
 use tith_ipc::EnvelopeKind;
 use tith_ipc_tcp::SecureChannel;
-use tith_store::InboundStore;
-
-use crate::unix::process_request;
 
 pub fn write_secret(path: &Path, secret: &KxSecretKey) -> Result<(), Box<dyn Error>> {
 	let mut file = OpenOptions::new()
@@ -53,26 +53,22 @@ pub fn serve(
 	if !listener.local_addr()?.ip().is_loopback() {
 		return Err("TCP IPC listener is not bound to loopback".into());
 	}
-	let store = Arc::new(InboundStore::create(database)?);
-	let exports = Arc::new(exports.to_path_buf());
-	let application = Arc::new(application);
+	let service = Arc::new(IpcService::create(database, exports)?);
+	let principal = Arc::new(Principal::single(
+		STANDARD_NO_PAD.encode(client_public.as_bytes()),
+		application,
+	));
 	let server_keys = Arc::new(server_keys);
 	for connection in listener.incoming() {
 		match connection {
 			Ok(stream) if stream.peer_addr()?.ip().is_loopback() => {
-				let store = Arc::clone(&store);
-				let exports = Arc::clone(&exports);
-				let application = Arc::clone(&application);
+				let service = Arc::clone(&service);
+				let principal = Arc::clone(&principal);
 				let server_keys = Arc::clone(&server_keys);
 				std::thread::spawn(move || {
-					if let Err(error) = transaction(
-						stream,
-						&store,
-						&exports,
-						&application,
-						&server_keys,
-						client_public,
-					) {
+					if let Err(error) =
+						transaction(stream, &service, &principal, &server_keys, client_public)
+					{
 						eprintln!("tithd: TCP IPC transaction failed: {error}");
 					}
 				});
@@ -86,9 +82,8 @@ pub fn serve(
 
 fn transaction(
 	stream: TcpStream,
-	store: &InboundStore,
-	exports: &Path,
-	application: &str,
+	service: &IpcService,
+	principal: &Principal,
 	server_keys: &KxKeyPair,
 	client_public: KxPublicKey,
 ) -> Result<(), Box<dyn Error>> {
@@ -96,7 +91,7 @@ fn transaction(
 		(*key == client_public).then_some(())
 	})?;
 	let request = channel.receive_flat_document(EnvelopeKind::Request)?;
-	let response = process_request(&request, true, store, exports, application);
+	let response = service.process_request(&request, Some(principal));
 	channel.send_document(&response, EnvelopeKind::Result)?;
 	let mut stream = channel.into_inner();
 	let mut unexpected = [0];
@@ -111,9 +106,8 @@ mod tests {
 	use std::net::{Shutdown, TcpListener, TcpStream};
 	use std::time::{SystemTime, UNIX_EPOCH};
 
-	use tith_ipc::{Document, EnvelopeKind};
-
 	use super::*;
+	use tith_ipc::{Document, EnvelopeKind};
 
 	#[test]
 	fn serves_capabilities_to_an_authenticated_client() {
@@ -125,7 +119,7 @@ mod tests {
 		let database = root.join("state.redb");
 		let exports = root.join("exports");
 		fs::create_dir_all(&exports).unwrap();
-		let store = InboundStore::create(&database).unwrap();
+		let service = IpcService::create(&database, &exports).unwrap();
 		let listener = TcpListener::bind("127.0.0.1:0").unwrap();
 		let address = listener.local_addr().unwrap();
 		let server_keys = KxKeyPair::generate().unwrap();
@@ -136,9 +130,8 @@ mod tests {
 			let (stream, _) = listener.accept().unwrap();
 			transaction(
 				stream,
-				&store,
-				&exports,
-				"tosser",
+				&service,
+				&Principal::single("client", "tosser"),
 				&server_keys,
 				client_public,
 			)

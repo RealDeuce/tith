@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+mod ipc;
 #[cfg(unix)]
 mod mail;
 #[cfg(unix)]

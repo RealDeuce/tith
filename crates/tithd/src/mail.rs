@@ -64,7 +64,7 @@ pub fn serve(
 	}
 	let listener = TcpListener::bind(address)?;
 	let mailer = Arc::new(Mailer {
-		store: InboundStore::create(database)?,
+		store: Arc::new(InboundStore::create(database)?),
 		application,
 		configuration,
 		nodelist,
@@ -89,7 +89,7 @@ pub fn serve(
 }
 
 struct Mailer {
-	store: InboundStore,
+	store: Arc<InboundStore>,
 	application: String,
 	configuration: ConfigurationSet,
 	nodelist: Nodelist,
@@ -532,7 +532,7 @@ mod tests {
 		)
 		.unwrap();
 		let mailer = Arc::new(Mailer {
-			store: InboundStore::create(&database).unwrap(),
+			store: Arc::new(InboundStore::create(&database).unwrap()),
 			application: "tosser".to_owned(),
 			configuration,
 			nodelist: nodelist(local.public_key.as_bytes(), peer.public_key.as_bytes()),
@@ -594,8 +594,10 @@ mod tests {
 		let exports = database.with_extension("exports");
 		fs::create_dir(&exports).unwrap();
 		let claim_request = b"TITH-IPC 1\nClaim-Inbound \"tosser\" Now\nClaim-Key \"first\"\nPresentation Path\nEnd\n";
-		let claim_result =
-			crate::unix::process_request(claim_request, true, &mailer.store, &exports, "tosser");
+		let service =
+			crate::ipc::IpcService::from_store(Arc::clone(&mailer.store), exports.clone());
+		let principal = crate::ipc::Principal::single("test", "tosser");
+		let claim_result = service.process_request(claim_request, Some(&principal));
 		let claim_document = Document::parse(&claim_result, EnvelopeKind::Result).unwrap();
 		assert_eq!(claim_document.lines[0].fields[0].text, "Claim-Inbound");
 		assert_eq!(claim_document.lines[0].fields[1].text, "Completed");
