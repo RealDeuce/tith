@@ -163,30 +163,47 @@ fn signed_tlv_parts(
 		return Err(BundleError::Unexpected("non-SignedTLV"));
 	}
 	let children = parse_sequence(&value.value)?;
-	let mut origin = None;
-	let mut public_key = None;
+	let mut index = 0;
+	let origin = children
+		.first()
+		.filter(|child| child.type_code == types::ORIGIN)
+		.cloned();
+	let public_key = if let Some(origin) = origin.as_ref() {
+		index += 1;
+		let address = address_value(origin)?;
+		let next = children.get(index);
+		if address.is_unlisted() {
+			let key = next
+				.filter(|child| child.type_code == types::PUBLIC_KEY)
+				.ok_or(BundleError::Missing("PublicKey after unlisted Origin"))?
+				.clone();
+			index += 1;
+			Some(key)
+		} else {
+			if next.is_some_and(|child| child.type_code == types::PUBLIC_KEY) {
+				return Err(BundleError::Unexpected("PublicKey after listed Origin"));
+			}
+			None
+		}
+	} else {
+		None
+	};
 	let mut signed_data = None;
 	let mut signature = None;
 	let mut stage = 0;
-	for child in children {
+	for child in children.into_iter().skip(index) {
 		match child.type_code {
-			types::ORIGIN if stage == 0 && origin.is_none() => {
-				origin = Some(child);
+			types::SIGNED_DATA if stage == 0 && signed_data.is_none() => {
+				signed_data = Some(child);
 				stage = 1;
 			}
-			types::PUBLIC_KEY if stage == 1 && public_key.is_none() => {
-				public_key = Some(child);
+			types::SIGNATURE if stage == 1 && signature.is_none() => {
+				signature = Some(child);
 				stage = 2;
 			}
-			types::SIGNED_DATA if stage <= 2 && signed_data.is_none() => {
-				signed_data = Some(child);
-				stage = 3;
+			type_code if types::is_defined(type_code) => {
+				return Err(BundleError::Unexpected("defined SignedTLV child"));
 			}
-			types::SIGNATURE if stage == 3 && signature.is_none() => {
-				signature = Some(child);
-				stage = 4;
-			}
-			0..=31 => return Err(BundleError::Unexpected("common SignedTLV child")),
 			_ => {}
 		}
 	}
@@ -251,10 +268,9 @@ impl Bundle {
 		};
 		let origin = identity(origin_tlv, origin_public_key, resolver)?;
 
-		let header_tlv = top
-			.get(index)
+		let header_tlv = next_defined(&top, &mut index)
+			.filter(|value| value.type_code == types::SIGNED_TLV)
 			.ok_or(BundleError::Missing("Header SignedTLV"))?;
-		index += 1;
 		let header = verify_signed_tlv(header_tlv, Some(&origin), resolver)?;
 		if header.identity != origin {
 			return Err(BundleError::Unexpected("Header Origin"));
@@ -263,7 +279,11 @@ impl Bundle {
 		let expected_hash = hash_tlv(&header.encoded)?;
 
 		let mut payloads = Vec::new();
-		let mut unknown_top_level = Vec::new();
+		let mut unknown_top_level = top[1..index - 1]
+			.iter()
+			.filter(|value| !types::is_defined(value.type_code))
+			.cloned()
+			.collect::<Vec<_>>();
 		for value in &top[index..] {
 			if value.type_code == types::SIGNED_TLV {
 				let payload = verify_signed_tlv(value, Some(&origin), resolver)?;
@@ -282,6 +302,8 @@ impl Bundle {
 					return Err(BundleError::IncorrectHeaderHash);
 				}
 				payloads.push(payload);
+			} else if types::is_defined(value.type_code) {
+				return Err(BundleError::Unexpected("defined top-level value"));
 			} else {
 				unknown_top_level.push(value.clone());
 			}
@@ -299,18 +321,25 @@ impl Bundle {
 	}
 }
 
+fn next_defined<'a>(values: &'a [OwnedTlv], index: &mut usize) -> Option<&'a OwnedTlv> {
+	while let Some(value) = values.get(*index) {
+		*index += 1;
+		if types::is_defined(value.type_code) {
+			return Some(value);
+		}
+	}
+	None
+}
+
 fn validate_header(
 	children: &[OwnedTlv],
 	resolver: &impl KeyResolver,
 ) -> Result<(Identity, u64), BundleError> {
-	let destination_tlv = children
-		.first()
+	let mut index = 0;
+	let destination_tlv = next_defined(children, &mut index)
+		.filter(|value| value.type_code == types::DESTINATION)
 		.ok_or(BundleError::Missing("Destination"))?;
-	if destination_tlv.type_code != types::DESTINATION {
-		return Err(BundleError::Missing("initial Destination"));
-	}
 	let destination_address = address_value(destination_tlv)?;
-	let mut index = 1;
 	let destination_key = if destination_address.is_unlisted() {
 		let value = children
 			.get(index)
@@ -330,15 +359,11 @@ fn validate_header(
 		None
 	};
 	let destination = identity(destination_tlv, destination_key, resolver)?;
-	let timestamp = children
-		.get(index)
-		.ok_or(BundleError::Missing("Timestamp"))?;
-	if timestamp.type_code != types::TIMESTAMP {
-		return Err(BundleError::Missing("Timestamp after Destination"));
-	}
-	index += 1;
-	if children[index..].iter().any(|value| value.type_code <= 31) {
-		return Err(BundleError::Unexpected("common Header value"));
+	let timestamp = next_defined(children, &mut index)
+		.filter(|value| value.type_code == types::TIMESTAMP)
+		.ok_or(BundleError::Missing("Timestamp after Destination"))?;
+	if next_defined(children, &mut index).is_some() {
+		return Err(BundleError::Unexpected("defined Header value"));
 	}
 	Ok((destination, decode_u64(&timestamp.value)?))
 }
@@ -486,6 +511,159 @@ mod tests {
 		assert!(matches!(
 			Bundle::parse(&encoded, &|_: &Address| None),
 			Err(BundleError::InvalidSignature)
+		));
+	}
+
+	#[test]
+	fn signed_tlv_carries_an_unlisted_origin_key() {
+		let keys = SigningKeyPair::from_seed(&[5; 32]).unwrap();
+		let origin = Identity {
+			address: Address::unlisted("p2p".into()).unwrap(),
+			public_key: keys.public,
+		};
+		let data = [OwnedTlv::new(200, b"extension".to_vec()).unwrap()];
+		let signed = build_signed_tlv(&data, Some(&origin), &keys.secret).unwrap();
+		let mut children = parse_sequence(&signed.value).unwrap();
+		children.insert(2, OwnedTlv::new(201, b"wrapper".to_vec()).unwrap());
+		let signed = OwnedTlv::new(types::SIGNED_TLV, concatenate(&children)).unwrap();
+		let verified = verify_signed_tlv(&signed, None, &|_: &Address| None).unwrap();
+		assert_eq!(verified.identity, origin);
+		assert_eq!(verified.data, data);
+	}
+
+	#[test]
+	fn unknown_value_cannot_separate_an_unlisted_origin_and_key() {
+		let keys = SigningKeyPair::from_seed(&[6; 32]).unwrap();
+		let origin = Address::unlisted("p2p".into()).unwrap();
+		let children = [
+			OwnedTlv::new(types::ORIGIN, origin.to_string().into_bytes()).unwrap(),
+			OwnedTlv::new(200, Vec::new()).unwrap(),
+			OwnedTlv::new(types::PUBLIC_KEY, keys.public.as_bytes().to_vec()).unwrap(),
+			OwnedTlv::new(types::SIGNED_DATA, Vec::new()).unwrap(),
+			OwnedTlv::new(types::SIGNATURE, vec![0; SIGNATURE_BYTES]).unwrap(),
+		];
+		let signed = OwnedTlv::new(types::SIGNED_TLV, concatenate(&children)).unwrap();
+		assert!(matches!(
+			verify_signed_tlv(&signed, None, &|_: &Address| None),
+			Err(BundleError::Missing("PublicKey after unlisted Origin"))
+		));
+	}
+
+	#[test]
+	fn bundle_retains_unknown_values_after_its_origin() {
+		let origin_keys = SigningKeyPair::from_seed(&[7; 32]).unwrap();
+		let destination_keys = SigningKeyPair::from_seed(&[8; 32]).unwrap();
+		let origin = Identity {
+			address: "fidonet#1/7".parse().unwrap(),
+			public_key: origin_keys.public,
+		};
+		let destination = Identity {
+			address: "fidonet#1/8".parse().unwrap(),
+			public_key: destination_keys.public,
+		};
+		let encoded =
+			build_bundle(&origin, &origin_keys.secret, &destination, 7, Vec::new()).unwrap();
+		let mut top = parse_sequence(&encoded).unwrap();
+		let extension = OwnedTlv::new(200, b"retained".to_vec()).unwrap();
+		top.insert(1, extension.clone());
+		let encoded = concatenate(&top);
+		let resolver = |address: &Address| {
+			if address == &origin.address {
+				Some(origin.public_key)
+			} else if address == &destination.address {
+				Some(destination.public_key)
+			} else {
+				None
+			}
+		};
+		let parsed = Bundle::parse(&encoded, &resolver).unwrap();
+		assert_eq!(parsed.unknown_top_level, vec![extension]);
+	}
+
+	#[test]
+	fn header_allows_unknown_values_around_defined_children() {
+		let origin_keys = SigningKeyPair::from_seed(&[9; 32]).unwrap();
+		let destination_keys = SigningKeyPair::from_seed(&[10; 32]).unwrap();
+		let origin = Identity {
+			address: "fidonet#1/9".parse().unwrap(),
+			public_key: origin_keys.public,
+		};
+		let destination = Identity {
+			address: "fidonet#1/10".parse().unwrap(),
+			public_key: destination_keys.public,
+		};
+		let header_data = [
+			OwnedTlv::new(200, Vec::new()).unwrap(),
+			OwnedTlv::new(
+				types::DESTINATION,
+				destination.address.to_string().into_bytes(),
+			)
+			.unwrap(),
+			OwnedTlv::new(201, Vec::new()).unwrap(),
+			OwnedTlv::new(types::TIMESTAMP, encode_u64(9)).unwrap(),
+			OwnedTlv::new(202, Vec::new()).unwrap(),
+		];
+		let header = build_signed_tlv(&header_data, None, &origin_keys.secret).unwrap();
+		let top = [
+			OwnedTlv::new(types::ORIGIN, origin.address.to_string().into_bytes()).unwrap(),
+			header,
+		];
+		let resolver = |address: &Address| {
+			if address == &origin.address {
+				Some(origin.public_key)
+			} else if address == &destination.address {
+				Some(destination.public_key)
+			} else {
+				None
+			}
+		};
+		let parsed = Bundle::parse(&concatenate(&top), &resolver).unwrap();
+		assert_eq!(parsed.destination, destination);
+		assert_eq!(parsed.timestamp, 9);
+	}
+
+	#[test]
+	fn payload_hash_is_the_literal_first_child() {
+		let origin_keys = SigningKeyPair::from_seed(&[11; 32]).unwrap();
+		let destination_keys = SigningKeyPair::from_seed(&[12; 32]).unwrap();
+		let origin = Identity {
+			address: "fidonet#1/11".parse().unwrap(),
+			public_key: origin_keys.public,
+		};
+		let destination = Identity {
+			address: "fidonet#1/12".parse().unwrap(),
+			public_key: destination_keys.public,
+		};
+		let encoded =
+			build_bundle(&origin, &origin_keys.secret, &destination, 11, Vec::new()).unwrap();
+		let mut top = parse_sequence(&encoded).unwrap();
+		let header_hash = hash_tlv(&top[1].encode()).unwrap();
+		let payload_data = [
+			OwnedTlv::new(200, Vec::new()).unwrap(),
+			OwnedTlv::new(types::TLV_HASH, header_hash.as_bytes().to_vec()).unwrap(),
+		];
+		top.push(build_signed_tlv(&payload_data, None, &origin_keys.secret).unwrap());
+		let resolver = |address: &Address| {
+			if address == &origin.address {
+				Some(origin.public_key)
+			} else if address == &destination.address {
+				Some(destination.public_key)
+			} else {
+				None
+			}
+		};
+		assert!(matches!(
+			Bundle::parse(&concatenate(&top), &resolver),
+			Err(BundleError::Missing("initial payload Header TLVHash"))
+		));
+	}
+
+	#[test]
+	fn unknown_value_cannot_precede_bundle_origin() {
+		let encoded = OwnedTlv::new(200, Vec::new()).unwrap().encode();
+		assert!(matches!(
+			Bundle::parse(&encoded, &|_: &Address| None),
+			Err(BundleError::Missing("initial Origin"))
 		));
 	}
 }

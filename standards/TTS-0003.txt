@@ -3,7 +3,7 @@ TITH                                              THIS ISN'T THAT HARD
 **********************************************************************
 
 Publication:  TTS‑0003
-Revision:     1
+Revision:     2
 Title:        Common TLV Types
 Author(s):    Stephen Hurd
 Date:         2026‑08‑17
@@ -121,13 +121,24 @@ Contents
       SignedData3 will be signed using the public key of Origin4.
 
   4.  SignedTLV
-      The value begins with a sequence of TLV values in the order
-      Origin, SignedData, Signature.  The Origin value is optional,
-      and may be left out if an Origin has been established earlier.
-      SignedData and Signature values are required.  The data in the
-      SignedData value MUST be TLV encoded as described in TTS‑0002.
-      The purpose of this type is to allow specifications to permit
-      some or all TLV values to be replaced by a SignedTLV value.
+      The Value is a sequence of child TLV values containing one
+      SignedData followed by one Signature.  An Origin is optional.
+      When present, it MUST be the first encoded child.  If that
+      Origin is the unlisted address, it MUST be immediately followed
+      by one PublicKey.  For any other Origin, a PublicKey at this
+      position is prohibited.  When Origin is absent, PublicKey is
+      prohibited and an Origin established at a higher level applies.
+
+      Types not defined by this document or the enclosing standard do
+      not change the required order or cardinality.  The enclosing
+      standard specifies whether and where such values are permitted.
+      No other child type defined by this document is permitted unless
+      the enclosing standard explicitly includes it.
+
+      The data in the SignedData Value MUST be TLV encoded as described
+      in TTS‑0002.  The purpose of this type is to allow specifications
+      to permit some or all TLV values to be replaced by a SignedTLV
+      value.
 
       The Signature signs the exact bytes in the Value field of the
       SignedData.  Since that Value is TLV encoded, this includes the
@@ -200,5 +211,8 @@ B. History
 ──────────
 
    Rev.1, 2025‑11‑15: Initial Release.
+
+   Rev.2, 2026‑08‑17: Defined PublicKey placement for an unlisted
+   SignedTLV Origin and made the child grammar explicit.
 
 **********************************************************************

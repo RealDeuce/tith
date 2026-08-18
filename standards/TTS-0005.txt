@@ -3,7 +3,7 @@ TITH                                              THIS ISN'T THAT HARD
 **********************************************************************
 
 Publication:  TTS‑0005
-Revision:     3
+Revision:     4
 Title:        Bundle Format
 Author(s):    Stephen Hurd
 Date:         2026‑08‑17
@@ -70,11 +70,13 @@ Contents
   For any other Origin, the applicable key is obtained from the
   nodelist and a supplied PublicKey MUST NOT override it.
 
-  The next item MUST be a SignedTLV as defined in TTS‑0003.  This is
-  the Header SignedTLV and MUST NOT contain an Origin.  Its SignedData
-  MUST contain a Destination, followed by a PublicKey if and only if
-  the Destination is the unlisted address, followed by a Timestamp,
-  all as defined in TTS‑0003.  The PublicKey identifies the particular
+  Ignoring permitted unknown values, the next item MUST be a SignedTLV
+  as defined in TTS‑0003.  This is the Header SignedTLV and MUST NOT
+  contain an Origin.  Its SignedData MUST contain one Destination,
+  followed by a PublicKey if and only if the Destination is the
+  unlisted address, followed by one Timestamp, all as defined in
+  TTS‑0003.  A required PublicKey MUST be the encoded child immediately
+  after its Destination.  The PublicKey identifies the particular
   unlisted system to which the Bundle is addressed.  The Timestamp
   indicates when the bundling process started and is not updated when
   another item is added to the Bundle.
@@ -86,6 +88,23 @@ Contents
   values 32 to 63.  A missing or incorrect Header TLVHash is a data
   error for the entire payload SignedTLV.  Payload SignedTLV values
   SHOULD NOT contain an Origin.
+
+  In this document, “first” and “begins with” refer to the literal
+  first encoded child, including when unknown types are present.  This
+  applies to the Bundle Origin, the Origin that begins a Message, and
+  the Header TLVHash that begins every payload SignedData.  A PublicKey
+  whose presence depends on the immediately preceding address MUST be
+  the next encoded sibling; an unknown value cannot separate the pair.
+
+  After a required leading child and any conditional PublicKey,
+  unknown TLV values MAY occur between or after the remaining defined
+  children.  They do not change the relative order, cardinality, or
+  requirements of defined children.  An unknown value cannot satisfy
+  or replace a required child.  A type assigned by this document or
+  TTS‑0003 but used in a position not permitted by the applicable
+  grammar is a data error, not an unknown type.  Where a grammar does
+  not designate a literal leading child, unknown values MAY also
+  precede the first defined child.
 
   Types 32 to 63 are reserved for experimental extensions to this
   standard, and may be used by explicit agreement between the
@@ -246,7 +265,7 @@ Contents
   section 4, followed by an optional Timestamp as defined by TTS‑0003,
   followed by a manditory number encoded in the same manner as Type
   and Length, optionally followed by a UTF‑8 string containing a
-  human‐readable description of why there is no file.
+  human‐readable description of why the request was rejected.
 
   This is included because a Message, File, or FileRequest from
   Destination to Origin was not accepted.
@@ -268,10 +287,10 @@ Contents
       not met.  For example, if a Timestamp was included in a
       FileRequest, but the last modified time of the requested file
       matches the value of the Timestamp.  If a Timestamp is included
-      in the NoFile value, this is a time at which it is expected that
-      TLV value would not be Rejected.
+      in the Rejected value, this is a time at which it is expected
+      that the request would not be Rejected.
   4 — Indicates that the node is not willing to accept the TLV value
-      at this time.  If a Timestamp is included in the NoFile value,
+      at this time.  If a Timestamp is included in the Rejected value,
       this is a time at which the node expects to be willing to accept
       the TLV value.
 
@@ -527,9 +546,13 @@ Contents
   the SignedTLV value that contains the error.  Missing required
   values, and having values in the wrong order are data errors.
 
-  Note that an unknown type is not an error.  While it's encouraged to
-  log a message indicating that an unknown type is used, any unknown
-  type in any position MUST be ignored and retained.
+  An unknown type in a position permitted by section 2 is not an
+  error.  While it is encouraged to log a message indicating that an
+  unknown type is used, every permitted unknown value MUST be ignored
+  semantically and retained byte for byte.  The rule applies only to
+  values specified entirely as sequences of encoded TLV children.  It
+  does not cause bytes in a mixed grammar, such as the raw integer and
+  UTF‑8 string suffix of Rejected, to be interpreted as TLV values.
 
 
 6.  Reply Bundles
@@ -632,5 +655,9 @@ B. History
 
    Rev.3, 2026‑08‑17: Defined complete atomic poll snapshots and
    corrected PollFileRequests to return held FileRequests.
+
+   Rev.4, 2026‑08‑17: Defined extension placement relative to required
+   leading values and conditional PublicKeys, and generalized Rejected
+   descriptions and reason text.
 
 **********************************************************************

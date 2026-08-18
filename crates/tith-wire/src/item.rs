@@ -57,10 +57,6 @@ impl std::error::Error for PayloadError {
 	}
 }
 
-fn is_defined(type_code: u64) -> bool {
-	matches!(type_code, 1..=8 | 64..=71 | 96..=99 | 101..=121)
-}
-
 struct Cursor<'a> {
 	values: &'a [OwnedTlv],
 	index: usize,
@@ -75,7 +71,7 @@ impl<'a> Cursor<'a> {
 		while let Some(value) = self.values.get(self.index) {
 			let index = self.index;
 			self.index += 1;
-			if is_defined(value.type_code) {
+			if types::is_defined(value.type_code) {
 				return Some((index, value));
 			}
 		}
@@ -177,7 +173,13 @@ fn conditional_public_key<'a>(
 	cursor: &mut Cursor<'a>,
 	address: &Address,
 ) -> Result<Option<&'a OwnedTlv>, BundleError> {
-	let value = cursor.optional(types::PUBLIC_KEY).map(|(_, value)| value);
+	let value = cursor
+		.values
+		.get(cursor.index)
+		.filter(|value| value.type_code == types::PUBLIC_KEY);
+	if value.is_some() {
+		cursor.index += 1;
+	}
 	if address.is_unlisted() && value.is_none() {
 		Err(BundleError::Missing("PublicKey after unlisted address"))
 	} else if !address.is_unlisted() && value.is_some() {
@@ -226,6 +228,9 @@ fn validate_message(
 	resolver: &impl KeyResolver,
 ) -> Result<ValidatedItem, BundleError> {
 	let children = parse_sequence(&value.value)?;
+	if children.first().map(|value| value.type_code) != Some(types::ORIGIN) {
+		return Err(BundleError::Missing("initial Message Origin"));
+	}
 	let mut cursor = Cursor::new(&children);
 	let (_, origin_value) = cursor.take(types::ORIGIN, "Message Origin")?;
 	let origin_address = parse_address(origin_value)?;
@@ -651,5 +656,37 @@ mod tests {
 		let items = validate_payload(&parsed.payloads[0], &resolver).unwrap();
 		assert_eq!(items[0].kind, ItemKind::PollMessages);
 		assert_eq!(items[0].request_identifier, 7);
+	}
+
+	#[test]
+	fn message_origin_is_the_literal_first_child() {
+		let message = container(
+			types::MESSAGE,
+			&[
+				OwnedTlv::new(200, Vec::new()).unwrap(),
+				OwnedTlv::new(types::ORIGIN, b"fidonet#1/10".to_vec()).unwrap(),
+			],
+		);
+		assert!(matches!(
+			validate_message(&message, &|_: &Address| None),
+			Err(BundleError::Missing("initial Message Origin"))
+		));
+	}
+
+	#[test]
+	fn unknown_value_cannot_separate_message_origin_and_key() {
+		let origin = Address::unlisted("p2p".into()).unwrap();
+		let message = container(
+			types::MESSAGE,
+			&[
+				OwnedTlv::new(types::ORIGIN, origin.to_string().into_bytes()).unwrap(),
+				OwnedTlv::new(200, Vec::new()).unwrap(),
+				OwnedTlv::new(types::PUBLIC_KEY, vec![0; 32]).unwrap(),
+			],
+		);
+		assert!(matches!(
+			validate_message(&message, &|_: &Address| None),
+			Err(BundleError::Missing("PublicKey after unlisted address"))
+		));
 	}
 }
