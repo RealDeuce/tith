@@ -216,32 +216,39 @@ fn sync_directory(_: &Path) -> Result<(), Box<dyn Error>> {
 mod tests {
 	use super::*;
 	use std::time::{SystemTime, UNIX_EPOCH};
+	use tith_submit::{FilesystemBinding, check_capabilities};
 
 	#[test]
-	fn retains_a_result_until_empty_acknowledgement() {
+	fn conforms_and_removes_an_acknowledged_result() {
 		let unique = SystemTime::now()
 			.duration_since(UNIX_EPOCH)
 			.unwrap()
 			.as_nanos();
 		let root = std::env::temp_dir().join(format!("tith-files-{unique}"));
 		let endpoint = Endpoint::create(&root).unwrap();
-		let service = IpcService::create(&root.join("state.redb"), &root.join("exports")).unwrap();
-		let principal = Principal::single("files", "tosser");
-		let token = "0123456789abcdef0123456789abcdef";
-		fs::write(
-			endpoint.requests.join(format!("{token}.req")),
-			b"TITH-IPC 1\nCapabilities\nEnd\n",
-		)
-		.unwrap();
-		process_once(&endpoint, &service, &principal).unwrap();
-		let response = endpoint.results.join(format!("{token}.rsp"));
-		assert!(response.exists());
-		process_once(&endpoint, &service, &principal).unwrap();
-		assert!(response.exists());
-		fs::write(endpoint.acknowledgements.join(format!("{token}.ack")), []).unwrap();
-		process_once(&endpoint, &service, &principal).unwrap();
-		assert!(!response.exists());
-		drop(service);
+		let server_root = root.clone();
+		let server = std::thread::spawn(move || {
+			let service = IpcService::create(
+				&server_root.join("state.redb"),
+				&server_root.join("exports"),
+			)
+			.unwrap();
+			let principal = Principal::single("files", "tosser");
+			let mut published = false;
+			loop {
+				process_once(&endpoint, &service, &principal).unwrap();
+				let result_count = transaction_files(&endpoint.results, "rsp").unwrap().len();
+				if result_count != 0 {
+					published = true;
+				} else if published {
+					break;
+				}
+				std::thread::sleep(Duration::from_millis(5));
+			}
+		});
+		check_capabilities(&FilesystemBinding::new(root.clone())).unwrap();
+		server.join().unwrap();
+		assert!(fs::read_dir(root.join("results")).unwrap().next().is_none());
 		fs::remove_dir_all(root).unwrap();
 	}
 }

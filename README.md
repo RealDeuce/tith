@@ -74,7 +74,8 @@ The implementation is divided by responsibility rather than by document:
 | `tith-store` | Pure-Rust `redb` durable state and atomic claims |
 | `tith-ipc` | Canonical local IPC request and result documents |
 | `tith-ipc-tcp` | TSP-0009 authenticated key exchange and encrypted IPC records |
-| `tithd` | FreeBSD-first reference service and host bindings |
+| `tith-submit` | TSP-0006 command-line client and reusable clients for every IPC binding |
+| `tithd` | Reference service and host bindings |
 
 Rust 1.97.1 is pinned by [`rust-toolchain.toml`](rust-toolchain.toml). To build
 and validate the complete workspace:
@@ -165,6 +166,9 @@ cargo run -p tithd -- serve-tcp-mailer 127.0.0.1:24556 \
     fidonet#1:123/45 /secure/path/node.secret
 ```
 
+The authenticated TCP service and client also build on Windows. Platform ACLs
+must protect both static secret-key files.
+
 On Windows, the named-pipe service uses the TSP-0010 binary preambles and
 authenticates the client through its impersonation token, process creation
 time, logon identity, and session before reading an IPC document:
@@ -179,6 +183,42 @@ other mailer forms. Native handle tables are rejected and their optional
 capabilities are not advertised; path presentation and path Sources work over
 the pipe. The Windows CI job runs the named-pipe transaction test in addition
 to the binding-independent workspace tests.
+
+## Using `tith-submit`
+
+`tith-submit` reads an exact canonical `Submit` or `Submit-Items` document,
+sends one transaction, and writes only the complete IPC result to standard
+output. It also constructs the standard query, lookup, control, and
+capabilities requests. Select the configured carrier before the operation:
+
+```sh
+cargo run -p tith-submit -- --unix /var/run/tith.sock capabilities
+cargo run -p tith-submit -- --files /var/run/tith-files query-job JOB-ID
+cargo run -p tith-submit -- --tcp 127.0.0.1:24556 \
+    CLIENT-PUBLIC-KEY /secure/path/client-ipc.secret SERVER-PUBLIC-KEY \
+    submit request.ipc
+```
+
+On Windows, supply the trusted service account SID from host configuration;
+the client verifies the connected server process token before sending its
+preamble or request:
+
+```powershell
+cargo run -p tith-submit -- --named-pipe \\.\pipe\tith S-1-5-21-... `
+    submit-items request.ipc
+```
+
+Use `-` as the submission filename to read standard input. The remaining
+operations are `query`, `query-job`, `lookup`, `cancel`, `retry`, `reroute`,
+and `capabilities`. Exit status 0 means a submission committed, 1 means a
+complete rejection was written, and 2 means the transaction or local client
+failed. The status-1 treatment of a complete envelope-level `Error` is the
+temporary interpretation tracked by [GitHub issue #11](https://github.com/RealDeuce/tith/issues/11).
+
+The `tith-submit` library exposes the same binding clients plus one shared
+`check_capabilities` conformance check. The daemon tests run that identical
+check end-to-end through atomic files, Unix sockets, authenticated TCP, and,
+in Windows CI, named pipes.
 
 To exercise native TTS-0006 receipt, generate a dedicated node signing key and
 place its printed public key in the applicable nodelist IIH entry or unlisted

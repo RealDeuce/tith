@@ -1,7 +1,12 @@
 use std::error::Error;
-use std::fs::{self, OpenOptions};
-use std::io::{Read, Write};
+use std::fs;
+#[cfg(unix)]
+use std::fs::OpenOptions;
+use std::io::Read;
+#[cfg(unix)]
+use std::io::Write;
 use std::net::{SocketAddr, TcpListener, TcpStream};
+#[cfg(unix)]
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::Path;
 use std::sync::Arc;
@@ -14,21 +19,25 @@ use tith_crypto::{KX_SECRET_KEY_BYTES, KxKeyPair, KxPublicKey, KxSecretKey};
 use tith_ipc::EnvelopeKind;
 use tith_ipc_tcp::SecureChannel;
 
+#[cfg(unix)]
 pub fn write_secret(path: &Path, secret: &KxSecretKey) -> Result<(), Box<dyn Error>> {
-	let mut file = OpenOptions::new()
-		.create_new(true)
-		.write(true)
-		.mode(0o600)
-		.open(path)?;
+	let mut options = OpenOptions::new();
+	options.create_new(true).write(true);
+	#[cfg(unix)]
+	options.mode(0o600);
+	let mut file = options.open(path)?;
 	file.write_all(secret.as_bytes())?;
 	file.sync_all()?;
 	Ok(())
 }
 
 pub fn read_secret(path: &Path) -> Result<KxSecretKey, Box<dyn Error>> {
-	let metadata = fs::metadata(path)?;
-	if metadata.permissions().mode() & 0o077 != 0 {
-		return Err("IPC secret key file is accessible by group or other users".into());
+	#[cfg(unix)]
+	{
+		let metadata = fs::metadata(path)?;
+		if metadata.permissions().mode() & 0o077 != 0 {
+			return Err("IPC secret key file is accessible by group or other users".into());
+		}
 	}
 	let bytes = fs::read(path)?;
 	let bytes: [u8; KX_SECRET_KEY_BYTES] = bytes
@@ -50,6 +59,7 @@ pub fn serve(
 		return Err("refusing to bind TCP IPC to a nonloopback address".into());
 	}
 	fs::create_dir_all(exports)?;
+	#[cfg(unix)]
 	fs::set_permissions(exports, fs::Permissions::from_mode(0o700))?;
 	let listener = TcpListener::bind(address)?;
 	if !listener.local_addr()?.ip().is_loopback() {
@@ -109,11 +119,11 @@ fn transaction(
 
 #[cfg(test)]
 mod tests {
-	use std::net::{Shutdown, TcpListener, TcpStream};
+	use std::net::TcpListener;
 	use std::time::{SystemTime, UNIX_EPOCH};
 
 	use super::*;
-	use tith_ipc::{Document, EnvelopeKind};
+	use tith_submit::{TcpBinding, check_capabilities};
 
 	#[test]
 	fn serves_capabilities_to_an_authenticated_client() {
@@ -144,17 +154,7 @@ mod tests {
 			.unwrap();
 		});
 
-		let stream = TcpStream::connect(address).unwrap();
-		let mut channel = SecureChannel::connect(stream, &client_keys, &server_public).unwrap();
-		let request = b"TITH-IPC 1\nCapabilities\nEnd\n";
-		channel
-			.send_document(request, EnvelopeKind::Request)
-			.unwrap();
-		let result = channel.receive_document(EnvelopeKind::Result).unwrap();
-		let document = Document::parse(&result, EnvelopeKind::Result).unwrap();
-		assert_eq!(document.lines[0].fields[0].text, "Capabilities");
-		assert_eq!(document.lines[0].fields[1].text, "Completed");
-		channel.into_inner().shutdown(Shutdown::Both).unwrap();
+		check_capabilities(&TcpBinding::new(address, client_keys, server_public)).unwrap();
 		server.join().unwrap();
 		fs::remove_file(database).unwrap();
 		fs::remove_dir_all(root).unwrap();

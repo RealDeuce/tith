@@ -355,6 +355,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "tith-submit"
+version = "0.1.0"
+dependencies = [
+ "base64",
+ "tith-crypto",
+ "tith-ipc",
+ "tith-ipc-tcp",
+ "tith-wire",
+ "windows-sys",
+]
+
+[[package]]
 name = "tith-wire"
 version = "0.1.0"
 dependencies = [
@@ -375,6 +387,7 @@ dependencies = [
  "tith-nodelist",
  "tith-router",
  "tith-store",
+ "tith-submit",
  "tith-wire",
  "windows-sys",
 ]

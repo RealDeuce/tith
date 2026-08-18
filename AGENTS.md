@@ -172,8 +172,10 @@ lengths and outstanding-response accounting cannot resolve.
 
 ## Source Map
 
-- `crates/tith-crypto` is the only Rust crate permitted to contain `unsafe`
-  code or call libhydrogen.
+- `crates/tith-crypto` is the only Rust crate permitted to call libhydrogen.
+  Audited Windows host-binding modules in `tithd` and `tith-submit` may also
+  contain the `unsafe` blocks required by the raw Win32 API; portable modules
+  remain safe Rust.
 - `crates/tith-wire`, `tith-nodelist`, and `tith-exchange` implement the
   normative TTS protocol layer.
 - `crates/tith-config` and `tith-router` implement local routing policy.
@@ -181,6 +183,8 @@ lengths and outstanding-response accounting cannot resolve.
   must not depend on its redb table representation.
 - `crates/tith-ipc` owns canonical local IPC text; binding code carries those
   bytes without inventing another grammar.
+- `crates/tith-submit` owns the command-line IPC client, the reusable client
+  bindings, and the binding-independent conformance check.
 - `crates/tithd` is the blocking reference service and contains host bindings.
   Its native mail listener accepts only operations whose wire grammar and
   durable behavior are implemented; unsupported work receives an explicit

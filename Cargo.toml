@@ -5,6 +5,7 @@ members = [
 	"crates/tith-config",
 	"crates/tith-exchange",
 	"crates/tith-ipc",
+	"crates/tith-submit",
 	"crates/tith-ipc-tcp",
 	"crates/tith-nodelist",
 	"crates/tith-router",

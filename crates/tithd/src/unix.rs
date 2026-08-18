@@ -116,3 +116,30 @@ pub(crate) fn read_request(stream: &mut &UnixStream) -> Result<Vec<u8>, Box<dyn 
 		}
 	}
 }
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+	use std::time::{SystemTime, UNIX_EPOCH};
+	use tith_submit::{UnixBinding, check_capabilities};
+
+	#[test]
+	fn carries_the_binding_independent_capabilities_check() {
+		let unique = SystemTime::now()
+			.duration_since(UNIX_EPOCH)
+			.unwrap()
+			.as_nanos();
+		let root = std::env::temp_dir().join(format!("tith-unix-{unique}"));
+		fs::create_dir_all(&root).unwrap();
+		let socket = root.join("ipc.sock");
+		let listener = UnixListener::bind(&socket).unwrap();
+		let service = IpcService::create(&root.join("state.redb"), &root.join("exports")).unwrap();
+		let server = std::thread::spawn(move || {
+			let (stream, _) = listener.accept().unwrap();
+			transaction(&stream, &service, &Principal::single("unix", "tosser")).unwrap();
+		});
+		check_capabilities(&UnixBinding::new(socket)).unwrap();
+		server.join().unwrap();
+		fs::remove_dir_all(root).unwrap();
+	}
+}

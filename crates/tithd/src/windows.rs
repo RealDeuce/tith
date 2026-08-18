@@ -353,14 +353,8 @@ fn write_all(pipe: HANDLE, mut input: &[u8]) -> io::Result<()> {
 mod tests {
 	use super::*;
 	use std::fs;
-	use std::ptr::null;
 	use std::time::{SystemTime, UNIX_EPOCH};
-	use windows_sys::Win32::Foundation::GENERIC_ALL;
-	use windows_sys::Win32::Storage::FileSystem::{
-		CreateFileW, OPEN_EXISTING, SECURITY_IMPERSONATION, SECURITY_SQOS_PRESENT,
-	};
-	use windows_sys::Win32::System::Pipes::{GetNamedPipeServerProcessId, WaitNamedPipeW};
-	use windows_sys::Win32::System::Threading::{GetCurrentProcess, GetCurrentProcessId};
+	use tith_submit::{NamedPipeBinding, check_capabilities, current_user_sid};
 
 	#[test]
 	fn carries_a_complete_authenticated_transaction() {
@@ -369,67 +363,14 @@ mod tests {
 			.unwrap()
 			.as_nanos();
 		let pipe_name = format!(r"\\.\pipe\tith-test-{unique}");
-		let wide: Vec<u16> = pipe_name.encode_utf16().chain([0]).collect();
 		let root = std::env::temp_dir().join(format!("tith-pipe-{unique}"));
 		fs::create_dir_all(&root).unwrap();
 		let service = IpcService::create(&root.join("state.redb"), &root.join("exports")).unwrap();
-		let server_name = wide.clone();
+		let server_name: Vec<u16> = pipe_name.encode_utf16().chain([0]).collect();
 		let server =
 			std::thread::spawn(move || listen_once(&server_name, &service, "tosser").unwrap());
-		assert_ne!(unsafe { WaitNamedPipeW(wide.as_ptr(), 30_000) }, 0);
-		let raw = unsafe {
-			CreateFileW(
-				wide.as_ptr(),
-				GENERIC_ALL,
-				0,
-				null(),
-				OPEN_EXISTING,
-				SECURITY_SQOS_PRESENT | SECURITY_IMPERSONATION,
-				null_mut(),
-			)
-		};
-		assert_ne!(raw, INVALID_HANDLE_VALUE);
-		let pipe = OwnedHandle(raw);
-		let mut server_pid = 0;
-		assert_ne!(
-			unsafe { GetNamedPipeServerProcessId(pipe.0, &mut server_pid) },
-			0
-		);
-		assert_eq!(server_pid, unsafe { GetCurrentProcessId() });
-		let mut creation: FILETIME = unsafe { zeroed() };
-		let mut exit: FILETIME = unsafe { zeroed() };
-		let mut kernel: FILETIME = unsafe { zeroed() };
-		let mut user: FILETIME = unsafe { zeroed() };
-		assert_ne!(
-			unsafe {
-				GetProcessTimes(
-					GetCurrentProcess(),
-					&mut creation,
-					&mut exit,
-					&mut kernel,
-					&mut user,
-				)
-			},
-			0
-		);
-		let creation =
-			u64::from(creation.dwLowDateTime) | (u64::from(creation.dwHighDateTime) << 32);
-		write_all(pipe.0, REQUEST_MAGIC).unwrap();
-		write_all(pipe.0, &encode_u64(creation)).unwrap();
-		write_all(pipe.0, &encode_u64(0)).unwrap();
-		write_all(pipe.0, b"TITH-IPC 1\nCapabilities\nEnd\n").unwrap();
-		let mut result_magic = [0; 8];
-		read_exact(pipe.0, &mut result_magic).unwrap();
-		assert_eq!(result_magic, *RESULT_MAGIC);
-		assert_eq!(read_integer(pipe.0).unwrap(), 0);
-		write_all(pipe.0, b"A").unwrap();
-		let result = read_document(pipe.0, EnvelopeKind::Result).unwrap();
-		assert!(
-			String::from_utf8(result)
-				.unwrap()
-				.contains("Capabilities Completed")
-		);
-		drop(pipe);
+		let binding = NamedPipeBinding::new(&pipe_name, &current_user_sid().unwrap()).unwrap();
+		check_capabilities(&binding).unwrap();
 		server.join().unwrap();
 		fs::remove_dir_all(root).unwrap();
 	}

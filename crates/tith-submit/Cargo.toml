@@ -1,5 +1,5 @@
 [package]
-name = "tithd"
+name = "tith-submit"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -8,22 +8,13 @@ repository.workspace = true
 
 [dependencies]
 base64.workspace = true
-nix.workspace = true
-tith-config.workspace = true
 tith-crypto.workspace = true
-tith-exchange = { path = "../tith-exchange" }
 tith-ipc = { path = "../tith-ipc" }
 tith-ipc-tcp.workspace = true
-tith-nodelist.workspace = true
-tith-router = { path = "../tith-router" }
-tith-store = { path = "../tith-store" }
 tith-wire.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 windows-sys.workspace = true
-
-[dev-dependencies]
-tith-submit = { path = "../tith-submit" }
 
 [lints]
 workspace = true

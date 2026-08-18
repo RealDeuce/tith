@@ -5,7 +5,6 @@ mod ipc;
 #[cfg(unix)]
 mod mail;
 mod submission;
-#[cfg(unix)]
 mod tcp;
 #[cfg(unix)]
 mod unix;
@@ -15,20 +14,17 @@ mod windows;
 
 use std::error::Error;
 use std::fs;
-#[cfg(unix)]
 use std::net::SocketAddr;
 use std::path::Path;
 use std::sync::Arc;
 
-#[cfg(unix)]
 use base64::Engine as _;
-#[cfg(unix)]
 use base64::engine::general_purpose::STANDARD_NO_PAD;
 use tith_config::ConfigurationSet;
 use tith_config::IdentityRef;
 #[cfg(unix)]
-use tith_crypto::{KX_PUBLIC_KEY_BYTES, KxKeyPair, KxPublicKey, SigningKeyPair};
-#[cfg(windows)]
+use tith_crypto::SigningKeyPair;
+use tith_crypto::{KX_PUBLIC_KEY_BYTES, KxKeyPair, KxPublicKey};
 use tith_crypto::{SECRET_KEY_BYTES, SecretKey};
 use tith_nodelist::Nodelist;
 use tith_wire::address::Address;
@@ -226,7 +222,6 @@ fn run() -> Result<(), Box<dyn Error>> {
 				},
 			)
 		}
-		#[cfg(unix)]
 		Some("serve-tcp") => {
 			let usage = "usage: tithd serve-tcp ADDRESS DATABASE EXPORT-DIRECTORY APPLICATION SERVER-PUBLIC-KEY SERVER-SECRET-FILE CLIENT-PUBLIC-KEY";
 			let address: SocketAddr = arguments.next().ok_or(usage)?.parse()?;
@@ -252,7 +247,6 @@ fn run() -> Result<(), Box<dyn Error>> {
 				None,
 			)
 		}
-		#[cfg(unix)]
 		Some("serve-tcp-mailer") => {
 			let usage = "usage: tithd serve-tcp-mailer ADDRESS DATABASE EXPORT-DIRECTORY APPLICATION SERVER-PUBLIC-KEY SERVER-SECRET-FILE CLIENT-PUBLIC-KEY CONFIG-DIRECTORY NODELIST-DOMAIN NODELIST-FILE LOCAL-IDENTITY NODE-SECRET-FILE";
 			let address: SocketAddr = arguments.next().ok_or(usage)?.parse()?;
@@ -271,10 +265,13 @@ fn run() -> Result<(), Box<dyn Error>> {
 			let configuration = Arc::new(load_config(Path::new(&config_directory))?);
 			let nodelist = Arc::new(Nodelist::parse(&nodelist_domain, &fs::read_to_string(nodelist_file)?)?);
 			let (local_ref, local) = resolve_local(&local_name, &configuration, &nodelist)?;
+			let node_secret: [u8; SECRET_KEY_BYTES] = fs::read(node_secret)?
+				.try_into()
+				.map_err(|_| "node secret key file has the wrong length")?;
 			let submission = Arc::new(submission::SubmissionEngine::new(
 				Arc::clone(&configuration),
 				Arc::clone(&nodelist),
-				[(local_name, submission::LocalSigner { reference: local_ref, identity: local, secret: Arc::new(mail::read_secret(Path::new(&node_secret))?) })],
+				[(local_name, submission::LocalSigner { reference: local_ref, identity: local, secret: Arc::new(SecretKey::from_bytes(node_secret)) })],
 			));
 			tcp::serve(
 				address,
@@ -327,7 +324,6 @@ fn resolve_local(
 	))
 }
 
-#[cfg(unix)]
 fn decode_public(value: &str) -> Result<KxPublicKey, Box<dyn Error>> {
 	if value.len() != 43 || value.contains('=') {
 		return Err("invalid IPC public key".into());
