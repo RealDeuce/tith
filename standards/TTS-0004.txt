@@ -3,7 +3,7 @@ TITH                                              THIS ISN'T THAT HARD
 **********************************************************************
 
 Publication:  TTS‑0004
-Revision:     1
+Revision:     2
 Title:        Node Addresses
 Author(s):    Stephen Hurd
 Date:         2026‑08‑17
@@ -179,7 +179,12 @@ Contents
   components eliminated to keep the overall size of the list as small
   as possible.  This section defines how such a list is constructed.
 
-  The list is first sorted.  The sort order of Domains is based on a
+  Exact duplicate addresses are first removed.  A Trimmed Collection
+  is a set; unlike a Trimmed List, repeated occurrences do not carry
+  information.
+
+  The remaining addresses are sorted.  The sort order of Domains is
+  based on a
   binary comparison of the unsigned value of each byte of the UTF‑8
   ncoding starting with the first byte.  The lower byte value is
   sorted first.  If a byte is not present in one of the two, the
@@ -197,27 +202,33 @@ Contents
   fidonet#1:2/103.1,BBSDev#885,BBSDev#885:1,BBSDev#885:1/1,
   BBSDev#885:1/2
 
-  Would first be sorted to: BBSDev#885,BBSDev#885:1,BBSDev#885:1/1,
-  BBSDev#885:1/2,fidonet#1,fidonet#1:2,fidonet#1:2/103,
+  Would first have the duplicate BBSDev#885:1/1 removed and be sorted
+  to: BBSDev#885:1,BBSDev#885:1/1,BBSDev#885:1/2,BBSDev#885,
+  fidonet#1,fidonet#1:2,fidonet#1:2/103,
   fidonet#1:2/103.1
 
-  Then be trimmed to: BBSDev#885,:1,/1,/2,fidonet#1,:2,/103,.1
+  Then be trimmed to: BBSDev#885:1,/1,/2,:885,fidonet#1,:2,
+  /103,.1
 
 
 6. Trimmed Lists
 ────────────────
 
   Some components of FTN such as PATH use "Trimmed Lists" of node
-  addresses.  These lists do not have their order changed, but
-  redundant components are eliminated as in section 5 to reduce the
-  size.
+  addresses.  These lists do not have their order changed and every
+  occurrence is retained, but redundant components are eliminated as
+  in section 5 to reduce the size.  An enclosing protocol may reject
+  or diagnose a repeated address; this encoding does not remove one.
+  When an address is identical to the immediately preceding address,
+  its complete canonical address is emitted because removing every
+  component would leave an empty list element.
 
   Example: fidonet#1,fidonet#1:2,fidonet#1:2/103,BBSDev#885:1/1,
   fidonet#1:2/103.1,BBSDev#885,BBSDev#885:1,BBSDev#885:1/1,
   BBSDev#885:1/2
 
   Would be trimmed to: fidonet#1,:2,/103,BBSDev#885:1/1,
-  fidonet#1:2/103,BBSDev#885,:1,/1
+  fidonet#1:2/103.1,BBSDev#885,:1,/1,/2
 
 
 7. Wildcards
@@ -245,7 +256,7 @@ Contents
   BBSDev#* matches any node in domain "BBSDev"
   BBSDev#*/0 Matches any node in domain "BBSDev" with a Node of 0
   *:1 Matches any node with a Net of one
-  *#<885,1-6> Matches nodes with a Domain of 885, 1, 2, 3, 4, 5, or 6
+  *#<885,1-6> Matches nodes with a Zone of 885, 1, 2, 3, 4, 5, or 6
 
 
 A. References
@@ -267,5 +278,9 @@ B. History
 ──────────
 
    Rev.1, 2025‑11‑15: Initial Release.
+
+   Rev.2, 2026‑08‑17: Defined collection duplicate removal and numeric
+   sorting, corrected the collection and list examples, and corrected
+   the wildcard example terminology.
 
 **********************************************************************

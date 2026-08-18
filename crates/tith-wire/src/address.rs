@@ -223,19 +223,10 @@ impl Ord for Address {
 			.as_bytes()
 			.cmp(other.domain.as_bytes())
 			.then_with(|| self.zone.cmp(&other.zone))
-			.then_with(|| {
-				default_first(self.net, self.zone).cmp(&default_first(other.net, other.zone))
-			})
-			.then_with(|| default_first(self.node, 0).cmp(&default_first(other.node, 0)))
-			.then_with(|| {
-				default_first(i32::from(self.point), 0)
-					.cmp(&default_first(i32::from(other.point), 0))
-			})
+			.then_with(|| self.net.cmp(&other.net))
+			.then_with(|| self.node.cmp(&other.node))
+			.then_with(|| self.point.cmp(&other.point))
 	}
-}
-
-fn default_first(value: i32, default: i32) -> (bool, i32) {
-	(value != default, value)
 }
 
 impl PartialOrd for Address {
@@ -274,9 +265,12 @@ pub fn format_trimmed_list(addresses: &[Address]) -> String {
 					write!(&mut output, ".{}", address.point).expect("String writes cannot fail");
 				}
 			}
-			Some(_) => {
+			Some(prior) if prior.point != address.point => {
 				output.push('.');
 				output.push_str(&address.point.to_string());
+			}
+			Some(_) => {
+				output.push_str(&address.to_string());
 			}
 		}
 		previous = Some(address);
@@ -546,12 +540,19 @@ mod tests {
 		.map(address);
 		assert_eq!(
 			format_trimmed_collection(&input),
-			"BBSDev#885,:1,/1,/2,fidonet#1,:2,/103,.1"
+			"BBSDev#885:1,/1,/2,:885,fidonet#1,:2,/103,.1"
 		);
 		assert_eq!(
 			format_trimmed_list(&input),
 			"fidonet#1,:2,/103,BBSDev#885:1/1,fidonet#1:2/103.1,BBSDev#885,:1,/1,/2"
 		);
+	}
+
+	#[test]
+	fn collections_deduplicate_but_lists_preserve_repetitions() {
+		let input = ["fidonet#1/2", "fidonet#1/2"].map(address);
+		assert_eq!(format_trimmed_collection(&input), "fidonet#1/2");
+		assert_eq!(format_trimmed_list(&input), "fidonet#1/2,fidonet#1/2");
 	}
 
 	#[test]
