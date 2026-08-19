@@ -3,11 +3,11 @@ TITH                                              THIS ISN'T THAT HARD
 **********************************************************************
 
 Publication:  TTS‑5000
-Revision:     3
+Revision:     4
 Title:        The Distribution Nodelist
 Author(s):    FTSC Members, Administrator, Honoured Guests and
               Stephen Hurd
-Date:         2026‑08‑18
+Date:         2026‑08‑19
 ══════════════════════════════════════════════════════════════════════
 
 Status of this document
@@ -140,8 +140,7 @@ Contents
   position followed by zero or more alphabetic characters called
   "interest flags."  A program which processes the nodelist may use
   comment interest flags to determine the disposition of a comment
-  line.  The remainder of a comment line (with one exception, treated
-  below) is free‐form text.
+  line.  The remainder of a comment line is free‐form text.
 
   There are five interest flags defined as follows:
 
@@ -157,6 +156,23 @@ Contents
         generating program.
 
      ;  This comment may be ignored by a nodelist processor.
+
+  A nodelist has no header line.  The first line of a file is an
+  ordinary line of whichever kind it is, and no line carries a
+  meaning the same line would not carry elsewhere in the same file.
+
+  FTS‑5000.005 reserved the first line of a distribution nodelist for
+  a comment carrying the day number and a CRC of the file.  This
+  document does not define that line, so in a TTS‑5000 nodelist it is
+  an ordinary comment.  A converter SHOULD retain it unchanged, since
+  it records which FTS‑5000.005 nodelist the file was converted from,
+  and MUST NOT rewrite it to describe the converted file.
+
+  No value appearing on a comment line is interpreted, and a processor
+  MUST NOT validate one or refuse a nodelist because one does not
+  match the file.  In particular, a retained FTS‑5000.005 first line
+  states a CRC of the file it was converted from and not of the file
+  containing it, so that value will not match and is not expected to.
 
 
 5.2.  Data lines
@@ -195,9 +211,29 @@ Contents
       Pvt
         This keyword defines a Private node (see Policy v4.07,
         Section 2.1.9) — i.e. a node that is operational, but
-        not publicly available for direct contact. When this keyword
-        is used, field six should be empty, and no internet or email
-        addresses should be specified in flags fields.
+        not publicly available for direct contact.
+
+        A Private node publishes no means of direct contact.  When
+        this keyword is used, field 6 MUST be empty, and a flag in
+        field 9 or field 10 MUST NOT carry a value.  A data line
+        which does otherwise is invalid, and a processor MUST reject
+        it.
+
+        One flag form is excepted.  IIH:<PublicKey>, the form which
+        carries a public key and nothing else, is permitted, because
+        it publishes no endpoint (see field 9).  A Private node
+        therefore still publishes the key by which data whose Origin
+        is that node is authenticated.  Every other value a flag in
+        those two fields can carry is a server address, a port, or an
+        email address, and so is a means of direct contact.
+
+        A converter from an FTS‑5000.005 nodelist which encounters
+        such an entry MUST remove the Pvt keyword, leaving field 1
+        empty, and SHOULD report having done so.  A system whose
+        contact information is published is not private, and it is
+        that keyword, rather than the contact information, which the
+        source nodelist contradicts.  A converter MUST NOT resolve
+        this by discarding the entry or its flags.
 
         If the originating node cannot contact the destination node,
         mail may instead be routed via its Hub or Host.
@@ -407,7 +443,8 @@ Contents
      specified by FTS‑5001.006 in this field supplies the address.  The
      only such flag currently defined is INA.  If there is no such
      flag, the IIH value still publishes its PublicKey but does not
-     supply a usable server endpoint.
+     supply a usable server endpoint.  That form, IIH:<PublicKey>
+     alone, is the only one a Pvt entry may carry; see field 1.
 
      <port> is a decimal integer from 1 through 65535 with no leading
      zero.  When it is omitted, it means the registered default TITH
@@ -464,10 +501,10 @@ Contents
   nodelist, as it is assembled from multiple zone‐lists.
 
   The format and structure is the same as the Distribution Nodelist,
-  including the header, with a base filename of local invention,
-  usually derived from the contents of the segment (e.g.
-  fidonet-N712list.nnn or fidonet-N712seg.nnn for a segment containing
-  all the nodes in Net 712 of fidonet).
+  with a base filename of local invention, usually derived from the
+  contents of the segment (e.g. fidonet-N712list.nnn or
+  fidonet-N712seg.nnn for a segment containing all the nodes in Net
+  712 of fidonet).
 
   To generate the Distribution Nodelist, segments propagate up through
   the network's administrative hierarchy, each tier compiling segments
@@ -524,5 +561,11 @@ B. History
 
    Rev.3, 2026‑08‑18: Defined the nodelist key's precedence over an
    item's SignedOrigin fallback.
+
+   Rev.4, 2026‑08‑19: Stated that a nodelist has no header line and
+   that a retained FTS‑5000.005 first line is an ordinary comment
+   whose contents are not interpreted.  Made the Private contact
+   information rule normative, excepted the endpointless IIH form
+   from it, and defined what a converter does with such an entry.
 
 **********************************************************************

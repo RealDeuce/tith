@@ -103,3 +103,76 @@ fn converted_output_applies_the_tts_5000_field_rules() {
 	// TTS-5000 field 10 requires an IEM carrying an address to be first.
 	assert_eq!(node.email_flags, ["IEM:sysop@example.org", "ITX"]);
 }
+
+/// TTS-5000 section 5.2 field 1 forbids a Pvt entry to publish a means of
+/// direct contact. The converter removes the keyword, so what it writes is
+/// exactly what the native parser will accept.
+#[test]
+fn a_private_entry_which_publishes_contact_information_converts_to_a_normal_node() {
+	let source = b"\
+Zone,1,Zone_One,Somewhere,Zone_Coordinator,-Unpublished-,9600,CM\r\n\
+Host,20,Net_Twenty,Ada_MI,Net_Coordinator,-Unpublished-,9600,CM\r\n\
+Pvt,50,Private_Node,Ada_MI,Another_Sysop,-Unpublished-,9600,CM,INA:pvt.example.org,IBN\r\n";
+
+	let mut warnings = Vec::new();
+	let output = convert(source, &Overrides::default(), &mut |warning| {
+		warnings.push(warning);
+	})
+	.expect("fragment converts");
+	assert_eq!(warnings, vec![Warning::PrivateKeywordStripped { line: 3 }]);
+
+	let nodelist = Nodelist::parse("fidonet", &output).expect("converted nodelist parses");
+	let entry = nodelist
+		.get(&"fidonet#1:20/50".parse().expect("node address"))
+		.expect("the entry survived as a normal node");
+	assert_eq!(entry.keyword, Keyword::Normal);
+	// Only the keyword went; the addresses the source published remain.
+	assert_eq!(entry.internet_flags, ["INA:pvt.example.org", "IBN"]);
+}
+
+/// The one flag form a Pvt entry may carry, so that a private node still
+/// publishes the key its Origin is authenticated with.
+#[test]
+fn a_private_entry_keeps_an_endpointless_iih_key() {
+	let source = b"\
+Zone,1,Zone_One,Somewhere,Zone_Coordinator,-Unpublished-,9600,CM\r\n\
+Host,20,Net_Twenty,Ada_MI,Net_Coordinator,-Unpublished-,9600,CM\r\n\
+Pvt,50,Private_Node,Ada_MI,Another_Sysop,-Unpublished-,9600,IIH:x8p4jN0PtHsr0nHxLmnw3Uy3v8kZfOZeMcxOWUeMOoo\r\n";
+
+	let mut warnings = Vec::new();
+	let output = convert(source, &Overrides::default(), &mut |warning| {
+		warnings.push(warning);
+	})
+	.expect("fragment converts");
+	assert!(warnings.is_empty(), "unexpected warnings: {warnings:?}");
+
+	let nodelist = Nodelist::parse("fidonet", &output).expect("converted nodelist parses");
+	let address = "fidonet#1:20/50".parse().expect("node address");
+	let entry = nodelist.get(&address).expect("Pvt entry is present");
+	assert_eq!(entry.keyword, Keyword::Private);
+	// A key without an endpoint: authenticated, but not contactable.
+	let service = entry.tith.as_ref().expect("the key survived conversion");
+	assert!(!service.endpoints[0].is_usable());
+}
+
+/// TTS-5000 section 5.1 gives a nodelist no header, so an FTS-5000.005 first
+/// line converts to an ordinary comment and nothing reads its CRC.
+#[test]
+fn the_legacy_header_line_converts_to_an_ordinary_comment() {
+	let source = b"\
+;A Friday, August 14, 2026 -- Day number 226 : 12345\r\n\
+Zone,1,Zone_One,Somewhere,Zone_Coordinator,-Unpublished-,9600,CM\r\n";
+
+	let mut warnings = Vec::new();
+	let output = convert(source, &Overrides::default(), &mut |warning| {
+		warnings.push(warning);
+	})
+	.expect("fragment converts");
+	assert!(warnings.is_empty(), "unexpected warnings: {warnings:?}");
+
+	// Retained unchanged, so the source nodelist can still be identified.
+	assert!(output.starts_with(";A Friday, August 14, 2026 -- Day number 226 : 12345\n"));
+	// The stale CRC is not a parse concern: it is comment text like any other.
+	let nodelist = Nodelist::parse("fidonet", &output).expect("converted nodelist parses");
+	assert_eq!(nodelist.len(), 1);
+}

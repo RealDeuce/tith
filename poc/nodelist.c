@@ -22,16 +22,19 @@
  * For unpublished phone numbers, a blank string is used
  * DCE speed field is removed
  * 
- * Comment lines are unchanged from FTS-5000 with the exception of the
- * special header. While it is retained, it is not modified, so the
- * checksum is invalid.
+ * Comment lines are unchanged from FTS-5000. TTS-5000 section 5.1 gives a
+ * nodelist no header, so the FTS-5000 special first line is retained as an
+ * ordinary comment, which records the nodelist this file was converted from.
+ * It is not modified, and no reader interprets the checksum it states.
  * 
  * Flags are split into five fields, and are separated with commas
  *
  * The fields in data lines are:
- * Keyword - Mostly unchanged from FTS-5000, but does not allow Pvt to
- *           be used when an internet address is present, regardless of
- *           local policy.
+ * Keyword - Mostly unchanged from FTS-5000, but TTS-5000 section 5.2 field 1
+ *           does not allow Pvt on an entry which publishes a means of direct
+ *           contact, regardless of local policy. A converter removes the
+ *           keyword rather than the contact information. This frozen utility
+ *           does not implement that; crates/tith-nodelist-legacy does.
  * Node number - Unchanged from FTS-5000
  * Node name - May not contain control characters, no other formatting limitations
  *             The primary purpose is to serve as an identifier that is displayed
@@ -352,7 +355,9 @@ main(int argc, char **argv)
 		char *next;
 
 		// Keyword
-		// TODO: Strip Pvt when an internet address is present
+		// TODO: TTS-5000 section 5.2 field 1: strip Pvt when field 6 is
+		// present, or when a field 9 or 10 flag carries a value other
+		// than a bare IIH:<PublicKey>
 		char *field = getfield(linebuf, &next);
 		const enum TITH_NodelistLineType type = tith_parseNodelistKeyword(field, &curAddr);
 		if (type == TYPE_Unknown) {

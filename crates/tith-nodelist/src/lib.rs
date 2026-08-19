@@ -94,6 +94,7 @@ pub enum NodelistErrorKind {
 	InvalidHierarchy,
 	DuplicateAddress,
 	InvalidPhone,
+	PrivateContact,
 	InvalidFlag,
 	InvalidPublicKey,
 	InvalidEndpoint,
@@ -271,6 +272,18 @@ fn parse_iih(
 	))
 }
 
+/// TTS-5000 section 5.2 field 1: a Private node publishes no means of direct
+/// contact, so no flag in field 9 or 10 may carry a value. The one exception is
+/// `IIH:<PublicKey>`, which publishes a key and no endpoint; every other value
+/// those fields can carry is a server address, a port, or an email address.
+fn publishes_contact(flag: &str) -> bool {
+	match flag.split_once(':') {
+		None => false,
+		Some(("IIH", value)) => value.contains(':'),
+		Some(_) => true,
+	}
+}
+
 fn validate_phone(phone: &str) -> bool {
 	if phone.is_empty() {
 		return true;
@@ -382,6 +395,15 @@ impl Nodelist {
 			let internet_flags = flags(fields[8]).map_err(|kind| fail(line_number, kind))?;
 			let email_flags = flags(fields[9]).map_err(|kind| fail(line_number, kind))?;
 			let other_flags = flags(fields[10]).map_err(|kind| fail(line_number, kind))?;
+			if keyword == Keyword::Private
+				&& (!fields[5].is_empty()
+					|| internet_flags
+						.iter()
+						.chain(&email_flags)
+						.any(|flag| publishes_contact(flag)))
+			{
+				return Err(fail(line_number, NodelistErrorKind::PrivateContact));
+			}
 			if let Some(position) = internet_flags
 				.iter()
 				.position(|flag| flag.starts_with("INA:"))
@@ -562,6 +584,69 @@ mod tests {
 		);
 		assert!(service.endpoints[0].is_usable());
 		assert!(!service.endpoints[2].is_usable());
+	}
+
+	#[test]
+	fn rejects_a_private_entry_which_publishes_contact_information() {
+		let key = STANDARD_NO_PAD.encode([13; 32]);
+		let prefix = [line("Zone", 1, ""), line("Host", 10, "")].concat();
+		for field_9 in [
+			"INA:example.org",
+			"IBN:example.org:24554",
+			&format!("IIH:example.org:24555:{key}"),
+			&format!("IIH::24555:{key}"),
+		] {
+			let input = format!("{prefix}Pvt\t20\tNode\tLocation\tSysop\t\tCM\t\t{field_9}\t\t\n");
+			assert!(
+				matches!(
+					Nodelist::parse("fidonet", &input),
+					Err(NodelistError {
+						kind: NodelistErrorKind::PrivateContact,
+						line: 3,
+					})
+				),
+				"field 9 {field_9}"
+			);
+		}
+
+		// Field 10 and the phone number are the same rule.
+		let with_email =
+			format!("{prefix}Pvt\t20\tNode\tLocation\tSysop\t\t\t\t\tIEM:sysop@example.org\t\n");
+		let with_phone =
+			format!("{prefix}Pvt\t20\tNode\tLocation\tSysop\t1-616-555-0100\t\t\t\t\t\n");
+		for input in [with_email, with_phone] {
+			assert!(matches!(
+				Nodelist::parse("fidonet", &input),
+				Err(NodelistError {
+					kind: NodelistErrorKind::PrivateContact,
+					..
+				})
+			));
+		}
+	}
+
+	#[test]
+	fn accepts_a_private_entry_carrying_only_an_endpointless_iih_key() {
+		// TTS-5000 section 5.2 field 1 excepts this form, so a Private node is
+		// still authenticated from its own nodelist key.
+		let key = STANDARD_NO_PAD.encode([14; 32]);
+		let input = [
+			line("Zone", 1, ""),
+			line("Host", 10, ""),
+			format!("Pvt\t20\tNode\tLocation\tSysop\t\tCM\t\tIIH:{key},IBN\t\t\n"),
+		]
+		.concat();
+		let list = Nodelist::parse("fidonet", &input).unwrap();
+		let address: Address = "fidonet#1:10/20".parse().unwrap();
+		let entry = list.get(&address).unwrap();
+		assert_eq!(entry.keyword, Keyword::Private);
+		assert_eq!(
+			list.public_key(&address),
+			Some(PublicKey::from_bytes([14; 32]))
+		);
+		// The key is published, but it supplies no endpoint to contact.
+		let service = entry.tith.as_ref().unwrap();
+		assert!(!service.endpoints[0].is_usable());
 	}
 
 	#[test]

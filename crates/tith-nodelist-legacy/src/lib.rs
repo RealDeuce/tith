@@ -14,6 +14,7 @@ mod flags;
 use std::collections::BTreeMap;
 use std::fmt;
 
+use flags::publishes_contact;
 pub use flags::{Field, classify};
 
 /// A condition that stops conversion.
@@ -71,10 +72,10 @@ pub enum Warning {
 	MissingZone { line: usize },
 	/// No table in `flags` matched, so the flag went to TTS-5000 field 11.
 	UnknownFlag { line: usize, flag: String },
-	/// TTS-5000 section 5.2 field 1 says a Pvt entry should have an empty
-	/// phone number and no internet or email address. The entry is converted
-	/// unchanged; see the crate documentation.
-	PrivateWithContactAddress { line: usize },
+	/// TTS-5000 section 5.2 field 1 forbids a Pvt entry to publish a means of
+	/// direct contact, and requires a converter to remove the keyword rather
+	/// than the contact information. The entry became a normal node.
+	PrivateKeywordStripped { line: usize },
 }
 
 impl fmt::Display for Warning {
@@ -95,9 +96,9 @@ impl fmt::Display for Warning {
 					"line {line}: unrecognised flag \"{flag}\", placed in Other"
 				)
 			}
-			Self::PrivateWithContactAddress { line } => write!(
+			Self::PrivateKeywordStripped { line } => write!(
 				f,
-				"line {line}: Pvt entry has a phone number or internet address"
+				"line {line}: Pvt entry publishes contact information, keyword removed"
 			),
 		}
 	}
@@ -330,9 +331,12 @@ fn hoist(list: &mut Vec<String>, prefix: &str) {
 
 /// Converts an FTS-5000.005 nodelist into TTS-5000 form.
 ///
-/// Comment lines pass through unchanged. A `0x1A` at the start of a line ends
-/// the input. Lines whose keyword or node number cannot be converted are
-/// reported through `warn` and omitted.
+/// Comment lines pass through unchanged, including the FTS-5000.005 first line
+/// with its day number and CRC: TTS-5000 section 5.1 gives a nodelist no header,
+/// so that line becomes an ordinary comment recording the source nodelist, and
+/// nothing reads the CRC it states. A `0x1A` at the start of a line ends the
+/// input. Lines whose keyword or node number cannot be converted are reported
+/// through `warn` and omitted.
 pub fn convert(
 	input: &[u8],
 	overrides: &Overrides,
@@ -426,10 +430,19 @@ pub fn convert(
 		hoist(&mut buckets.internet, "INA:");
 		hoist(&mut buckets.email, "IEM:");
 
+		// TTS-5000 section 5.2 field 1: the source nodelist contradicts its own
+		// Pvt keyword, and it is the keyword which the converter removes.
+		let mut keyword = keyword;
 		if keyword == "Pvt"
-			&& (!phone.is_empty() || !buckets.internet.is_empty() || !buckets.email.is_empty())
+			&& (!phone.is_empty()
+				|| buckets
+					.internet
+					.iter()
+					.chain(&buckets.email)
+					.any(|flag| publishes_contact(flag)))
 		{
-			warn(Warning::PrivateWithContactAddress { line });
+			warn(Warning::PrivateKeywordStripped { line });
+			keyword = "";
 		}
 
 		let record = [
@@ -538,13 +551,54 @@ mod tests {
 	}
 
 	#[test]
-	fn warns_about_a_private_entry_with_a_contact_address() {
-		let (_, warnings) =
-			convert_ok("Zone,1,N,L,S,,,\r\nHost,10,N,L,S,,,\r\nPvt,20,N,L,S,,,IBN:example.org\r\n");
-		assert_eq!(
-			warnings,
-			vec![Warning::PrivateWithContactAddress { line: 3 }]
-		);
+	fn strips_the_private_keyword_from_an_entry_which_publishes_contact_information() {
+		for (line, published) in [
+			("Pvt,20,N,L,S,,,IBN:example.org", "IBN:example.org"),
+			("Pvt,20,N,L,S,,,INA:example.org", "INA:example.org"),
+			(
+				"Pvt,20,N,L,S,,,IEM:sysop@example.org",
+				"IEM:sysop@example.org",
+			),
+			(
+				"Pvt,20,N,L,S,,,IIH:example.org:24555:key",
+				"IIH:example.org:24555:key",
+			),
+			("Pvt,20,N,L,S,,,IIH::24555:key", "IIH::24555:key"),
+			("Pvt,20,N,L,S,1-616-555-0100,,", "1-616-555-0100"),
+		] {
+			let input = format!("Zone,1,N,L,S,,,\r\nHost,10,N,L,S,,,\r\n{line}\r\n");
+			let (output, warnings) = convert_ok(&input);
+			assert_eq!(
+				warnings,
+				vec![Warning::PrivateKeywordStripped { line: 3 }],
+				"line {line}"
+			);
+			// The keyword went; the contact information the source published
+			// stayed, because it is the keyword the entry contradicts.
+			let last = output.lines().next_back().unwrap();
+			let fields: Vec<_> = last.split('\t').collect();
+			assert_eq!(fields[0], "", "line {line}");
+			assert_eq!(fields[1], "20", "line {line}");
+			assert!(last.contains(published), "line {line}: {last}");
+		}
+	}
+
+	#[test]
+	fn keeps_the_private_keyword_when_no_contact_information_is_published() {
+		// TTS-5000 section 5.2 field 1 excepts the endpointless IIH form, so a
+		// Pvt node keeps the key its Origin is authenticated with.
+		for line in [
+			"Pvt,20,N,L,S,-Unpublished-,,IIH:x8p4jN0PtHsr0nHxLmnw3Uy3v8kZfOZeMcxOWUeMOoo",
+			"Pvt,20,N,L,S,,,IBN",
+			"Pvt,20,N,L,S,,,ITX",
+			"Pvt,20,N,L,S,,,",
+		] {
+			let input = format!("Zone,1,N,L,S,,,\r\nHost,10,N,L,S,,,\r\n{line}\r\n");
+			let (output, warnings) = convert_ok(&input);
+			assert!(warnings.is_empty(), "line {line}: {warnings:?}");
+			let last = output.lines().next_back().unwrap();
+			assert_eq!(last.split('\t').next().unwrap(), "Pvt", "line {line}");
+		}
 	}
 
 	#[test]

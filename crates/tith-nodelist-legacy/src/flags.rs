@@ -118,6 +118,23 @@ fn is_online_period(flag: &str) -> bool {
 			.all(|byte| byte.is_ascii_alphabetic() && byte.to_ascii_uppercase() <= b'X')
 }
 
+/// True when a field 9 or field 10 flag publishes a means of direct contact.
+///
+/// TTS-5000 section 5.2 field 1 forbids one on a Pvt entry: every value such a
+/// flag can carry is a server address, a port, or an email address, except
+/// `IIH:<PublicKey>`, which publishes a key and no endpoint.
+///
+/// `tith-nodelist` applies the same rule when parsing and carries its own copy,
+/// because this crate is a legacy boundary and must not depend on the native
+/// protocol layer.
+pub(crate) fn publishes_contact(flag: &str) -> bool {
+	match flag.split_once(':') {
+		None => false,
+		Some(("IIH", value)) => value.contains(':'),
+		Some(_) => true,
+	}
+}
+
 /// Classifies one flag, or returns `None` when no table or shape rule matches.
 ///
 /// An unmatched flag still belongs in TTS-5000 field 11, which catches "any
