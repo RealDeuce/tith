@@ -714,6 +714,25 @@ fn read_via(value: &OwnedTlv) -> Result<ViaData, BundleError> {
 	})
 }
 
+/// The Vias an item carries, in the order they were added.
+///
+/// A relaying node needs these and nothing else from the item: TSP-0002
+/// section 5 has it compare the next hop it selects against every Via and fail
+/// as Loop on a match, so reading the whole Message would be more work and more
+/// ways to fail than the question requires.
+///
+/// # Errors
+///
+/// Returns [`BundleError`] when the item is not a sequence of TLV values or a
+/// Via does not decode.
+pub fn item_vias(item: &OwnedTlv) -> Result<Vec<ViaData>, BundleError> {
+	parse_sequence(&item.value)?
+		.iter()
+		.filter(|child| child.type_code == types::VIA)
+		.map(read_via)
+		.collect()
+}
+
 /// Decodes a `ReplyTo` into the address and complete identifier string.
 fn read_reply_to(value: &OwnedTlv) -> Result<(Address, String), BundleError> {
 	let (address, used) = take_encoded_tlv(&value.value)?;

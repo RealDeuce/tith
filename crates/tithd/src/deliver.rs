@@ -535,6 +535,7 @@ impl Outbound {
 			store: &self.inbound,
 			application: &self.application,
 			configuration: &self.configuration,
+			nodelist: &self.nodelist,
 			local_ref: &local.reference,
 			local: &local.identity,
 		};

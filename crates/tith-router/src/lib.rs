@@ -271,12 +271,20 @@ pub fn routes_for<'a>(config: &'a ConfigurationSet, local: &IdentityRef) -> Opti
 }
 
 #[must_use]
+/// Resolves the policy for each permanent failure kind.
+///
+/// TSP-0002 section 6 selects in a fixed order: the override on the Route which
+/// supplied the method list, then the override on the relay rule which applied,
+/// then the first matching Failure line, then Failure-Default, then Dead-Letter
+/// with notification None. `relay_override` is the second level and is absent
+/// for a locally submitted item, which passes through no relay rule.
 pub fn failure_policies(
 	config: &ConfigurationSet,
 	routes: &Routes,
 	origin: &Identity,
 	destination: &Identity,
 	route_rule: Option<usize>,
+	relay_override: Option<FailurePolicy>,
 	nodelist: &Nodelist,
 ) -> [FailurePolicy; 5] {
 	let kinds = [
@@ -286,11 +294,12 @@ pub fn failure_policies(
 		FailureKind::Rejected,
 		FailureKind::Authentication,
 	];
-	let route_override = route_rule
+	let selected = route_rule
 		.and_then(|index| routes.routes.get(index))
-		.and_then(|rule| rule.on_failure);
+		.and_then(|rule| rule.on_failure)
+		.or(relay_override);
 	kinds.map(|kind| {
-		route_override.unwrap_or_else(|| {
+		selected.unwrap_or_else(|| {
 			routes
 				.failures
 				.iter()

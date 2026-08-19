@@ -138,6 +138,7 @@ impl Mailer {
 			store: &self.store,
 			application: &self.application,
 			configuration: &self.configuration,
+			nodelist: &self.nodelist,
 			local_ref: &self.local_ref,
 			local: &self.local,
 		}
@@ -1186,6 +1187,119 @@ mod tests {
 		let stored = stored_item(&receiver, "check").expect("the peer stored the NetMail");
 		let values = parse_sequence(&stored).unwrap();
 		assert_eq!(values[0].type_code, types::MESSAGE);
+	}
+
+	/// A three node line: mail transits the middle node without an application.
+	#[test]
+	fn a_hub_relays_netmail_it_is_not_the_destination_of() {
+		let sender_keys = SigningKeyPair::from_seed(&[61; 32]).unwrap();
+		let hub_keys = SigningKeyPair::from_seed(&[62; 32]).unwrap();
+		let far_keys = SigningKeyPair::from_seed(&[63; 32]).unwrap();
+		let hub_listener = TcpListener::bind("127.0.0.1:0").unwrap();
+		let hub_port = hub_listener.local_addr().unwrap().port();
+		let far_listener = TcpListener::bind("127.0.0.1:0").unwrap();
+		let far_port = far_listener.local_addr().unwrap().port();
+		let line = |keyword: &str, number: u16, key: &SigningKeyPair, port: u16| {
+			format!(
+				"{keyword}\t{number}\tNode\tLocation\tSysop\t\tCM\t\tIIH:127.0.0.1:{port}:{}\t\t\n",
+				STANDARD_NO_PAD.encode(key.public.as_bytes())
+			)
+		};
+		let list = Arc::new(
+			Nodelist::parse(
+				"fidonet",
+				&[
+					line("Zone", 1, &sender_keys, 1),
+					line("", 2, &hub_keys, hub_port),
+					line("", 3, &far_keys, far_port),
+				]
+				.concat(),
+			)
+			.unwrap(),
+		);
+
+		// The hub authorizes the relay and routes onward by the default methods.
+		let hub = node(
+			"relay-hub",
+			"fidonet#1/2",
+			hub_keys,
+			"Peer sender\nAddress fidonet#1\nEnd\n",
+			"Routes fidonet#1/2\nAllow-Relay From All Origin All Destination All\nEnd\n",
+			&list,
+		);
+		let far = node(
+			"relay-far",
+			"fidonet#1/3",
+			far_keys,
+			"Peer hub\nAddress fidonet#1/2\nEnd\n",
+			"Routes fidonet#1/3\nEnd\n",
+			&list,
+		);
+		let hub_server = accept(hub_listener, &hub.mailer, 1);
+		let far_server = accept(far_listener, &far.mailer, 1);
+
+		let sender = node(
+			"relay-sender",
+			"fidonet#1",
+			sender_keys,
+			&format!("Peer hub\nAddress fidonet#1/2\nEndpoint 127.0.0.1 {hub_port}\nEnd\n"),
+			"Routes fidonet#1\nEnd\n",
+			&list,
+		);
+		// Addressed to the far node but committed to the hub, which is the whole
+		// point: the sender has no route of its own to fidonet#1/3.
+		let job = submit(&sender, "fidonet#1/3", "Active \"@hub\"", "relayed");
+		let sending = schedule(&sender.mailer.local_ref, Vec::new());
+		let summary = driver(&sender)
+			.run_pass(&sending, now(), now() + 3600)
+			.unwrap();
+		hub_server.join().unwrap();
+		assert_eq!(summary.delivered, 1, "the hub accepted the relay");
+		assert_eq!(job_state(&sender, &job), tith_store::JobState::Delivered);
+
+		// The hub spooled it rather than storing it for a consumer.
+		assert!(
+			stored_item(&hub, "probe").is_none(),
+			"a relayed item never becomes an inbound item"
+		);
+		let hub_outbound = hub.mailer.store.outbound().unwrap();
+		let relayed_jobs: Vec<_> = hub_outbound
+			.events("tithd-relay")
+			.unwrap()
+			.into_iter()
+			.map(|event| hub_outbound.query(&event.job_id).unwrap())
+			.collect();
+		assert_eq!(relayed_jobs.len(), 1);
+		assert_eq!(
+			relayed_jobs[0].deliveries[0].next_hop, "fidonet#1/3",
+			"Direct is eligible for the far node"
+		);
+
+		// Now let the hub send it on.
+		let hub_schedule = schedule(&hub.mailer.local_ref, Vec::new());
+		let hub_summary = driver(&hub)
+			.run_pass(&hub_schedule, now(), now() + 3600)
+			.unwrap();
+		far_server.join().unwrap();
+		assert_eq!(hub_summary.delivered, 1);
+
+		let arrived = stored_item(&far, "check").expect("the far node stored the relayed NetMail");
+		let value = parse_sequence(&arrived).unwrap().remove(0);
+		let vias = tith_wire::item::item_vias(&value).unwrap();
+		assert_eq!(
+			vias.last().unwrap().address,
+			"fidonet#1/2".parse::<Address>().unwrap(),
+			"the hub recorded itself in a Via"
+		);
+		// The end-to-end signature still validates against the original signer,
+		// which is the entire reason a relay rebuilds only the routing suffix.
+		let validated = tith_wire::item::validate_item(&value, far.mailer.as_ref())
+			.unwrap()
+			.unwrap();
+		assert_eq!(
+			validated.authentication,
+			Some(tith_store::ItemAuthentication::OriginValid)
+		);
 	}
 
 	/// The Passive half: a held copy only moves when the peer asks for it.

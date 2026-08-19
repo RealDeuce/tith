@@ -28,7 +28,7 @@ use tith_wire::item::{
 	build_originated_message, forward_item, validate_item,
 };
 
-const SOFTWARE: &str = "tithd 0.1.0";
+pub const SOFTWARE: &str = "tithd 0.1.0";
 
 pub struct LocalSigner {
 	pub reference: IdentityRef,
@@ -185,6 +185,7 @@ impl SubmissionEngine {
 			&signer.identity,
 			&target,
 			route_rule,
+			None,
 			&self.nodelist,
 		);
 		Ok(NewDelivery {
@@ -296,6 +297,7 @@ impl SubmissionEngine {
 					&signer.identity,
 					&next_hop,
 					route_rule,
+					None,
 					&self.nodelist,
 				);
 				let delivery = NewDelivery {
@@ -722,6 +724,7 @@ impl SubmissionEngine {
 							local_identity,
 							&identity,
 							None,
+							None,
 							&self.nodelist,
 						),
 						None,
@@ -878,6 +881,11 @@ fn convert_policies(
 		};
 		return [selected; 5];
 	}
+	configured_policies(configured)
+}
+
+/// Maps configured failure policies onto their durable form.
+pub fn configured_policies(configured: [tith_config::FailurePolicy; 5]) -> [FailurePolicy; 5] {
 	configured.map(|default| FailurePolicy {
 		disposition: match default.disposition {
 			tith_config::Disposition::DeadLetter => FailureDisposition::DeadLetter,

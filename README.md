@@ -56,10 +56,10 @@ durable storage, and local IPC building blocks.
 The reference daemon is not yet a production mailer, but it now exchanges mail
 in both directions: a native listener with durable local Message and standalone
 File acceptance, duplicate handling, and authenticated replies, and a
-schedule-driven outbound driver that delivers queued copies and polls its peers.
-Relay delivery and FileRequest handling remain under construction. The C
-implementation under [`poc/`](poc/) is a frozen historical proof of concept; new
-implementation work belongs in Rust.
+schedule-driven outbound driver that delivers queued copies and polls its peers,
+and NetMail relay so a node can act as a hub or a boss. FileRequest handling
+remains under construction. The C implementation under [`poc/`](poc/) is a
+frozen historical proof of concept; new implementation work belongs in Rust.
 
 ## Rust workspace
 
@@ -342,9 +342,50 @@ cargo run -p tithd -- serve-mail 0.0.0.0:24555 \
 
 It both receives and sends. Local Messages and standalone Files are durably
 stored before `Accepted` is sent, and signed-item duplicates receive `Accepted`
-without creating another inbound item. Unsupported relay and FileRequest work
-receives a retryable rejection. EchoMail and area Files are accepted only from
-configured `Receive-From` peers.
+without creating another inbound item. A NetMail for another node is relayed
+rather than stored. Unsupported FileRequest work receives a retryable rejection.
+EchoMail and area Files are accepted only from configured `Receive-From` peers.
+
+### Relay
+
+A NetMail whose ultimate Destination is not this node is relayed: routed,
+spooled, and sent onward by the same driver that carries locally submitted
+mail. It never becomes an inbound item, so a hub transits mail with no
+application running and nothing to claim it.
+
+Relay is denied by default. TSP-0002 section 6 examines `Allow-Relay` and
+`Deny-Relay` together in file order and the first rule whose three selectors all
+match decides, so a `Deny-Relay` ahead of a matching `Allow-Relay` denies. With
+no rule at all nothing matches and relay is refused, which means a leaf node
+needs no configuration to stay a leaf:
+
+```text
+Routes fidonet#1:123/45
+    Allow-Relay From Peer @downlink Origin All Destination Branch Zone fidonet#1
+End
+```
+
+`From` selects the authenticated immediate peer, `Origin` the message's
+effective signer — its Origin when that address has an applicable key and its
+SignedOrigin otherwise — and `Destination` the ultimate Destination.
+
+Only an `Origin-Valid` or `SignedOrigin-Valid` item is relayed. Anything else is
+refused with rejection reason 2, so an item that cannot be authenticated end to
+end is never passed on as though it could. A denial, an unroutable destination,
+and a routing loop are each refused with reason 1. Every refusal is logged
+locally and answered to the peer, which keeps responsibility with the sender so
+the origin can dead-letter and notify its user.
+
+Loop detection compares the selected next hop against every Via the message
+carries, including the `PublicKey` of an unlisted one, and refuses rather than
+falling through to a later method that would conceal it.
+
+Only the routing suffix is rebuilt. The signed region is carried through byte
+for byte and one Via naming this node is appended, so the end-to-end signature
+still validates at the far end. Retransmission of an item already relayed is
+answered `Accepted` without spooling a second copy, keyed on the signed-item
+identity that TTS-0005 section 7 defines. Relayed jobs are committed under the
+reserved application name `tithd-relay`, so no IPC client can collide with them.
 
 ### Outbound delivery
 

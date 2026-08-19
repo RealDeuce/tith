@@ -257,6 +257,19 @@ lengths and outstanding-response accounting cannot resolve.
   response. Both the listener and the outbound driver dispatch through it,
   because TSP-0002 draws no distinction between an item a peer sent and one a
   poll returned: the same authorization applies and the same response is owed.
+  It also owns relay. A NetMail for anyone else goes straight to the spool and
+  never becomes an inbound item, because a hub must transit mail with no
+  application running. Relay defaults to denied: the first `Allow-Relay` or
+  `Deny-Relay` whose three selectors match decides and no match refuses, so
+  relaying is something an operator turns on rather than off. Only an
+  `Origin-Valid` or `SignedOrigin-Valid` item may be relayed. A refusal is
+  answered to the peer and logged, never raised and never dead-lettered here;
+  responsibility stays with the sender, whose origin can notify a user, while a
+  store failure is raised so the peer retries instead of being told the item is
+  permanently unacceptable. Only the routing suffix is rebuilt — the signed
+  region is carried through byte for byte — and the spool key is the signed-item
+  identity rather than the bytes, because a retransmission is never
+  byte-identical but its identity never changes.
   `framing` owns reading a Bundle prefix and is likewise shared, so the two
   ends of an exchange cannot drift apart in how they frame a Header.
   `schedule` owns TSP-0002 section 8 timing and nothing else; which work an
