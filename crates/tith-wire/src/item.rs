@@ -106,6 +106,13 @@ pub struct AttachmentData {
 	pub contents: Vec<u8>,
 }
 
+/// The FTS-0001.016 `AttributeWord` bit which marks attached files.
+///
+/// TTS-0005 section 3 type 101 keeps this bit out of `LegacyAttributes`, so it
+/// is named here rather than imported: the legacy crates own the legacy formats
+/// and this crate may not depend on them.
+pub const LEGACY_ATTRIBUTE_FILE_ATTACHED: u64 = 1 << 4;
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MessageData {
 	pub destination: Option<Identity>,
@@ -160,6 +167,32 @@ pub fn build_originated_message(
 		return Err(BundleError::Unexpected(
 			"Message Destination/Area combination",
 		));
+	}
+	// TTS-0005 section 3 types 101 and 102: a zero conveys nothing that absence
+	// does not, so absence is the only representation of it. TSP-0003 section 4
+	// depends on that, because every legacy format carries the AttributeWord in a
+	// fixed field and canonical export always emits TZUTC, so a zero and an
+	// absent value share one legacy encoding and only one can reconstruct.
+	if data.legacy_attributes == Some(0) {
+		return Err(BundleError::Unexpected("zero LegacyAttributes"));
+	}
+	if data.timestamp_offset == Some(0) {
+		return Err(BundleError::Unexpected("zero TimestampOffset"));
+	}
+	// Bit 4 is FileAttached, which the File children already carry.
+	if data
+		.legacy_attributes
+		.is_some_and(|value| value & LEGACY_ATTRIBUTE_FILE_ATTACHED != 0)
+	{
+		return Err(BundleError::Unexpected(
+			"LegacyAttributes bit 4, which the File children carry",
+		));
+	}
+	// TTS-0005 section 3 type 64: TearLine and OriginLine are EchoMail control
+	// information, so NetMail carries neither. A legacy NetMail which does carry
+	// such a line carries it as message text.
+	if data.area.is_none() && (data.tear_line.is_some() || data.origin_line.is_some()) {
+		return Err(BundleError::Unexpected("a NetMail TearLine or OriginLine"));
 	}
 	let mut signed = Vec::new();
 	push_provenance(&mut signed, provenance)?;
@@ -2147,10 +2180,13 @@ mod tests {
 					contents: b"second".to_vec(),
 				},
 			],
-			legacy_attributes: Some(1 << 4),
+			// Bit 4 is not representable here and TearLine and OriginLine are
+			// EchoMail's, so this covers the rest and the EchoMail case below
+			// covers those two.
+			legacy_attributes: Some(1 << 9),
 			timestamp_offset: Some(-25200),
-			tear_line: Some("TITH 0.1".to_owned()),
-			origin_line: Some("A board (1:104/36)".to_owned()),
+			tear_line: None,
+			origin_line: None,
 			message_id: Some("1:104/36 1a2b3c4d".to_owned()),
 			reply_to: Some(("fidonet#1:104/1".parse().unwrap(), "deadbeef".to_owned())),
 			additional_kludge_lines: vec!["FLAGS KFS".to_owned()],
@@ -2193,6 +2229,27 @@ mod tests {
 			verify_tlv(&read.signing.signed_region, &signature, &signer_keys.public).unwrap(),
 			"the reported signed region does not verify"
 		);
+
+		// The two EchoMail-only values invert the same way.
+		let echo = MessageData {
+			destination: None,
+			area: Some("SYNCHRONET".to_owned()),
+			reply_to: None,
+			tear_line: Some("TITH 0.1".to_owned()),
+			origin_line: Some("A board (1:104/36)".to_owned()),
+			..data
+		};
+		let message = build_originated_message(
+			echo.clone(),
+			&provenance,
+			&signer_keys.secret,
+			43,
+			1_755_500_001,
+			"tith 0.1",
+			&[],
+		)
+		.unwrap();
+		assert_eq!(read_message(&message, &resolver).unwrap().data, echo);
 	}
 
 	#[test]
@@ -2559,5 +2616,103 @@ mod tests {
 			validate_item(&item, &|_: &Address| None),
 			Err(BundleError::Unexpected("Rejected reason"))
 		));
+	}
+
+	/// TTS-0005 section 3 types 64, 101, and 102 leave exactly one
+	/// representation of each of these facts, and this is where a Message is
+	/// minted, so this is where a second one is refused.
+	#[test]
+	fn refuses_a_second_representation_of_a_legacy_fact() {
+		let keys = SigningKeyPair::from_seed(&[40; 32]).unwrap();
+		let origin: Address = "fidonet#1/100".parse().unwrap();
+		let provenance = ItemProvenance {
+			origin: origin.clone(),
+			signer: Some(Identity {
+				address: origin,
+				public_key: keys.public,
+			}),
+		};
+		let netmail = || MessageData {
+			destination: Some(Identity {
+				address: "fidonet#1/200".parse().unwrap(),
+				public_key: keys.public,
+			}),
+			timestamp: 1,
+			to_user: "You".to_owned(),
+			from_user: "Me".to_owned(),
+			subject: String::new(),
+			text: "Body".to_owned(),
+			area: None,
+			attachments: Vec::new(),
+			legacy_attributes: None,
+			timestamp_offset: None,
+			tear_line: None,
+			origin_line: None,
+			message_id: None,
+			reply_to: None,
+			additional_kludge_lines: Vec::new(),
+		};
+		let build = |data: MessageData| {
+			build_originated_message(data, &provenance, &keys.secret, 7, 1, "test", &[])
+		};
+
+		// A Message carrying none of them is what native origination produces.
+		assert!(build(netmail()).is_ok());
+
+		let cases: [(MessageData, &str); 4] = [
+			(
+				MessageData {
+					legacy_attributes: Some(0),
+					..netmail()
+				},
+				"zero LegacyAttributes",
+			),
+			(
+				MessageData {
+					timestamp_offset: Some(0),
+					..netmail()
+				},
+				"zero TimestampOffset",
+			),
+			(
+				MessageData {
+					legacy_attributes: Some(LEGACY_ATTRIBUTE_FILE_ATTACHED),
+					..netmail()
+				},
+				"LegacyAttributes bit 4, which the File children carry",
+			),
+			(
+				MessageData {
+					tear_line: Some("tosser".to_owned()),
+					..netmail()
+				},
+				"a NetMail TearLine or OriginLine",
+			),
+		];
+		for (data, expected) in cases {
+			match build(data) {
+				Err(BundleError::Unexpected(what)) => assert_eq!(what, expected),
+				other => panic!("{expected} was accepted: {other:?}"),
+			}
+		}
+		assert!(matches!(
+			build(MessageData {
+				origin_line: Some("A board (1:1/100)".to_owned()),
+				..netmail()
+			}),
+			Err(BundleError::Unexpected("a NetMail TearLine or OriginLine"))
+		));
+
+		// EchoMail keeps both: they are its own control information.
+		assert!(
+			build(MessageData {
+				destination: None,
+				area: Some("SYNCHRONET".to_owned()),
+				tear_line: Some("tosser".to_owned()),
+				origin_line: Some("A board (1:1/100)".to_owned()),
+				..netmail()
+			})
+			.is_ok()
+		);
 	}
 }

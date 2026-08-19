@@ -1167,6 +1167,23 @@ mod tests {
 			provenance.signer.unwrap().address,
 			Address::unlisted("p2p".to_owned()).unwrap()
 		);
+
+		// TTS-0005 section 3 type 64 makes TearLine EchoMail control information,
+		// so a NetMail Job asking for one is Invalid rather than silently
+		// producing a Message no legacy conversion could represent.
+		let tear_line = SubmissionRequest::parse(
+			b"TITH-IPC 1\nSubmit\nJob\nApplication \"mailer\"\nIdempotency-Key \"tear\"\nOrigin \"@local\"\nDestination \"@destination\"\nTo-User \"You\"\nFrom-User \"Me\"\nTear-Line \"tosser 1.0\"\nEnd\nEnd\n",
+		)
+		.unwrap();
+		match engine.submit(&tear_line, &store) {
+			Err(StoreError::JobBuild {
+				kind, description, ..
+			}) => {
+				assert_eq!(kind, JobBuildFailure::Invalid);
+				assert!(description.contains("TearLine"), "{description}");
+			}
+			other => panic!("expected an Invalid job build, got {other:?}"),
+		}
 		drop(store);
 		drop(inbound);
 		std::fs::remove_file(path).unwrap();

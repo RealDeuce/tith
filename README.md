@@ -582,6 +582,23 @@ There is no lock file. FTS-5005 defines none for an inbound — it is entirely a
 outbound spec — and SBBSecho's `import_packets` takes no lock either, so the
 atomic publish is what makes the handoff safe.
 
+### Carrying the signature
+
+A published Message keeps its `TITHSIG` controls only when the adapter can apply
+the TSP-0003 section 3.1 inverse conversion to the object it is about to publish
+and get the original signed bytes back exactly. Otherwise the object goes out as
+compatibility output without them, and the reason is recorded in the ledger.
+
+That self-check is why absent and zero are one native fact. Every legacy format
+carries the AttributeWord in a fixed header field and canonical output always
+emits `TZUTC`, so an absent `LegacyAttributes` or `TimestampOffset` and a zero
+one have the same legacy encoding, and only one of the two can be reconstructed.
+TTS-0005 makes absence the one that survives, and likewise keeps attachment
+presence in the `File` children rather than in AttributeWord bit 4. Without
+those rules a Message originated through `tith submit` — which carries none of
+them — could never be exported canonically, which is the case `TITHSIG` most
+needs to serve.
+
 ### Batching
 
 `--batch-window` and `--batch-max` bound how many items one packet may carry.

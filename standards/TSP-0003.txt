@@ -3,7 +3,7 @@ TITH                                              THIS ISN'T THAT HARD
 **********************************************************************
 
 Publication:  TSP‑0003
-Revision:     4
+Revision:     5
 Title:        Legacy Data Formats and TITH
 Author(s):    Stephen Hurd
 Date:         2026‑08‑19
@@ -28,7 +28,9 @@ Abstract
   EchoMail control information needed by that conversion.  The
   canonical Message conversion regenerates the exact byte sequence
   covered by the original TITH Message Signature and retains that
-  Signature.  Unsigned fields reflect current legacy processing.
+  Signature.  An author holding the applicable key may construct that
+  signed region directly instead.  Unsigned fields reflect current
+  legacy processing.
 
 Contents
 ────────
@@ -526,8 +528,13 @@ Contents
   A FLAGS control is preserved verbatim and MAY additionally contribute
   only these exact AttributeWord meanings to LegacyAttributes:
 
-    PVT bit 0, CRA bit 1, RCV bit 2, SNT bit 3, FIL bit 4,
-    K/S bit 7, HLD bit 9, FRQ bit 11, and RRQ bit 12.
+    PVT bit 0, CRA bit 1, RCV bit 2, SNT bit 3, K/S bit 7,
+    HLD bit 9, FRQ bit 11, and RRQ bit 12.
+
+  FIL is deliberately absent from that list.  It names bit 4, which
+  section 4 keeps out of LegacyAttributes because the File children
+  carry attachment presence.  FIL still identifies attached files for
+  ordinary import as described below.
 
   All other FLAGS tokens remain legacy metadata.  In particular, DIR,
   ZON, HUB, IMM, KFS, and TFS do not grant native routing, priority, or
@@ -666,11 +673,16 @@ Contents
 
     ^ATZUTC: [-]HHMM
 
-  A missing native TimestampOffset is exported as TZUTC 0000.  Import
-  accepts TZUTCINFO as an input synonym.  Without either control, the
-  trusted configured offset for that legacy source is used.  If no
-  such offset exists, the timestamp is ambiguous and conversion is
-  unavailable.
+  A missing native TimestampOffset is exported as TZUTC 0000, and
+  TZUTC 0000 imports as a missing TimestampOffset.  TTS‑0005 makes an
+  absent value the only native representation of a zero offset, so the
+  two directions agree.  Canonical output always emits TZUTC: omitting
+  it would make import fall back to a configured offset and derive a
+  different Timestamp on a different system, which no reconstruction
+  could survive.  Import accepts TZUTCINFO as an input synonym.
+  Without either control, the trusted configured offset for that legacy
+  source is used.  If no such offset exists, the timestamp is ambiguous
+  and conversion is unavailable.
 
   The stored and packed DateTime is local time: Timestamp plus
   TimestampOffset.  Canonical output uses exactly:
@@ -695,6 +707,16 @@ Contents
   stores the product, version, and optional serial joined by single
   spaces as the Via string.  Deprecated Via forms are compatibility
   policy and MUST NOT be generated.
+
+  Nothing else follows NetMail body text.  A tear line and an Origin
+  line are EchoMail control information in FTS‑0004.001 and
+  FSC‑0068.001, and TTS‑0005 consequently prohibits TearLine and
+  OriginLine in NetMail.  The section 7 footer placement is EchoMail
+  only.  A legacy NetMail which does carry such a line carries it as
+  ordinary Message Text: import neither removes it nor gives it a
+  structured field, and export emits neither line of its own.  Those
+  bytes therefore survive conversion in both directions unchanged,
+  inside MessageText, and need no mapping.
 
   3.1 TITHSIG Signed‑Region Reconstruction
   ────────────────────────────────────────────
@@ -766,6 +788,20 @@ Contents
   children and Values also reconstructs their exact signed bytes.  An
   implementation MUST compare those bytes directly during the export
   self‑check; semantic equality alone is insufficient.
+
+  This section is written as a property of conversion because that is
+  its common use, but the signed region MAY equally be constructed by
+  the author of the Message.  A system which holds the key applicable
+  to Origin and has no prior native Message — because it runs only
+  legacy software — MAY construct the canonical Message children, sign
+  the byte range TTS‑0005 specifies, and emit TITHSIG for a Message it
+  authored.  Every requirement above applies to it unchanged, including
+  the byte‐exact inverse conversion and the verification of that
+  Signature over the result before the legacy Message is published.
+  Producing these bytes needs no wire syntax, control, or assigned
+  value beyond those already defined here, and the import half below
+  authenticates an author‐constructed region exactly as it
+  authenticates a converted one.
 
   On import, the presence of TITHSIG selects revision 1 reconstruction
   instead of ordinary gateway signing in section 2.  The resolved
@@ -853,9 +889,11 @@ Contents
   it is not converted into a native request.
 
   On ordinary import, a present ASSOC list MUST agree with the Subject
-  FileList when both claim the attachments.  Under TITHSIG, signed
-  LegacyAttributes bit 4 and Subject alone select the File children;
-  ASSOC and FLAGS are mutable evidence and cannot change them.  An empty
+  FileList when both claim the attachments.  Under TITHSIG, the
+  AttributeWord bit 4 of the legacy Message and its Subject alone select
+  the File children; ASSOC and FLAGS are mutable evidence and cannot
+  change them.  That bit is read from the legacy header rather than from
+  the reconstructed LegacyAttributes, which never contains it.  An empty
   attachment list or a missing, unsafe, or unavailable companion makes
   attachment conversion incomplete.  The message and diagnostic state
   MUST be retained; the missing attachment MUST NOT be silently
@@ -864,10 +902,22 @@ Contents
   Export writes zero for timesRead, cost, replyTo, and nextReply.  It
   writes LegacyAttributes, or zero when absent, after clearing bit 4
   and setting that bit exactly when File children are present.  Import
-  preserves the complete AttributeWord as LegacyAttributes, including
-  a zero value.  Bits 11 and 15 are not changed by attachment export.
-  No attribute grants native authority or silently creates a native
+  clears bit 4 from the AttributeWord and preserves the remaining bits
+  as LegacyAttributes, omitting the value entirely when nothing remains
+  set.  Bits 11 and 15 are not changed by attachment export.  No
+  attribute grants native authority or silently creates a native
   request.
+
+  Both import rules follow from TTS‑0005, which makes an absent
+  LegacyAttributes the only native representation of a zero
+  AttributeWord and keeps attachment presence in the File children
+  alone.  Every legacy format here carries the AttributeWord in a fixed
+  header field, so an absent native value and a zero one share one
+  legacy encoding and only one of them can be reconstructed; bit 4 is
+  redundant for the same reason, because export derives it from the
+  File children it emits.  A Message originated natively therefore
+  reconstructs exactly, which is the case section 3.1 most needs to
+  serve.
 
   Import requires all 190 header bytes and a NUL terminating Message
   Text.  The SEAdog DateTime and the historical blank‐line, byte 0x1A,
@@ -1278,7 +1328,9 @@ Contents
   gateway owns the Origin key and SignedOrigin-Valid otherwise.  It
   does not pretend that the legacy author supplied that gateway
   signature.  Successful TITHSIG reconstruction retains whichever
-  valid state the original native item had.  A native Unsigned item has
+  valid state the original native item had, and produces Origin-Valid
+  for a signed region its author constructed under section 3.1, since
+  no SignedOrigin is present.  A native Unsigned item has
   no TITHSIG controls.  Invalid or Unsigned input is not eligible for a
   canonical signed‐region export, though a final delivery adapter may
   produce a clearly marked local compatibility presentation under
@@ -1339,6 +1391,9 @@ A. References
 
   [FTS‑0001.016] Revision 16, "A Basic FidoNet Technical Standard",
   FTSC, 1995‑09‑30.
+
+  [FTS‑0004.001] "EchoMail Specification", Bob Hartman, Spark
+  Software, 1987‑12‑12.
 
   [FSC‑0045.001] "A Proposal for a New Packet Header Format", FTSC,
   1990‑04‑17.
@@ -1425,5 +1480,12 @@ B. History
    Rev.4, 2026‑08‑19: Mapped an unclaimed reference file entry to a
    peer‐addressed standalone File and named the TSP‑0006 Jobs which
    submit a converted request and its answering files.
+
+   Rev.5, 2026‑08‑19: Made a natively originated Message exportable by
+   reconstructing an absent LegacyAttributes and TimestampOffset from
+   their zero legacy encodings and keeping attachment presence in the
+   File children, confined the tear and Origin lines to EchoMail, and
+   authorised an author to construct the signed region rather than only
+   carry one through a conversion.
 
 **********************************************************************

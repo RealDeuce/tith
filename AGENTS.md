@@ -234,6 +234,15 @@ lengths and outstanding-response accounting cannot resolve.
   the FSC-0086.001 request-processor boundary. A conversion which cannot be
   represented is refused, never made lossy, and a step blocked on standards
   work fails loudly naming its issue rather than degrading silently.
+  That self-check is what makes TTS-0005 keep one native representation of each
+  legacy fact: an absent `LegacyAttributes` or `TimestampOffset` is the only form
+  of a zero one, and attachment presence lives in the `File` children rather than
+  in AttributeWord bit 4. Legacy always carries the attribute word in a fixed
+  field and canonical output always emits `TZUTC`, so a second native form would
+  simply be unreconstructable. Enforce those rules where a Message is minted, in
+  `build_originated_message`; never in `validate_message`, because a received
+  item's authentication is its signature and not its conformance to a canonical
+  field list.
   A claimed FileRequest is answered rather than published: the processor decides
   which files the peer may have, and each becomes a TSP-0006 `Job Peer-File`
   addressed back to it, keyed on InboundID so a redelivery does not send twice.

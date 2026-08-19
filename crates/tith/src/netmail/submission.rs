@@ -65,6 +65,26 @@ fn line(fields: Vec<Field>) -> Line {
 	Line { fields }
 }
 
+/// The FTS-0001.016 `AttributeWord` bit which marks attached files.
+const ATTRIBUTE_FILE_ATTACHED: u16 = 1 << 4;
+
+/// The `Legacy-Attributes` line for one legacy `AttributeWord`, if needed.
+///
+/// TTS-0005 section 3 type 101 keeps bit 4 out of `LegacyAttributes`, because the
+/// File children carry attachment presence, and makes an absent value the only
+/// representation of a zero one. Both would otherwise be a second representation
+/// of a fact the Message already states, and TSP-0003 section 3.1 could no longer
+/// reconstruct the Message from its legacy form.
+fn legacy_attributes(attributes: u16) -> Option<Line> {
+	let carried = attributes & !ATTRIBUTE_FILE_ATTACHED;
+	(carried != 0).then(|| {
+		line(vec![
+			unquoted("Legacy-Attributes"),
+			unquoted(&carried.to_string()),
+		])
+	})
+}
+
 /// Everything the builder needs that does not come from the message itself.
 pub struct Context<'a> {
 	pub application: &'a str,
@@ -147,10 +167,7 @@ pub fn build(message: &StoredMessage, context: &Context<'_>) -> Result<Submissio
 	if !message.text.is_empty() {
 		lines.push(line(vec![unquoted("Message-Text"), quoted(&message.text)]));
 	}
-	lines.push(line(vec![
-		unquoted("Legacy-Attributes"),
-		unquoted(&message.attributes.to_string()),
-	]));
+	lines.extend(legacy_attributes(message.attributes));
 	if let Some(msgid) = message.control("MSGID") {
 		lines.push(line(vec![unquoted("Message-ID"), quoted(&msgid.value)]));
 	}
@@ -278,10 +295,7 @@ pub fn build_packed(
 	if !message.text.is_empty() {
 		lines.push(line(vec![unquoted("Message-Text"), quoted(&message.text)]));
 	}
-	lines.push(line(vec![
-		unquoted("Legacy-Attributes"),
-		unquoted(&message.attributes.to_string()),
-	]));
+	lines.extend(legacy_attributes(message.attributes));
 	if let Some(msgid) = message.control("MSGID") {
 		lines.push(line(vec![unquoted("Message-ID"), quoted(&msgid.value)]));
 	}
@@ -544,6 +558,42 @@ mod tests {
 		assert!(text.contains("Ingestion Copy"), "{text}");
 		// The Subject was a FileList, so it must not be carried as a subject.
 		assert!(!text.contains("Subject "), "{text}");
+		// Bit 4 was the only attribute set, and the Attachment lines already say
+		// the message has one, so nothing is left for Legacy-Attributes to carry.
+		assert!(!text.contains("Legacy-Attributes"), "{text}");
+		fs::remove_dir_all(directory).unwrap();
+	}
+
+	#[test]
+	fn masks_bit_four_and_omits_a_zero_word() {
+		// TTS-0005 section 3 type 101: bit 4 belongs to the File children and a
+		// zero value is written by omitting the value. Submitting either would
+		// give the Message a second representation of a fact it already states,
+		// and TSP-0003 section 3.1 could then never reconstruct it.
+		let directory = temp_dir("attributes");
+		let context = Context {
+			application: "netmail",
+			origin: "1:2/3",
+			legacy_origin: None,
+			style: AttachStyle::Flags,
+			features: &features(&[]),
+			directory: &directory,
+			fallback_key: "unused",
+		};
+		fs::write(directory.join("a.zip"), b"payload").unwrap();
+		let body = "\u{1}MSGID: 1:2/3 1a2b3c4d\rHello\r";
+		let request = |subject: &str, attributes: u16| {
+			let message = StoredMessage::parse(&stored(subject, attributes, body)).unwrap();
+			String::from_utf8(build(&message, &context).unwrap().request).unwrap()
+		};
+
+		assert!(!request("Subject", 0).contains("Legacy-Attributes"));
+		// HLD, bit 9, is legacy metadata with no other native representation.
+		let held = request("Subject", 1 << 9);
+		assert!(held.contains("Legacy-Attributes 512"), "{held}");
+		// Bit 4 is masked out of a word which carries other bits too.
+		let both = request("a.zip", (1 << 9) | (1 << 4));
+		assert!(both.contains("Legacy-Attributes 512"), "{both}");
 		fs::remove_dir_all(directory).unwrap();
 	}
 

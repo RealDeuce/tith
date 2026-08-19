@@ -775,18 +775,27 @@ fn finish_reconstruction(
 		}
 	}
 
-	// TSP-0003 section 4: import preserves the complete AttributeWord as
-	// LegacyAttributes, including a zero value.
-	push(
-		&mut children,
-		types::LEGACY_ATTRIBUTES,
-		tith_wire::encode_u64(u64::from(message.attributes)),
-	)?;
-	push(
-		&mut children,
-		types::TIMESTAMP_OFFSET,
-		tith_wire::encode_i64(offset),
-	)?;
+	// TSP-0003 section 4: import clears bit 4 and preserves the remaining bits,
+	// omitting the value when nothing remains set. Every legacy format carries
+	// the AttributeWord in a fixed field and canonical export always emits TZUTC,
+	// so an absent native value and a zero one share one legacy encoding; TTS-0005
+	// makes absence the one that reconstructs, and keeps attachment presence in
+	// the File children alone.
+	let attributes = message.attributes & !ATTRIBUTE_FILE_ATTACHED;
+	if attributes != 0 {
+		push(
+			&mut children,
+			types::LEGACY_ATTRIBUTES,
+			tith_wire::encode_u64(u64::from(attributes)),
+		)?;
+	}
+	if offset != 0 {
+		push(
+			&mut children,
+			types::TIMESTAMP_OFFSET,
+			tith_wire::encode_i64(offset),
+		)?;
+	}
 	if let Some(value) = tear_line {
 		push(&mut children, types::TEAR_LINE, value.into_bytes())?;
 	}
@@ -961,7 +970,7 @@ mod tests {
 			text: "Body line one\nline two".to_owned(),
 			area: None,
 			attachments,
-			legacy_attributes: Some(0),
+			legacy_attributes: None,
 			timestamp_offset: Some(-25_200),
 			tear_line: None,
 			origin_line: None,
@@ -1010,10 +1019,11 @@ mod tests {
 
 	#[test]
 	fn attachments_become_the_subject_filelist_and_set_bit_four() {
-		// The signed LegacyAttributes must already agree with File presence:
-		// TSP-0003 section 4 has export set bit 4 exactly when File children
-		// exist, so a signed value which disagrees cannot reconstruct.
-		let mut data = netmail(
+		// The signed Message carries no LegacyAttributes at all, which is what
+		// native origination produces. TSP-0003 section 4 has export set bit 4
+		// from File presence and import clear it again, so the reconstruction
+		// does not gain a child.
+		let data = netmail(
 			vec![
 				AttachmentData {
 					filename: "work.zip".to_owned(),
@@ -1028,7 +1038,6 @@ mod tests {
 			],
 			"",
 		);
-		data.legacy_attributes = Some(u64::from(ATTRIBUTE_FILE_ATTACHED));
 		let (read, keys, _) = signed(data);
 		let converted = to_legacy(
 			&read,
@@ -1102,13 +1111,14 @@ mod tests {
 	}
 
 	#[test]
-	fn a_message_without_legacy_attributes_cannot_be_canonical() {
-		// Export writes zero when LegacyAttributes is absent and import always
-		// produces the child, so the reconstruction gains a value the original
-		// did not have. That is the "ambiguous optional-field presence" which
-		// TSP-0003 section 3.1 makes unavailable, not an error.
+	fn a_message_carrying_neither_legacy_value_is_canonical() {
+		// Export writes AttributeWord zero and TZUTC 0000 for the absent
+		// children, and TSP-0003 section 4 has import reconstruct absence from
+		// exactly those, so a Message a TSP-0006 submitter originated -- which
+		// carries neither child -- reconstructs byte for byte.
 		let mut data = netmail(Vec::new(), "Hello");
 		data.legacy_attributes = None;
+		data.timestamp_offset = None;
 		let (read, keys, _) = signed(data);
 		let converted = to_legacy(
 			&read,
@@ -1118,8 +1128,55 @@ mod tests {
 			&resolver(&keys),
 		)
 		.unwrap();
-		assert_eq!(converted.fidelity, Fidelity::Compatibility);
-		assert!(converted.diagnostic.unwrap().contains("differs"));
+		assert_eq!(
+			converted.fidelity,
+			Fidelity::Canonical,
+			"{:?}",
+			converted.diagnostic
+		);
+		assert_eq!(converted.diagnostic, None);
+		// The legacy object still carries both values; only the native side
+		// distinguishes absent from zero.
+		assert_eq!(converted.message.attributes, 0);
+		let tzutc = converted
+			.message
+			.controls
+			.iter()
+			.find(|control| control.name == "TZUTC")
+			.unwrap();
+		assert_eq!(tzutc.value, "0000");
+	}
+
+	#[test]
+	fn a_netmail_tear_or_origin_line_stays_in_the_body() {
+		// TSP-0003 section 3: those lines are EchoMail control information, so a
+		// NetMail carrying them carries them as ordinary Message Text. They need
+		// no mapping and must survive the round trip inside MessageText.
+		let mut data = netmail(Vec::new(), "Hello");
+		data.text = "Body line one\n--- tosser 1.0\n * Origin: A board (1:104/36)".to_owned();
+		let (read, keys, _) = signed(data);
+		let converted = to_legacy(
+			&read,
+			&context(),
+			ItemAuthentication::OriginValid,
+			None,
+			&resolver(&keys),
+		)
+		.unwrap();
+		assert_eq!(
+			converted.fidelity,
+			Fidelity::Canonical,
+			"{:?}",
+			converted.diagnostic
+		);
+		assert!(
+			converted
+				.message
+				.text
+				.starts_with("Body line one\r--- tosser 1.0\r * Origin: A board (1:104/36)\r"),
+			"{:?}",
+			converted.message.text
+		);
 	}
 
 	fn echomail() -> MessageData {
@@ -1132,7 +1189,7 @@ mod tests {
 			text: "Body line one\nline two".to_owned(),
 			area: Some("SYNCHRONET".to_owned()),
 			attachments: Vec::new(),
-			legacy_attributes: Some(0),
+			legacy_attributes: None,
 			timestamp_offset: Some(-25_200),
 			tear_line: Some("TITH 0.1".to_owned()),
 			origin_line: Some("A board (1:104/36)".to_owned()),

@@ -3,10 +3,10 @@ TITH                                              THIS ISN'T THAT HARD
 **********************************************************************
 
 Publication:  TTS‑0005
-Revision:     6
+Revision:     7
 Title:        Bundle Format
 Author(s):    Stephen Hurd
-Date:         2026‑08‑18
+Date:         2026‑08‑19
 ══════════════════════════════════════════════════════════════════════
 
 Status of this document
@@ -135,15 +135,19 @@ Contents
   A Message value has a large number of manditory and optional values.
   The order is specified here as a list, with M indicating Manditory,
   O indicating Optional, N indicating Manditory for NetMail, E
-  indicating Manditory for EchoMail, and A indicating Manditory if the
-  immediately preceding address is the unlisted address and
+  indicating Manditory for EchoMail, C indicating Optional for
+  EchoMail and prohibited for NetMail, and A indicating Manditory if
+  the immediately preceding address is the unlisted address and
   prohibited otherwise.  If a + is listed after the mandatory or
   optional character, multiple values of that type may be included.
 
   A Message MUST be either NetMail or EchoMail.  NetMail MUST contain
   a Destination and MUST NOT contain an Area.  EchoMail MUST contain
   an Area and MUST NOT contain a Destination or its following
-  PublicKey.
+  PublicKey.  TearLine and OriginLine are EchoMail control
+  information in FTS‑0004.001 and FSC‑0068.001, and FTS‑0001.016
+  defines neither, so NetMail MUST NOT contain either one.  A legacy
+  NetMail which carries such a line carries it as message text.
 
   M  Origin (TTS‑0003)
   A  PublicKey (TTS‑0003)
@@ -160,8 +164,8 @@ Contents
   O+ File (Section 3)
   O  LegacyAttributes (Section 4)
   O  TimestampOffset (Section 4)
-  O  TearLine (Section 4)
-  O  OriginLine (Section 4)
+  C  TearLine (Section 4)
+  C  OriginLine (Section 4)
   O  MessageID (Section 4)
   O  ReplyTo (Section 4)
   O  OriginalCharacterSet (Section 4)
@@ -437,11 +441,21 @@ Contents
   If anything in here is actually useful, it should have a separate
   value.
 
+  A zero conveys nothing that the absence of this value does not, so
+  a zero MUST NOT be emitted and an absent value means that no legacy
+  attribute is asserted.  Bit 4, FileAttached, MUST NOT be set: the
+  File children of the Message carry that fact, and a legacy
+  conversion boundary sets the bit from the File children it emits.
+
   102. TimestampOffset
   ────────────────────
   Contains a signed number of seconds encoded as specified in
   TTS‑0007.  If this number is added to the Timestamp, the result is
   the local time and date when the message was written.
+
+  A zero conveys nothing that the absence of this value does not, so
+  a zero MUST NOT be emitted and an absent value means that the offset
+  is zero.
 
   103. ToUserName
   ───────────────
@@ -666,6 +680,12 @@ A. References
   [FTS‑0001.016] "A Basic FidoNet(r) Technical Standard", Randy Bush,
   Pacific Systems Group, 1995‑09‑30.
 
+  [FTS‑0004.001] "EchoMail Specification", Bob Hartman, Spark
+  Software, 1987‑12‑12.
+
+  [FSC‑0068.001] "A Proposed Replacement For FTS-0004", FTSC,
+  1992‑12‑13.
+
   [Libhydrogen] Version 1,
   https://github.com/jedisct1/libhydrogen/wiki
 
@@ -702,5 +722,10 @@ B. History
    Rev.6, 2026‑08‑18: Permitted an authenticated payload SignedTLV to
    carry a Message or standalone File without an end‐to‐end item
    Signature and separated that state from invalid signatures.
+
+   Rev.7, 2026‑08‑19: Made an absent LegacyAttributes or
+   TimestampOffset the only representation of a zero value, moved
+   attachment presence entirely into the File children, and confined
+   TearLine and OriginLine to EchoMail.
 
 **********************************************************************
