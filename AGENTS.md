@@ -41,6 +41,14 @@ leaving the discovery only in chat, a commit message, or a code comment.
   after creating or updating an issue, read its body back and verify that the
   Markdown contains no unintended literal newline escapes.
 
+An issue is closed by the commit which resolves it, using a `Closes #N` trailer,
+and by nothing else. Never run `gh issue close`, and never close an issue
+through the web interface. This applies to every issue, not only a standards
+defect, and it holds even when the work is finished and verified: the commit is
+what records why the issue closed and what closed it, and closing by hand
+separates the two and closes the issue before the commit is pushed or reviewed.
+Comment on an issue freely; resolving it is the commit's job.
+
 ## Why TITH Exists
 
 TITH is a reaction to the accumulated complexity of conventional FTN
