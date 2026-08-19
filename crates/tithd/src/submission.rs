@@ -324,7 +324,7 @@ impl SubmissionEngine {
 					JobKind::EchoMail,
 					JobTarget::Area(message.destination_or_area.clone()),
 					None,
-					vec![signer.identity.address.to_string()],
+					vec![signer.identity.address.clone()],
 					deliveries,
 				)
 			}
@@ -415,7 +415,7 @@ impl SubmissionEngine {
 			random_u64()?,
 			created,
 			SOFTWARE,
-			&[signer.identity.address.to_string()],
+			std::slice::from_ref(&signer.identity.address),
 		)
 		.map_err(|error| BuildFailure::invalid(error.to_string()))?;
 		validate_item(&item, self.nodelist.as_ref())
@@ -488,21 +488,34 @@ impl SubmissionEngine {
 			.ok_or_else(|| BuildFailure::invalid("distribution item has no Area"))?;
 		let children = tith_wire::tlv::parse_sequence(&root.value)
 			.map_err(|error| BuildFailure::invalid(error.to_string()))?;
-		let mut seen_by: BTreeSet<String> = children
-			.iter()
-			.filter(|child| child.type_code == tith_wire::types::SEEN_BY)
-			.map(|child| {
-				String::from_utf8(child.value.clone())
-					.map_err(|_| BuildFailure::invalid("SeenBy is not UTF-8"))
-			})
-			.collect::<Result<_, _>>()?;
+		// Each SeenBy is a Trimmed Collection, so it must be expanded before an
+		// address can be compared against it.
+		let mut seen_by: BTreeSet<Address> = BTreeSet::new();
+		for child in &children {
+			if child.type_code == tith_wire::types::SEEN_BY {
+				seen_by.extend(
+					tith_wire::item::seen_by_addresses(child)
+						.map_err(|error| BuildFailure::invalid(error.to_string()))?,
+				);
+			}
+		}
 		let mut deliveries =
 			self.area_deliveries(&signer.reference, &signer.identity, &area, file_area)?;
 		deliveries.retain(|copy| {
-			copy.next_hop != inbound.record.peer && !seen_by.contains(&copy.next_hop)
+			copy.next_hop != inbound.record.peer
+				&& !copy
+					.next_hop
+					.parse::<Address>()
+					.is_ok_and(|address| seen_by.contains(&address))
 		});
-		seen_by.insert(signer.identity.address.to_string());
-		seen_by.extend(deliveries.iter().map(|copy| copy.next_hop.clone()));
+		seen_by.insert(signer.identity.address.clone());
+		for copy in &deliveries {
+			seen_by.insert(
+				copy.next_hop
+					.parse()
+					.map_err(|_| BuildFailure::invalid("delivery next hop is not an address"))?,
+			);
+		}
 		let item = forward_item(
 			root,
 			&signer.identity,

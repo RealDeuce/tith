@@ -115,7 +115,7 @@ fn u16_at(bytes: &[u8], offset: usize) -> u16 {
 
 /// TSP-0003 section 7: the area name is 1 to 60 bytes from ranges 33-96 and
 /// 123-126, and does not begin with "+" or "-".
-fn valid_area(name: &str) -> bool {
+pub(crate) fn valid_area(name: &str) -> bool {
 	let bytes = name.as_bytes();
 	(1..=60).contains(&bytes.len())
 		&& !matches!(bytes[0], b'+' | b'-')

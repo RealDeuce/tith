@@ -12,6 +12,7 @@
 #![forbid(unsafe_code)]
 
 mod bso;
+mod inbound;
 mod netmail;
 mod nodelist;
 
@@ -19,8 +20,7 @@ use std::error::Error;
 use std::path::Path;
 use std::process::ExitCode;
 
-const USAGE: &str =
-	"usage: tith (submit ... | nodelist convert ... | netmail scan ... | bso scan ...)";
+const USAGE: &str = "usage: tith (submit ... | nodelist convert ... | netmail scan ... | bso scan ... | inbound run ...)";
 
 fn main() -> ExitCode {
 	let mut arguments = std::env::args();
@@ -55,6 +55,7 @@ fn run(
 		Some("nodelist") => ("tith nodelist", nodelist::run(arguments)),
 		Some("netmail") => ("tith netmail", netmail::run(arguments)),
 		Some("bso") => ("tith bso", bso::run(arguments)),
+		Some("inbound") => ("tith inbound", inbound::run(arguments)),
 		_ => ("tith", Err(USAGE.into())),
 	}
 }

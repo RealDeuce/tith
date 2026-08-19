@@ -9,11 +9,16 @@
 #![forbid(unsafe_code)]
 
 mod attach;
+mod export;
 mod packet;
 
 use std::fmt;
 
 pub use attach::{AttachError, AttachStyle, Attachment, Disposition, attachments, file_list};
+pub use export::{
+	CivilTime, ExportError, PacketOptions, civil_from_local, control, decode_body, encode_body,
+	endpoint, format_date_time, parse_date_time, tithsig_controls, tithsign_controls,
+};
 pub use packet::{
 	Endpoint, PACKED_HEADER_BYTES, PACKET_HEADER_BYTES, PackedMessage, Packet, PacketError,
 };

@@ -1,0 +1,19 @@
+[package]
+name = "tith-adapter"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+base64.workspace = true
+tith-config.workspace = true
+tith-crypto.workspace = true
+tith-ledger = { path = "../tith-ledger" }
+tith-message-legacy = { path = "../tith-message-legacy" }
+tith-wire.workspace = true
+
+[lints]
+workspace = true

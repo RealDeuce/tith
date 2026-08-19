@@ -189,9 +189,10 @@ lengths and outstanding-response accounting cannot resolve.
 - `crates/tith-nodelist-legacy` converts an FTS-5000.005 nodelist to TTS-5000.
   It is a legacy conversion boundary and must not be folded into
   `tith-nodelist`, and it must not depend on it.
-- `crates/tith-message-legacy` reads the TSP-0003 section 4 stored `.msg`, the
-  section 5 packed message, and the section 6 Type-2+ packet, and resolves
-  attachment disposition. It is likewise a legacy boundary and must
+- `crates/tith-message-legacy` reads and writes the TSP-0003 section 4 stored
+  `.msg`, the section 5 packed message, and the section 6 Type-2+ packet, and
+  resolves attachment disposition. It has no dependencies at all, so the native
+  field mapping belongs to `tith-adapter` and never here. It is likewise a legacy boundary and must
   not depend on the native protocol layer. The two post-send conventions,
   FTS-5005.003 Subject FileSpec prefixes and FSC-0053.002 FLAGS `KFS`/`TFS`,
   differ in granularity as well as syntax and are never inferred from the
@@ -203,6 +204,20 @@ lengths and outstanding-response accounting cannot resolve.
   FTS-5005 as written rather than any one implementation's documented
   limitations: derived names are matched in either case, and the default zone
   is searched under both the bare root and its zone-suffixed form.
+- `crates/tith-ledger` is the TSP-0013 section 2 private durable adapter
+  ledger. It records the intended conversion and generated names before
+  publication, and its state ordering is what recovery uses; it must never be
+  made to depend on a legacy pathname, scan order, timestamp, or disappearance
+  as proof of a native IPC result.
+- `crates/tith-adapter` is the one crate permitted to see both sides, because
+  the TSP-0003 field mapping needs `tith-wire` for native items and
+  `tith-message-legacy` for legacy objects while neither may depend on the
+  other. It owns the TSP-0013 placement, transaction, and ownership boundary:
+  conversion in both directions, the section 3.1 byte-exact self-check,
+  section 5 publication, TIC generation, the TSP-0011 section 5.1 policy, and
+  the FSC-0086.001 request-processor boundary. A conversion which cannot be
+  represented is refused, never made lossy, and a step blocked on standards
+  work fails loudly naming its issue rather than degrading silently.
 - `crates/tith` is the client multiplexer binary. It carries no protocol logic
   and only dispatches subcommands. `tith-submit` is installed as a link to it,
   so the file stem of `argv[0]` may select the submit client directly; keep
@@ -219,6 +234,13 @@ lengths and outstanding-response accounting cannot resolve.
   rewrites a reference file only after Committed, and never deletes or
   truncates a referenced payload — that directive is carried to the service as
   a `Source-Disposition` and performed there, after delivery.
+  `tith inbound run` is the same boundary in the other direction. It publishes
+  every object under a private staging name and then an exclusive create which
+  never replaces an existing file, publishes companions before the object that
+  names them, and acknowledges an item only after its objects and the ledger
+  state which transfers responsibility are durable. It must not append to an
+  already published packet: TSP-0013 section 5 forbids replacing a published
+  object, and a tosser reads and deletes packets without any lock.
 - `crates/tithd` is the blocking reference service and contains host bindings.
   Its native mail listener accepts only operations whose wire grammar and
   durable behavior are implemented; unsupported work receives an explicit

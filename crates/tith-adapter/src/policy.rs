@@ -1,0 +1,235 @@
+//! The TSP-0011 section 5.1 final item authentication policy, and the local
+//! refusal policy TSP-0013 section 4 requires trusted configuration for.
+
+use tith_wire::item::ItemAuthentication;
+
+/// What to do with an item at final delivery.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Action {
+	/// Deliver with a prominent local diagnostic.
+	DeliverWarn,
+	/// Do not deliver to the addressed user or area. The consumer takes durable
+	/// administrative ownership of the exact payload first.
+	Orphan,
+	/// Origin-Valid is delivered normally, without a warning or a reply.
+	Deliver,
+}
+
+/// The per-state policy.
+///
+/// TSP-0011 section 5.1: absent configuration uses Deliver-Warn for Unsigned
+/// and `SignedOrigin-Valid`, Orphan for both Invalid states, and disables
+/// Reply-Origin.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Policy {
+	pub unsigned: Action,
+	pub signed_origin_valid: Action,
+	pub signed_origin_invalid: Action,
+	pub origin_invalid: Action,
+	/// Reply-Origin is explicit local policy, disabled by default, because a
+	/// forged Origin makes an automatic reply a backscatter amplifier.
+	pub reply_origin: bool,
+}
+
+impl Default for Policy {
+	fn default() -> Self {
+		Self {
+			unsigned: Action::DeliverWarn,
+			signed_origin_valid: Action::DeliverWarn,
+			signed_origin_invalid: Action::Orphan,
+			origin_invalid: Action::Orphan,
+			reply_origin: false,
+		}
+	}
+}
+
+impl Policy {
+	#[must_use]
+	pub const fn action(&self, authentication: ItemAuthentication) -> Action {
+		match authentication {
+			ItemAuthentication::Unsigned => self.unsigned,
+			ItemAuthentication::SignedOriginValid => self.signed_origin_valid,
+			ItemAuthentication::SignedOriginInvalid => self.signed_origin_invalid,
+			ItemAuthentication::OriginInvalid => self.origin_invalid,
+			// Origin-Valid needs no policy, and Transport occurs only for a
+			// FileRequest, whose enclosing SignedTLV is its complete and intended
+			// authentication rather than a reduced one.
+			ItemAuthentication::OriginValid | ItemAuthentication::Transport => Action::Deliver,
+		}
+	}
+}
+
+/// The exact diagnostic TSP-0011 section 5.1 gives for each state.
+#[must_use]
+pub const fn diagnostic(authentication: ItemAuthentication) -> Option<&'static str> {
+	Some(match authentication {
+		ItemAuthentication::Unsigned => {
+			"NOTICE: This message was not signed by its Origin, or its\nsignature was removed before delivery."
+		}
+		ItemAuthentication::SignedOriginValid => {
+			"NOTICE: This message was not signed by its Origin.  Its\nintermediate gateway signature was valid."
+		}
+		ItemAuthentication::SignedOriginInvalid | ItemAuthentication::OriginInvalid => {
+			"ERROR: This signed message or its signature was modified in\ntransit.  It does not match the bytes authenticated by its signer."
+		}
+		ItemAuthentication::OriginValid | ItemAuthentication::Transport => return None,
+	})
+}
+
+/// Why an item could not be converted, and what the adapter is allowed to do.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum Refusal {
+	/// TSP-0006 has no Job which can originate a `FileRequest` response.
+	///
+	/// See issue 16. Until that is resolved the request is understood and the
+	/// SRIF processor may even run, but the reply cannot be submitted.
+	FileRequestUnsubmittable,
+	/// TSP-0006 has no Job for a peer-addressed standalone File.
+	///
+	/// See issue 17.
+	PeerFileUnsubmittable,
+	/// The conversion itself failed.
+	Unconvertible(String),
+}
+
+impl std::fmt::Display for Refusal {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		match self {
+			Self::FileRequestUnsubmittable => f.write_str(
+				"a FileRequest response is a set of peer-addressed standalone Files, and TSP-0006 \
+				 has no Job which can originate one (issue 16); the request was processed but its \
+				 reply cannot be submitted until that is resolved",
+			),
+			Self::PeerFileUnsubmittable => f.write_str(
+				"a peer-addressed standalone File is carried by TTS-0005 and received by TSP-0011, \
+				 but TSP-0006 has no Job which can originate one (issue 17)",
+			),
+			Self::Unconvertible(reason) => write!(f, "{reason}"),
+		}
+	}
+}
+
+/// What the adapter does with a refused item.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Disposition {
+	/// Terminal. TSP-0013 section 4 permits this "only when trusted policy
+	/// authorizes the local terminal outcome".
+	Reject,
+	/// Retried later. Nothing is lost, but an item which can never succeed will
+	/// keep returning, because claim selection is oldest first.
+	Defer,
+}
+
+/// The configurable refusal policy.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Refusals {
+	/// A conversion which cannot succeed until a standard changes.
+	///
+	/// Deferring is the default: rejecting would discard work which becomes
+	/// possible the moment the blocking issue is resolved.
+	pub blocked_on_standard: Disposition,
+	/// A conversion which will never succeed for this item.
+	pub unconvertible: Disposition,
+}
+
+impl Default for Refusals {
+	fn default() -> Self {
+		Self {
+			blocked_on_standard: Disposition::Defer,
+			unconvertible: Disposition::Reject,
+		}
+	}
+}
+
+impl Refusals {
+	#[must_use]
+	pub const fn disposition(&self, refusal: &Refusal) -> Disposition {
+		match refusal {
+			Refusal::FileRequestUnsubmittable | Refusal::PeerFileUnsubmittable => {
+				self.blocked_on_standard
+			}
+			Refusal::Unconvertible(_) => self.unconvertible,
+		}
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	#[test]
+	fn the_default_policy_is_the_one_the_standard_names() {
+		let policy = Policy::default();
+		assert_eq!(
+			policy.action(ItemAuthentication::Unsigned),
+			Action::DeliverWarn
+		);
+		assert_eq!(
+			policy.action(ItemAuthentication::SignedOriginValid),
+			Action::DeliverWarn
+		);
+		assert_eq!(
+			policy.action(ItemAuthentication::SignedOriginInvalid),
+			Action::Orphan
+		);
+		assert_eq!(
+			policy.action(ItemAuthentication::OriginInvalid),
+			Action::Orphan
+		);
+		assert_eq!(
+			policy.action(ItemAuthentication::OriginValid),
+			Action::Deliver
+		);
+		assert!(!policy.reply_origin, "Reply-Origin is disabled by default");
+	}
+
+	#[test]
+	fn only_the_states_needing_one_have_a_diagnostic() {
+		assert!(
+			diagnostic(ItemAuthentication::Unsigned)
+				.unwrap()
+				.starts_with("NOTICE:")
+		);
+		assert!(
+			diagnostic(ItemAuthentication::SignedOriginValid)
+				.unwrap()
+				.starts_with("NOTICE:")
+		);
+		assert!(
+			diagnostic(ItemAuthentication::OriginInvalid)
+				.unwrap()
+				.starts_with("ERROR:")
+		);
+		assert_eq!(diagnostic(ItemAuthentication::OriginValid), None);
+		assert_eq!(diagnostic(ItemAuthentication::Transport), None);
+	}
+
+	#[test]
+	fn a_standards_blocked_refusal_defers_and_names_its_issue() {
+		let refusals = Refusals::default();
+		assert_eq!(
+			refusals.disposition(&Refusal::PeerFileUnsubmittable),
+			Disposition::Defer
+		);
+		assert_eq!(
+			refusals.disposition(&Refusal::FileRequestUnsubmittable),
+			Disposition::Defer
+		);
+		assert_eq!(
+			refusals.disposition(&Refusal::Unconvertible("bad".to_owned())),
+			Disposition::Reject
+		);
+		// The diagnostic must name the issue, so the deferral is traceable to the
+		// standards work which unblocks it rather than looking like a local bug.
+		assert!(
+			Refusal::PeerFileUnsubmittable
+				.to_string()
+				.contains("issue 17")
+		);
+		assert!(
+			Refusal::FileRequestUnsubmittable
+				.to_string()
+				.contains("issue 16")
+		);
+	}
+}

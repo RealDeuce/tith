@@ -116,7 +116,7 @@ pub fn build_originated_message(
 	request_identifier: u64,
 	via_timestamp: u64,
 	software: &str,
-	seen_by: &[String],
+	seen_by: &[Address],
 ) -> Result<OwnedTlv, BundleError> {
 	let effective_signer = provenance
 		.signer
@@ -192,8 +192,10 @@ pub fn build_originated_message(
 		crate::integer::encode_u64(request_identifier),
 	)?);
 	signed.push(via_value(effective_signer, via_timestamp, software)?);
-	for value in seen_by {
-		signed.push(OwnedTlv::new(types::SEEN_BY, value.as_bytes().to_vec())?);
+	// TTS-0005 section 3 type 64 makes Message SeenBy an optional singleton,
+	// and type 112 makes its value one Trimmed Collection. A File repeats it.
+	if let Some(value) = seen_by_value(seen_by)? {
+		signed.push(value);
 	}
 	for value in data.additional_kludge_lines {
 		signed.push(OwnedTlv::new(
@@ -211,7 +213,7 @@ pub fn build_originated_file(
 	request_identifier: u64,
 	via_timestamp: u64,
 	software: &str,
-	seen_by: &[String],
+	seen_by: &[Address],
 ) -> Result<OwnedTlv, BundleError> {
 	let effective_signer = provenance
 		.signer
@@ -255,8 +257,13 @@ pub fn build_originated_file(
 		crate::integer::encode_u64(request_identifier),
 	)?);
 	signed.push(via_value(effective_signer, via_timestamp, software)?);
+	// TTS-0005 section 3 type 65 marks File SeenBy "F+", so unlike a Message it
+	// repeats. Each value is still its own Trimmed Collection.
 	for value in seen_by {
-		signed.push(OwnedTlv::new(types::SEEN_BY, value.as_bytes().to_vec())?);
+		signed.push(OwnedTlv::new(
+			types::SEEN_BY,
+			value.to_string().into_bytes(),
+		)?);
 	}
 	OwnedTlv::new(types::FILE, concatenate(&signed)).map_err(Into::into)
 }
@@ -268,7 +275,7 @@ pub fn forward_item(
 	request_identifier: u64,
 	via_timestamp: u64,
 	software: &str,
-	seen_by: &[String],
+	seen_by: &[Address],
 ) -> Result<OwnedTlv, BundleError> {
 	if !matches!(item.type_code, types::MESSAGE | types::FILE) {
 		return Err(BundleError::Unexpected("forward item kind"));
@@ -289,8 +296,17 @@ pub fn forward_item(
 		}
 	}
 	output.push(via_value(receiving_identity, via_timestamp, software)?);
-	for address in seen_by {
-		output.push(OwnedTlv::new(types::SEEN_BY, address.as_bytes().to_vec())?);
+	if item.type_code == types::MESSAGE {
+		if let Some(value) = seen_by_value(seen_by)? {
+			output.push(value);
+		}
+	} else {
+		for address in seen_by {
+			output.push(OwnedTlv::new(
+				types::SEEN_BY,
+				address.to_string().into_bytes(),
+			)?);
+		}
 	}
 	for child in &children[signature + 1..] {
 		if child.type_code == types::ADDITIONAL_KLUDGE_LINE {
@@ -352,6 +368,25 @@ fn push_provenance(
 fn area_value(name: &str) -> Result<OwnedTlv, BundleError> {
 	let child = OwnedTlv::new(types::AREA_NAME, name.as_bytes().to_vec())?;
 	OwnedTlv::new(types::AREA, child.encode()).map_err(Into::into)
+}
+
+/// One `SeenBy` holding the whole collection, or nothing when it is empty.
+fn seen_by_value(addresses: &[Address]) -> Result<Option<OwnedTlv>, BundleError> {
+	if addresses.is_empty() {
+		return Ok(None);
+	}
+	let value = crate::address::format_trimmed_collection(addresses);
+	Ok(Some(OwnedTlv::new(types::SEEN_BY, value.into_bytes())?))
+}
+
+/// The addresses a `SeenBy` value names.
+///
+/// Every value is a Trimmed Collection per TTS-0005 section 4 type 112, so a
+/// caller comparing against one address must expand it rather than treat the
+/// whole value as a single address.
+pub fn seen_by_addresses(value: &OwnedTlv) -> Result<Vec<Address>, BundleError> {
+	crate::address::parse_trimmed_list(text(value)?)
+		.map_err(|_| BundleError::Unexpected("SeenBy is not a Trimmed Collection of addresses"))
 }
 
 fn via_value(identity: &Identity, timestamp: u64, software: &str) -> Result<OwnedTlv, BundleError> {
@@ -599,7 +634,17 @@ fn validate_area(value: &OwnedTlv) -> Result<String, BundleError> {
 	Ok(name)
 }
 
-fn validate_via(value: &OwnedTlv) -> Result<(), BundleError> {
+/// One decoded Via, whose parts a legacy converter needs separately.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ViaData {
+	pub address: Address,
+	pub public_key: Option<PublicKey>,
+	pub timestamp: u64,
+	pub software: String,
+}
+
+/// Decodes a Via, which validation and conversion both need.
+fn read_via(value: &OwnedTlv) -> Result<ViaData, BundleError> {
 	let (address_value, address_bytes) = take_encoded_tlv(&value.value)?;
 	if address_value.type_code != types::ADDRESS {
 		return Err(BundleError::Missing("Via Address"));
@@ -607,11 +652,12 @@ fn validate_via(value: &OwnedTlv) -> Result<(), BundleError> {
 	let address = parse_address(&address_value)?;
 	let mut offset = address_bytes;
 	let (next, next_bytes) = take_encoded_tlv(&value.value[offset..])?;
+	let mut public_key = None;
 	if address.is_unlisted() {
 		if next.type_code != types::PUBLIC_KEY {
 			return Err(BundleError::Missing("PublicKey after unlisted Via Address"));
 		}
-		parse_public_key(&next)?;
+		public_key = Some(parse_public_key(&next)?);
 		offset += next_bytes;
 	} else if next.type_code == types::PUBLIC_KEY {
 		return Err(BundleError::Unexpected(
@@ -626,20 +672,30 @@ fn validate_via(value: &OwnedTlv) -> Result<(), BundleError> {
 	if timestamp.type_code != types::TIMESTAMP {
 		return Err(BundleError::Missing("Via Timestamp"));
 	}
-	decode_u64(&timestamp.value)?;
+	let timestamp = decode_u64(&timestamp.value)?;
 	offset += timestamp_bytes;
-	std::str::from_utf8(&value.value[offset..]).map_err(|_| BundleError::InvalidUtf8)?;
-	Ok(())
+	let software = std::str::from_utf8(&value.value[offset..])
+		.map_err(|_| BundleError::InvalidUtf8)?
+		.to_owned();
+	Ok(ViaData {
+		address,
+		public_key,
+		timestamp,
+		software,
+	})
 }
 
-fn validate_reply_to(value: &OwnedTlv) -> Result<(), BundleError> {
+/// Decodes a `ReplyTo` into the address and complete identifier string.
+fn read_reply_to(value: &OwnedTlv) -> Result<(Address, String), BundleError> {
 	let (address, used) = take_encoded_tlv(&value.value)?;
 	if address.type_code != types::ADDRESS {
 		return Err(BundleError::Missing("ReplyTo Address"));
 	}
-	parse_address(&address)?;
-	std::str::from_utf8(&value.value[used..]).map_err(|_| BundleError::InvalidUtf8)?;
-	Ok(())
+	let address = parse_address(&address)?;
+	let identifier = std::str::from_utf8(&value.value[used..])
+		.map_err(|_| BundleError::InvalidUtf8)?
+		.to_owned();
+	Ok((address, identifier))
 }
 
 fn validate_message(
@@ -705,7 +761,7 @@ fn validate_message(
 		}
 	}
 	if let Some((_, reply)) = cursor.optional(types::REPLY_TO) {
-		validate_reply_to(reply)?;
+		read_reply_to(reply)?;
 	}
 	if let Some((_, value)) = cursor.optional(types::ORIGINAL_CHARACTER_SET) {
 		text(value)?;
@@ -755,7 +811,7 @@ fn validate_message(
 		return Err(BundleError::Missing("Message Via"));
 	}
 	for (_, via) in vias {
-		validate_via(via)?;
+		read_via(via)?;
 	}
 	if let Some((_, seen_by)) = cursor.optional(types::SEEN_BY) {
 		text(seen_by)?;
@@ -895,7 +951,7 @@ fn validate_file(
 		return Err(BundleError::Unexpected("non-distribution File Via/SeenBy"));
 	}
 	for (_, via) in vias {
-		validate_via(via)?;
+		read_via(via)?;
 	}
 	for (_, seen_by) in seen_by {
 		text(seen_by)?;
@@ -1120,6 +1176,372 @@ pub fn request_identifier(value: &OwnedTlv) -> Option<u64> {
 	identifiers.next().is_none().then_some(identifier)
 }
 
+/// The signer-selecting values a legacy converter must carry across.
+///
+/// `SignedOrigin` and its conditional `PublicKey` have no traditional legacy
+/// field, which is the whole reason TSP-0003 section 3.1 defines `TITHSIGN`.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ItemSigning {
+	pub origin: Address,
+	pub origin_key: Option<PublicKey>,
+	pub signed_origin: Option<Address>,
+	pub signed_origin_key: Option<PublicKey>,
+	pub signature: Option<Signature>,
+	/// The exact encoded bytes the Signature covers, empty when unsigned.
+	///
+	/// TSP-0003 section 3.1 requires an exporter to compare reconstructed
+	/// children against these bytes directly, because "semantic equality alone
+	/// is insufficient".
+	pub signed_region: Vec<u8>,
+	/// The encoded `SignedOrigin` child and its conditional `PublicKey`, which
+	/// is exactly what a `TITHSIGN` control carries.
+	pub signed_origin_encoding: Vec<u8>,
+}
+
+/// A Message decomposed into everything a legacy conversion needs.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ReadMessage {
+	pub data: MessageData,
+	pub signing: ItemSigning,
+	pub request_identifier: u64,
+	pub vias: Vec<ViaData>,
+	pub seen_by: Vec<Address>,
+}
+
+/// A standalone File decomposed the same way.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ReadFile {
+	pub data: StandaloneFileData,
+	pub signing: ItemSigning,
+	pub request_identifier: u64,
+	pub vias: Vec<ViaData>,
+	pub seen_by: Vec<Address>,
+}
+
+/// A `FileRequest`, which carries no Origin, Signature, or route.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ReadFileRequest {
+	pub filename: String,
+	pub timestamp: Option<u64>,
+	pub request_identifier: u64,
+}
+
+/// Reads a Message into its values.
+///
+/// This does not authenticate. The caller already has the item's
+/// `ItemAuthentication` from the record which delivered it; [`ItemSigning`]
+/// carries the exact bytes and Signature needed to check it again, which
+/// TSP-0003 section 3.1 requires an exporter to do. The resolver is only for
+/// the Destination key, which a listed address does not carry inline.
+pub fn read_message(
+	value: &OwnedTlv,
+	resolver: &impl KeyResolver,
+) -> Result<ReadMessage, BundleError> {
+	if value.type_code != types::MESSAGE {
+		return Err(BundleError::Unexpected("read_message item kind"));
+	}
+	let children = parse_sequence(&value.value)?;
+	let mut cursor = Cursor::new(&children);
+	let (_, origin_value) = cursor.take(types::ORIGIN, "Message Origin")?;
+	let origin = parse_address(origin_value)?;
+	let origin_key = conditional_public_key(&mut cursor, &origin)?
+		.map(parse_public_key)
+		.transpose()?;
+	let signed_origin = read_signed_origin(&mut cursor)?;
+	let destination = if cursor.peek_type() == Some(types::DESTINATION) {
+		let (_, value) = cursor.take(types::DESTINATION, "Destination")?;
+		let address = parse_address(value)?;
+		let key = conditional_public_key(&mut cursor, &address)?;
+		Some(parse_identity(value, key, resolver)?)
+	} else {
+		None
+	};
+	let timestamp = decode_u64(&cursor.take(types::TIMESTAMP, "Message Timestamp")?.1.value)?;
+	let to_user = text(cursor.take(types::TO_USER_NAME, "ToUserName")?.1)?.to_owned();
+	let from_user = text(cursor.take(types::FROM_USER_NAME, "FromUserName")?.1)?.to_owned();
+	let subject = text(cursor.take(types::SUBJECT, "Subject")?.1)?.to_owned();
+	let message_text = text(cursor.take(types::MESSAGE_TEXT, "MessageText")?.1)?.to_owned();
+	let area = cursor
+		.optional(types::AREA)
+		.map(|(_, value)| validate_area(value))
+		.transpose()?;
+	let mut attachments = Vec::new();
+	for (_, file) in cursor.repeated(types::FILE) {
+		attachments.push(read_attachment(file)?);
+	}
+	let legacy_attributes = cursor
+		.optional(types::LEGACY_ATTRIBUTES)
+		.map(|(_, value)| decode_u64(&value.value))
+		.transpose()?;
+	let timestamp_offset = cursor
+		.optional(types::TIMESTAMP_OFFSET)
+		.map(|(_, value)| decode_i64(&value.value))
+		.transpose()?;
+	let mut optional = [types::TEAR_LINE, types::ORIGIN_LINE, types::MESSAGE_ID]
+		.into_iter()
+		.map(|type_code| {
+			cursor
+				.optional(type_code)
+				.map(|(_, value)| text(value).map(str::to_owned))
+				.transpose()
+		})
+		.collect::<Result<Vec<_>, _>>()?
+		.into_iter();
+	let tear_line = optional.next().expect("three optional values");
+	let origin_line = optional.next().expect("three optional values");
+	let message_id = optional.next().expect("three optional values");
+	let reply_to = cursor
+		.optional(types::REPLY_TO)
+		.map(|(_, value)| read_reply_to(value))
+		.transpose()?;
+	// OriginalCharacterSet is a signed child with no MessageData field. A
+	// converter which meets one cannot reproduce the signed region, so it is
+	// refused here rather than dropped silently.
+	if cursor.optional(types::ORIGINAL_CHARACTER_SET).is_some() {
+		return Err(BundleError::Unexpected(
+			"OriginalCharacterSet has no conversion",
+		));
+	}
+	let (signature, signed_region) = read_signature(&mut cursor, &children)?;
+	let request_identifier = decode_u64(
+		&cursor
+			.take(types::REQUEST_IDENTIFIER, "Message RequestIdentifier")?
+			.1
+			.value,
+	)?;
+	let mut vias = Vec::new();
+	for (_, via) in cursor.repeated(types::VIA) {
+		vias.push(read_via(via)?);
+	}
+	if vias.is_empty() {
+		return Err(BundleError::Missing("Message Via"));
+	}
+	let seen_by = match cursor.optional(types::SEEN_BY) {
+		Some((_, value)) => seen_by_addresses(value)?,
+		None => Vec::new(),
+	};
+	let mut additional_kludge_lines = Vec::new();
+	for (_, line) in cursor.repeated(types::ADDITIONAL_KLUDGE_LINE) {
+		additional_kludge_lines.push(text(line)?.to_owned());
+	}
+	cursor.finish()?;
+	Ok(ReadMessage {
+		data: MessageData {
+			destination,
+			timestamp,
+			to_user,
+			from_user,
+			subject,
+			text: message_text,
+			area,
+			attachments,
+			legacy_attributes,
+			timestamp_offset,
+			tear_line,
+			origin_line,
+			message_id,
+			reply_to,
+			additional_kludge_lines,
+		},
+		signing: ItemSigning {
+			origin,
+			origin_key,
+			signed_origin: signed_origin.address,
+			signed_origin_key: signed_origin.key,
+			signature,
+			signed_region,
+			signed_origin_encoding: signed_origin.encoding,
+		},
+		request_identifier,
+		vias,
+		seen_by,
+	})
+}
+
+/// Reads a standalone distribution File into its values.
+pub fn read_standalone_file(value: &OwnedTlv) -> Result<ReadFile, BundleError> {
+	if value.type_code != types::FILE {
+		return Err(BundleError::Unexpected("read_standalone_file item kind"));
+	}
+	let children = parse_sequence(&value.value)?;
+	let mut cursor = Cursor::new(&children);
+	let filename = text(
+		cursor
+			.optional(types::FILENAME)
+			.ok_or(BundleError::Missing("standalone File Filename"))?
+			.1,
+	)?
+	.to_owned();
+	let timestamp = cursor
+		.optional(types::TIMESTAMP)
+		.map(|(_, value)| decode_u64(&value.value))
+		.transpose()?;
+	let contents = cursor
+		.take(types::CONTENTS, "File Contents")?
+		.1
+		.value
+		.clone();
+	let area = cursor
+		.optional(types::AREA)
+		.map(|(_, value)| validate_area(value))
+		.transpose()?
+		.ok_or(BundleError::Missing("distribution File Area"))?;
+	let (_, origin_value) = cursor.take(types::ORIGIN, "standalone File Origin")?;
+	let origin = parse_address(origin_value)?;
+	let origin_key = conditional_public_key(&mut cursor, &origin)?
+		.map(parse_public_key)
+		.transpose()?;
+	let signed_origin = read_signed_origin(&mut cursor)?;
+	let short_description = cursor
+		.optional(types::SHORT_DESCRIPTION)
+		.map(|(_, value)| text(value).map(str::to_owned))
+		.transpose()?;
+	let mut long_description_lines = Vec::new();
+	for (_, line) in cursor.repeated(types::LONG_DESCRIPTION_LINE) {
+		long_description_lines.push(text(line)?.to_owned());
+	}
+	let mut optional = [types::TEAR_LINE, types::MAGIC_WORD, types::REPLACES]
+		.into_iter()
+		.map(|type_code| {
+			cursor
+				.optional(type_code)
+				.map(|(_, value)| text(value).map(str::to_owned))
+				.transpose()
+		})
+		.collect::<Result<Vec<_>, _>>()?
+		.into_iter();
+	let tear_line = optional.next().expect("three optional values");
+	let magic_word = optional.next().expect("three optional values");
+	let replaces = optional.next().expect("three optional values");
+	let (signature, signed_region) = read_signature(&mut cursor, &children)?;
+	let request_identifier = decode_u64(
+		&cursor
+			.take(types::REQUEST_IDENTIFIER, "File RequestIdentifier")?
+			.1
+			.value,
+	)?;
+	let mut vias = Vec::new();
+	for (_, via) in cursor.repeated(types::VIA) {
+		vias.push(read_via(via)?);
+	}
+	// A File repeats SeenBy, so every value contributes to one collection.
+	let mut seen_by = Vec::new();
+	for (_, value) in cursor.repeated(types::SEEN_BY) {
+		seen_by.extend(seen_by_addresses(value)?);
+	}
+	cursor.finish()?;
+	Ok(ReadFile {
+		data: StandaloneFileData {
+			filename,
+			timestamp,
+			contents,
+			area,
+			short_description,
+			long_description_lines,
+			tear_line,
+			magic_word,
+			replaces,
+		},
+		signing: ItemSigning {
+			origin,
+			origin_key,
+			signed_origin: signed_origin.address,
+			signed_origin_key: signed_origin.key,
+			signature,
+			signed_region,
+			signed_origin_encoding: signed_origin.encoding,
+		},
+		request_identifier,
+		vias,
+		seen_by,
+	})
+}
+
+/// Reads a `FileRequest` into its values.
+pub fn read_file_request(value: &OwnedTlv) -> Result<ReadFileRequest, BundleError> {
+	if value.type_code != types::FILE_REQUEST {
+		return Err(BundleError::Unexpected("read_file_request item kind"));
+	}
+	let children = parse_sequence(&value.value)?;
+	let mut cursor = Cursor::new(&children);
+	let filename = text(cursor.take(types::FILENAME, "Filename")?.1)?.to_owned();
+	let timestamp = cursor
+		.optional(types::TIMESTAMP)
+		.map(|(_, value)| decode_u64(&value.value))
+		.transpose()?;
+	let request_identifier = decode_u64(
+		&cursor
+			.take(types::REQUEST_IDENTIFIER, "RequestIdentifier")?
+			.1
+			.value,
+	)?;
+	cursor.finish()?;
+	Ok(ReadFileRequest {
+		filename,
+		timestamp,
+		request_identifier,
+	})
+}
+
+/// The `SignedOrigin` parts of an [`ItemSigning`], read together.
+#[derive(Clone, Debug, Default)]
+struct SignedOriginParts {
+	address: Option<Address>,
+	key: Option<PublicKey>,
+	encoding: Vec<u8>,
+}
+
+fn read_signed_origin(cursor: &mut Cursor<'_>) -> Result<SignedOriginParts, BundleError> {
+	let Some((_, value)) = cursor.optional(types::SIGNED_ORIGIN) else {
+		return Ok(SignedOriginParts::default());
+	};
+	let address = parse_address(value)?;
+	let mut encoding = value.encode();
+	let key = conditional_public_key(cursor, &address)?;
+	if let Some(key) = key {
+		key.write_to(&mut encoding)?;
+	}
+	Ok(SignedOriginParts {
+		address: Some(address),
+		key: key.map(parse_public_key).transpose()?,
+		encoding,
+	})
+}
+
+fn read_signature(
+	cursor: &mut Cursor<'_>,
+	children: &[OwnedTlv],
+) -> Result<(Option<Signature>, Vec<u8>), BundleError> {
+	match cursor.optional(types::SIGNATURE) {
+		Some((index, value)) => Ok((
+			Some(parse_signature(value)?),
+			encoded_prefix(children, index),
+		)),
+		None => Ok((None, Vec::new())),
+	}
+}
+
+fn read_attachment(value: &OwnedTlv) -> Result<AttachmentData, BundleError> {
+	let children = parse_sequence(&value.value)?;
+	let mut cursor = Cursor::new(&children);
+	let filename = text(cursor.take(types::FILENAME, "attached Filename")?.1)?.to_owned();
+	let timestamp = cursor
+		.optional(types::TIMESTAMP)
+		.map(|(_, value)| decode_u64(&value.value))
+		.transpose()?;
+	let contents = cursor
+		.take(types::CONTENTS, "attached Contents")?
+		.1
+		.value
+		.clone();
+	cursor.finish()?;
+	Ok(AttachmentData {
+		filename,
+		timestamp,
+		contents,
+	})
+}
+
 pub fn validate_item(
 	value: &OwnedTlv,
 	resolver: &impl KeyResolver,
@@ -1306,7 +1728,7 @@ mod tests {
 			.unwrap();
 		via_value.extend_from_slice("tith тест 1.0".as_bytes());
 		let via = OwnedTlv::new(types::VIA, via_value).unwrap();
-		validate_via(&via).unwrap();
+		read_via(&via).unwrap();
 
 		let mut reply_value = Vec::new();
 		OwnedTlv::new(types::ADDRESS, b"fidonet#1/3".to_vec())
@@ -1315,14 +1737,11 @@ mod tests {
 			.unwrap();
 		reply_value.extend_from_slice(b"message-id@example");
 		let reply = OwnedTlv::new(types::REPLY_TO, reply_value).unwrap();
-		validate_reply_to(&reply).unwrap();
+		read_reply_to(&reply).unwrap();
 
 		let mut invalid = via;
 		invalid.value.push(0xff);
-		assert!(matches!(
-			validate_via(&invalid),
-			Err(BundleError::InvalidUtf8)
-		));
+		assert!(matches!(read_via(&invalid), Err(BundleError::InvalidUtf8)));
 	}
 
 	#[test]
@@ -1337,7 +1756,7 @@ mod tests {
 			child.write_to(&mut value).unwrap();
 		}
 		value.extend_from_slice(b"tith 1.0");
-		validate_via(&OwnedTlv::new(types::VIA, value).unwrap()).unwrap();
+		read_via(&OwnedTlv::new(types::VIA, value).unwrap()).unwrap();
 	}
 
 	#[test]
@@ -1462,6 +1881,67 @@ mod tests {
 	}
 
 	#[test]
+	fn a_message_carries_every_seen_by_address_in_one_trimmed_value() {
+		// Message SeenBy is an optional singleton holding a Trimmed Collection.
+		// Emitting one value per address produced a Message which this crate's
+		// own validator rejected, so any EchoMail forwarded to more than one
+		// link failed to build.
+		let signer_keys = SigningKeyPair::from_seed(&[70; 32]).unwrap();
+		let origin: Address = "fidonet#1/100".parse().unwrap();
+		let provenance = ItemProvenance {
+			origin: origin.clone(),
+			signer: Some(Identity {
+				address: origin.clone(),
+				public_key: signer_keys.public,
+			}),
+		};
+		let message = build_originated_message(
+			MessageData {
+				destination: None,
+				timestamp: 1,
+				to_user: "All".to_owned(),
+				from_user: "Me".to_owned(),
+				subject: "Hello".to_owned(),
+				text: "Body".to_owned(),
+				area: Some("SYNCHRONET".to_owned()),
+				attachments: Vec::new(),
+				legacy_attributes: None,
+				timestamp_offset: None,
+				tear_line: None,
+				origin_line: None,
+				message_id: None,
+				reply_to: None,
+				additional_kludge_lines: Vec::new(),
+			},
+			&provenance,
+			&signer_keys.secret,
+			7,
+			1,
+			"test",
+			&[
+				"fidonet#1/400".parse().unwrap(),
+				"fidonet#1/300".parse().unwrap(),
+				"fidonet#1/300".parse().unwrap(),
+			],
+		)
+		.unwrap();
+		let resolver = |address: &Address| (address == &origin).then_some(signer_keys.public);
+		validate_item(&message, &resolver).unwrap().unwrap();
+
+		let children = parse_sequence(&message.value).unwrap();
+		let values: Vec<_> = children
+			.iter()
+			.filter(|child| child.type_code == types::SEEN_BY)
+			.collect();
+		assert_eq!(values.len(), 1, "Message SeenBy is a singleton");
+		assert_eq!(values[0].value, b"fidonet#1/300,/400");
+		assert_eq!(
+			seen_by_addresses(values[0]).unwrap(),
+			["fidonet#1/300", "fidonet#1/400"].map(|text| text.parse::<Address>().unwrap())
+		);
+	}
+
+	#[test]
 	fn standalone_file_uses_signed_origin_fallback() {
 		let signer_keys = SigningKeyPair::from_seed(&[25; 32]).unwrap();
 		let provenance = ItemProvenance {
@@ -1488,7 +1968,7 @@ mod tests {
 			9,
 			1,
 			"test",
-			&["fidonet#1/300".to_owned()],
+			&["fidonet#1/300".parse().unwrap()],
 		)
 		.unwrap();
 		let validated = validate_item(&file, &|_: &Address| None).unwrap().unwrap();
@@ -1498,5 +1978,253 @@ mod tests {
 		);
 		assert_eq!(validated.provenance, Some(provenance));
 		assert!(validated.duplicate_identity.is_some());
+	}
+
+	#[test]
+	fn reading_a_message_inverts_building_one() {
+		let signer_keys = SigningKeyPair::from_seed(&[80; 32]).unwrap();
+		let destination_keys = SigningKeyPair::from_seed(&[81; 32]).unwrap();
+		let origin: Address = "fidonet#1:104/36".parse().unwrap();
+		let destination = Identity {
+			address: "fidonet#1:104/1".parse().unwrap(),
+			public_key: destination_keys.public,
+		};
+		let provenance = ItemProvenance {
+			origin: origin.clone(),
+			signer: Some(Identity {
+				address: origin.clone(),
+				public_key: signer_keys.public,
+			}),
+		};
+		let data = MessageData {
+			destination: Some(destination.clone()),
+			timestamp: 1_755_500_000,
+			to_user: "Recipient".to_owned(),
+			from_user: "Sender".to_owned(),
+			subject: "work.zip".to_owned(),
+			text: "Body text".to_owned(),
+			area: None,
+			attachments: vec![
+				AttachmentData {
+					filename: "work.zip".to_owned(),
+					timestamp: Some(1_755_400_000),
+					contents: b"payload".to_vec(),
+				},
+				AttachmentData {
+					filename: "other.zip".to_owned(),
+					timestamp: None,
+					contents: b"second".to_vec(),
+				},
+			],
+			legacy_attributes: Some(1 << 4),
+			timestamp_offset: Some(-25200),
+			tear_line: Some("TITH 0.1".to_owned()),
+			origin_line: Some("A board (1:104/36)".to_owned()),
+			message_id: Some("1:104/36 1a2b3c4d".to_owned()),
+			reply_to: Some(("fidonet#1:104/1".parse().unwrap(), "deadbeef".to_owned())),
+			additional_kludge_lines: vec!["FLAGS KFS".to_owned()],
+		};
+		let message = build_originated_message(
+			data.clone(),
+			&provenance,
+			&signer_keys.secret,
+			42,
+			1_755_500_001,
+			"tith 0.1",
+			&[],
+		)
+		.unwrap();
+
+		let resolver = |address: &Address| {
+			if address == &origin {
+				Some(signer_keys.public)
+			} else if address == &destination.address {
+				Some(destination.public_key)
+			} else {
+				None
+			}
+		};
+		let read = read_message(&message, &resolver).unwrap();
+		assert_eq!(read.data, data);
+		assert_eq!(read.request_identifier, 42);
+		assert_eq!(read.signing.origin, origin);
+		assert!(read.signing.signed_origin.is_none());
+		assert_eq!(read.vias.len(), 1);
+		assert_eq!(read.vias[0].address, origin);
+		assert_eq!(read.vias[0].timestamp, 1_755_500_001);
+		assert_eq!(read.vias[0].software, "tith 0.1");
+		assert!(read.seen_by.is_empty());
+
+		// The signed region must be the exact bytes the Signature covers, which
+		// is what TSP-0003 section 3.1 compares a reconstruction against.
+		let signature = read.signing.signature.expect("signed");
+		assert!(
+			verify_tlv(&read.signing.signed_region, &signature, &signer_keys.public).unwrap(),
+			"the reported signed region does not verify"
+		);
+	}
+
+	#[test]
+	fn reading_carries_the_signed_origin_encoding_a_tithsign_control_needs() {
+		let signer_keys = SigningKeyPair::from_seed(&[82; 32]).unwrap();
+		let destination_keys = SigningKeyPair::from_seed(&[83; 32]).unwrap();
+		let origin: Address = "fidonet#1:104/36".parse().unwrap();
+		let signer = Identity {
+			address: Address::unlisted("p2p".to_owned()).unwrap(),
+			public_key: signer_keys.public,
+		};
+		let destination = Identity {
+			address: "fidonet#1:104/1".parse().unwrap(),
+			public_key: destination_keys.public,
+		};
+		let message = build_originated_message(
+			MessageData {
+				destination: Some(destination.clone()),
+				timestamp: 1,
+				to_user: "You".to_owned(),
+				from_user: "Me".to_owned(),
+				subject: String::new(),
+				text: "Text".to_owned(),
+				area: None,
+				attachments: Vec::new(),
+				legacy_attributes: None,
+				timestamp_offset: None,
+				tear_line: None,
+				origin_line: None,
+				message_id: None,
+				reply_to: None,
+				additional_kludge_lines: Vec::new(),
+			},
+			&ItemProvenance {
+				origin: origin.clone(),
+				signer: Some(signer.clone()),
+			},
+			&signer_keys.secret,
+			1,
+			1,
+			"tith 0.1",
+			&[],
+		)
+		.unwrap();
+		let read = read_message(&message, &|address: &Address| {
+			(address == &destination.address).then_some(destination.public_key)
+		})
+		.unwrap();
+		assert_eq!(read.signing.origin, origin);
+		assert_eq!(read.signing.signed_origin, Some(signer.address.clone()));
+		assert_eq!(read.signing.signed_origin_key, Some(signer_keys.public));
+
+		// TITHSIGN carries exactly one SignedOrigin TLV followed by one
+		// PublicKey TLV, because SignedOrigin here is the unlisted address.
+		let mut expected = OwnedTlv::new(
+			types::SIGNED_ORIGIN,
+			signer.address.to_string().into_bytes(),
+		)
+		.unwrap()
+		.encode();
+		OwnedTlv::new(types::PUBLIC_KEY, signer_keys.public.as_bytes().to_vec())
+			.unwrap()
+			.write_to(&mut expected)
+			.unwrap();
+		assert_eq!(read.signing.signed_origin_encoding, expected);
+	}
+
+	#[test]
+	fn reading_a_standalone_file_inverts_building_one() {
+		let signer_keys = SigningKeyPair::from_seed(&[84; 32]).unwrap();
+		let origin: Address = "fidonet#1:104/36".parse().unwrap();
+		let data = StandaloneFileData {
+			filename: "goodies.zip".to_owned(),
+			timestamp: Some(1_755_400_000),
+			contents: b"payload".to_vec(),
+			area: "SYNCDATA".to_owned(),
+			short_description: Some("A file".to_owned()),
+			long_description_lines: vec!["First".to_owned(), "Second".to_owned()],
+			tear_line: Some("TITH 0.1".to_owned()),
+			magic_word: Some("GOODIES".to_owned()),
+			replaces: Some("goodies.*".to_owned()),
+		};
+		let file = build_originated_file(
+			data.clone(),
+			&ItemProvenance {
+				origin: origin.clone(),
+				signer: Some(Identity {
+					address: origin.clone(),
+					public_key: signer_keys.public,
+				}),
+			},
+			&signer_keys.secret,
+			9,
+			1_755_500_001,
+			"tith 0.1",
+			&["fidonet#1:104/36".parse().unwrap()],
+		)
+		.unwrap();
+		let read = read_standalone_file(&file).unwrap();
+		assert_eq!(read.data, data);
+		assert_eq!(read.request_identifier, 9);
+		assert_eq!(read.seen_by, std::slice::from_ref(&origin));
+		assert_eq!(read.vias.len(), 1);
+		let signature = read.signing.signature.expect("signed");
+		assert!(verify_tlv(&read.signing.signed_region, &signature, &signer_keys.public).unwrap());
+	}
+
+	#[test]
+	fn reading_refuses_an_item_it_cannot_represent() {
+		// OriginalCharacterSet is signed but has no MessageData field, so a
+		// converter must refuse rather than drop it and claim a round trip.
+		let signer_keys = SigningKeyPair::from_seed(&[85; 32]).unwrap();
+		let origin: Address = "fidonet#1:104/36".parse().unwrap();
+		let message = build_originated_message(
+			MessageData {
+				destination: None,
+				timestamp: 1,
+				to_user: "All".to_owned(),
+				from_user: "Me".to_owned(),
+				subject: "Hi".to_owned(),
+				text: "Text".to_owned(),
+				area: Some("SYNCHRONET".to_owned()),
+				attachments: Vec::new(),
+				legacy_attributes: None,
+				timestamp_offset: None,
+				tear_line: None,
+				origin_line: None,
+				message_id: None,
+				reply_to: None,
+				additional_kludge_lines: Vec::new(),
+			},
+			&ItemProvenance {
+				origin: origin.clone(),
+				signer: Some(Identity {
+					address: origin.clone(),
+					public_key: signer_keys.public,
+				}),
+			},
+			&signer_keys.secret,
+			1,
+			1,
+			"tith 0.1",
+			&[],
+		)
+		.unwrap();
+		let mut children = parse_sequence(&message.value).unwrap();
+		let signature = children
+			.iter()
+			.position(|child| child.type_code == types::SIGNATURE)
+			.unwrap();
+		children.insert(
+			signature,
+			OwnedTlv::new(types::ORIGINAL_CHARACTER_SET, b"CP437 2".to_vec()).unwrap(),
+		);
+		let altered = OwnedTlv::new(types::MESSAGE, concatenate(&children)).unwrap();
+		assert!(matches!(
+			read_message(&altered, &|_: &Address| None),
+			Err(BundleError::Unexpected(_))
+		));
+
+		// A File is not a Message and vice versa.
+		assert!(read_message(&altered.clone(), &|_: &Address| None).is_err());
+		assert!(read_standalone_file(&message).is_err());
+		assert!(read_file_request(&message).is_err());
 	}
 }

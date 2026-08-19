@@ -302,6 +302,99 @@ pub fn format_trimmed_collection(addresses: &[Address]) -> String {
 	format_trimmed_list(&sorted)
 }
 
+/// The inverse of [`format_trimmed_list`].
+///
+/// An element which begins with a component prefix inherits every higher
+/// component from the preceding address and defaults every lower one it does
+/// not state. An empty string is an empty list.
+///
+/// The element is not a canonical address with its prefix removed, so it
+/// cannot simply be reassembled and reparsed. A trimmed element encodes a
+/// *change* from the previous address, and a component may change to the value
+/// which the canonical form would omit: the TTS-0004 example itself contains
+/// ":885" for a net equal to its zone. Components are therefore read directly.
+pub fn parse_trimmed_list(value: &str) -> Result<Vec<Address>, AddressError> {
+	if value.is_empty() {
+		return Ok(Vec::new());
+	}
+	let mut addresses: Vec<Address> = Vec::new();
+	for element in value.split(',') {
+		let address = parse_trimmed_element(element, addresses.last())?;
+		addresses.push(address);
+	}
+	Ok(addresses)
+}
+
+fn parse_trimmed_element(
+	element: &str,
+	previous: Option<&Address>,
+) -> Result<Address, AddressError> {
+	let mut rest = element;
+	let prefix = rest.chars().next().ok_or(AddressError::InvalidNumber)?;
+	let mut order = match prefix {
+		'#' => 0,
+		':' => 1,
+		'/' => 2,
+		'.' => 3,
+		_ => return element.parse(),
+	};
+	let previous = previous.ok_or(AddressError::InvalidOrder)?;
+	rest = &rest[prefix.len_utf8()..];
+	let domain = previous.domain.clone();
+	let mut zone = previous.zone;
+	let mut net = previous.net;
+	let mut node = previous.node;
+	// Point alone is not inherited. Components are read in increasing order, so
+	// any component above point is read before point could be, and each one
+	// resets the inherited components below itself.
+	let mut point = 0;
+	loop {
+		let text = take_component(&mut rest, &[':', '/', '.']);
+		match order {
+			0 => {
+				zone = parse_trimmed_number(text, true)?;
+				net = zone;
+				node = if zone == -1 { -1 } else { 0 };
+			}
+			1 => {
+				net = parse_trimmed_number(text, true)?;
+				node = if zone == -1 { -1 } else { 0 };
+			}
+			2 => {
+				node = parse_trimmed_number(text, true)?;
+			}
+			_ => {
+				point = u16::try_from(parse_trimmed_number(text, false)?)
+					.map_err(|_| AddressError::OutOfRange)?;
+			}
+		}
+		let Some(separator) = rest.chars().next() else {
+			break;
+		};
+		rest = &rest[separator.len_utf8()..];
+		let following = match separator {
+			':' => 1,
+			'/' => 2,
+			'.' => 3,
+			_ => return Err(AddressError::InvalidOrder),
+		};
+		if following <= order {
+			return Err(AddressError::InvalidOrder);
+		}
+		order = following;
+	}
+	Address::new(domain, zone, net, node, point)
+}
+
+/// A component of a trimmed element, which unlike a canonical address may
+/// restate a value the canonical form would have omitted.
+fn parse_trimmed_number(text: &str, allow_negative_one: bool) -> Result<i32, AddressError> {
+	if text == "0" {
+		return Ok(0);
+	}
+	parse_number(text, allow_negative_one)
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum DomainPattern {
 	Any,
@@ -546,6 +639,83 @@ mod tests {
 			format_trimmed_list(&input),
 			"fidonet#1,:2,/103,BBSDev#885:1/1,fidonet#1:2/103.1,BBSDev#885,:1,/1,/2"
 		);
+	}
+
+	#[test]
+	fn the_standard_trimmed_examples_parse_back() {
+		// The TTS-0004 section 5 collection, which contains ":885" for a net
+		// equal to its zone, and the section 6 list of the same addresses.
+		assert_eq!(
+			parse_trimmed_list("BBSDev#885:1,/1,/2,:885,fidonet#1,:2,/103,.1").unwrap(),
+			[
+				"BBSDev#885:1",
+				"BBSDev#885:1/1",
+				"BBSDev#885:1/2",
+				"BBSDev#885",
+				"fidonet#1",
+				"fidonet#1:2",
+				"fidonet#1:2/103",
+				"fidonet#1:2/103.1",
+			]
+			.map(address)
+		);
+		assert_eq!(
+			parse_trimmed_list(
+				"fidonet#1,:2,/103,BBSDev#885:1/1,fidonet#1:2/103.1,BBSDev#885,:1,/1,/2"
+			)
+			.unwrap(),
+			[
+				"fidonet#1",
+				"fidonet#1:2",
+				"fidonet#1:2/103",
+				"BBSDev#885:1/1",
+				"fidonet#1:2/103.1",
+				"BBSDev#885",
+				"BBSDev#885:1",
+				"BBSDev#885:1/1",
+				"BBSDev#885:1/2",
+			]
+			.map(address)
+		);
+	}
+
+	#[test]
+	fn every_trimmed_list_round_trips() {
+		for input in [
+			vec!["fidonet#1/2", "fidonet#1"],
+			vec!["fidonet#1:2/103.1", "fidonet#1:2/103"],
+			vec!["fidonet#-1", "fidonet#1"],
+			vec!["a.b:c/d#1/2", "a.b:c/d#1/3"],
+			vec!["fidonet#1", "other#1"],
+		] {
+			let addresses = input.iter().copied().map(address).collect::<Vec<_>>();
+			let formatted = format_trimmed_list(&addresses);
+			assert_eq!(
+				parse_trimmed_list(&formatted).unwrap(),
+				addresses,
+				"{formatted}"
+			);
+		}
+	}
+
+	#[test]
+	fn a_trimmed_element_may_restate_a_defaulted_component() {
+		// format_trimmed_list writes the changed component even when it equals
+		// the value a canonical address omits, so "/0" and ".0" are producible.
+		let addresses = ["fidonet#1/2", "fidonet#1"].map(address);
+		assert_eq!(format_trimmed_list(&addresses), "fidonet#1/2,/0");
+		assert_eq!(parse_trimmed_list("fidonet#1/2,/0").unwrap(), addresses);
+		let addresses = ["fidonet#1.5", "fidonet#1"].map(address);
+		assert_eq!(format_trimmed_list(&addresses), "fidonet#1.5,.0");
+		assert_eq!(parse_trimmed_list("fidonet#1.5,.0").unwrap(), addresses);
+	}
+
+	#[test]
+	fn rejects_a_trimmed_list_which_cannot_inherit_or_is_misordered() {
+		assert_eq!(parse_trimmed_list("").unwrap(), []);
+		for text in ["/2", ":2", ".1", "#1", "fidonet#1,/2:3", "fidonet#1,/x"] {
+			assert!(parse_trimmed_list(text).is_err(), "{text}");
+		}
 	}
 
 	#[test]

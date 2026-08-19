@@ -13,7 +13,8 @@ pub use address::{Address, AddressError};
 pub use bundle::{Bundle, BundleError, Identity, KeyResolver, VerifiedSignedTlv, build_bundle};
 pub use integer::{IntegerError, decode_i64, decode_u64, encode_i64, encode_u64};
 pub use item::{
-	ItemAuthentication, ItemKind, ItemProvenance, SignedItemIdentity, ValidatedItem,
-	validate_payload,
+	ItemAuthentication, ItemKind, ItemProvenance, ItemSigning, ReadFile, ReadFileRequest,
+	ReadMessage, SignedItemIdentity, ValidatedItem, ViaData, read_file_request, read_message,
+	read_standalone_file, validate_payload,
 };
 pub use tlv::{FramingError, OwnedTlv, TlvHeader, TlvReader, TlvValue};

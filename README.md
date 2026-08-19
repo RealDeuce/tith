@@ -70,8 +70,10 @@ The implementation is divided by responsibility rather than by document:
 | `tith-wire` | Canonical integers, addresses, TLVs, Bundles, and payload items |
 | `tith-nodelist` | TTS-5000 nodelist parsing, endpoints, and public-key lookup |
 | `tith-nodelist-legacy` | FTS-5000.005 to TTS-5000 nodelist conversion |
-| `tith-message-legacy` | Legacy stored `.msg`, packed messages, and Type-2+ packets |
+| `tith-message-legacy` | Legacy stored `.msg`, packed messages, and Type-2+ packets, read and written |
 | `tith-bso` | FTS-5005 Binkley Style Outbound layout and control files |
+| `tith-ledger` | The TSP-0013 durable adapter ledger |
+| `tith-adapter` | TSP-0013 conversion, publication, TIC, and request-processor boundary |
 | `tith-exchange` | Blocking TTS-0006 exchange state and response tracking |
 | `tith-config` | Canonical reference-mailer configuration parsing |
 | `tith-router` | Deterministic route selection and commitment |
@@ -200,6 +202,7 @@ tith submit ...
 tith nodelist convert ...
 tith netmail scan ...
 tith bso scan ...
+tith inbound run ...
 ```
 
 Install `tith-submit` as a link to `tith`. The file stem of `argv[0]` selects
@@ -410,6 +413,88 @@ Anything short of Committed leaves every byte alone.
 The scanner never deletes or truncates the files a reference names. That
 directive travels as a TSP-0006 `Source-Disposition` and the service performs
 it after confirmed delivery, which is the only point at which it is correct.
+
+## Using `tith inbound`
+
+`tith inbound run` is the other half of `tith bso scan`. It claims TSP-0012
+inbound items, converts them under TSP-0003, and publishes the legacy objects a
+tosser polls for. It is the TSP-0013 section 4 adapter, so it keeps a private
+durable ledger and only acknowledges an item once every object it published is
+durable.
+
+```sh
+tith inbound run --files /var/run/tith-files --config /usr/local/etc/tith/adapter
+```
+
+Its configuration reuses the TSP-0002 section 2 grammar rather than inventing a
+second one:
+
+```text
+Inbound /sbbs/fido/inbound
+Ledger  /var/db/tith/adapter.redb
+Domain  fidonet
+
+Link uplink
+    Peer     fidonet#1:104/1
+    Local    fidonet#1:104/36
+    Password secret
+End
+
+Area SYNCHRONET
+    Tag SYNCHRONET
+End
+
+Policy
+    Unsigned              Deliver-Warn
+    SignedOrigin-Invalid  Orphan
+    Blocked-On-Standard   Defer
+End
+```
+
+`Link` supplies the packet endpoints and password TSP-0003 section 6 requires
+come from trusted link configuration, keyed by the `Peer` a claim reports.
+`Area` maps each native `AreaName` to one unique legacy tag; a collision is
+refused rather than resolved. `Policy` is the TSP-0011 section 5.1 final
+authentication policy, whose defaults are the ones that document names.
+
+### What it publishes
+
+| Item | Objects, in publication order |
+|---|---|
+| Message | each attached File, then the `.pkt` naming them |
+| standalone File | the companion, then its `.tic` |
+| FileRequest | nothing; see below |
+
+Publication follows TSP-0013 section 5: each object is built under a private
+`.tith-staging-` name, made durable, then given its final name by an exclusive
+create which never replaces an existing file. Companions are published before
+the object that names them, so a tosser can never see a packet whose companion
+is missing. A name already in use is reported, not overwritten.
+
+There is no lock file. FTS-5005 defines none for an inbound — it is entirely an
+outbound spec — and SBBSecho's `import_packets` takes no lock either, so the
+atomic publish is what makes the handoff safe.
+
+### Batching
+
+`--batch-window` and `--batch-max` bound how many items one packet may carry.
+Both TSP-0012 section 10 and TSP-0013 section 5 endorse placing several
+`InboundID` values in one legacy packet. Appending to an *already published*
+packet is a different thing and is not done: section 5 forbids replacing a
+published object, and SBBSecho opens and deletes packets with no lock at all.
+
+The window must stay well inside the service's claim expiry, since every item in
+a batch is held under its claim until the whole batch is published.
+
+### What it cannot finish yet
+
+A `FileRequest` reply is a set of peer-addressed standalone Files, and TSP-0006
+has no Job which can originate one. The FSC-0086.001 SRIF hook is implemented up
+to that point — it writes the SRIF and request list, runs the configured
+processor, and parses the `ResponseList` markers — and then fails loudly with a
+diagnostic naming the blocking issue rather than acknowledging an item whose
+reply was silently dropped. Such items are deferred by default, because they
+become deliverable the moment the standard is extended.
 
 ## Repository layout
 

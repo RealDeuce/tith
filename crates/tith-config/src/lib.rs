@@ -189,9 +189,10 @@ pub struct ConfigurationSet {
 }
 
 #[derive(Clone)]
-struct Line {
-	number: usize,
-	text: String,
+/// One significant line of a TSP-0002 section 2 configuration file.
+pub struct Line {
+	pub number: usize,
+	pub text: String,
 }
 
 fn err(file: &'static str, line: usize, message: impl Into<String>) -> ConfigError {
@@ -202,7 +203,13 @@ fn err(file: &'static str, line: usize, message: impl Into<String>) -> ConfigErr
 	}
 }
 
-fn lines(file: &'static str, input: &str) -> Result<Vec<Line>, ConfigError> {
+/// Splits a configuration file into its significant lines.
+///
+/// TSP-0002 section 2: UTF-8, every line ends with LF, no C0 control other than
+/// a Horizontal Tab separator, an empty line is ignored, and a line whose first
+/// non-separator code point is a Semicolon is a comment. Shared so an adapter
+/// which needs its own blocks does not invent a second grammar.
+pub fn lines(file: &'static str, input: &str) -> Result<Vec<Line>, ConfigError> {
 	if !input.is_empty() && !input.ends_with('\n') {
 		return Err(err(
 			file,
@@ -229,7 +236,9 @@ fn lines(file: &'static str, input: &str) -> Result<Vec<Line>, ConfigError> {
 	Ok(output)
 }
 
-fn fields(line: &Line) -> Vec<&str> {
+/// The separator-divided fields of a line.
+#[must_use]
+pub fn fields(line: &Line) -> Vec<&str> {
 	line.text
 		.split([' ', '\t'])
 		.filter(|v| !v.is_empty())

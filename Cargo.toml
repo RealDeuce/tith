@@ -2,6 +2,7 @@
 resolver = "3"
 members = [
 	"crates/tith",
+	"crates/tith-adapter",
 	"crates/tith-bso",
 	"crates/tith-crypto",
 	"crates/tith-config",
@@ -9,6 +10,7 @@ members = [
 	"crates/tith-ipc",
 	"crates/tith-submit",
 	"crates/tith-ipc-tcp",
+	"crates/tith-ledger",
 	"crates/tith-message-legacy",
 	"crates/tith-nodelist",
 	"crates/tith-nodelist-legacy",

@@ -8,10 +8,12 @@ repository.workspace = true
 publish = false
 
 [dependencies]
+tith-adapter = { path = "../tith-adapter" }
 tith-bso = { path = "../tith-bso" }
 tith-crypto.workspace = true
 tith-ipc = { path = "../tith-ipc" }
 tith-message-legacy = { path = "../tith-message-legacy" }
+tith-ledger = { path = "../tith-ledger" }
 tith-nodelist.workspace = true
 tith-nodelist-legacy = { path = "../tith-nodelist-legacy" }
 tith-submit = { path = "../tith-submit" }

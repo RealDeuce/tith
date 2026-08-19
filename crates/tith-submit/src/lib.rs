@@ -3,6 +3,7 @@
 #![deny(unsafe_code)]
 
 pub mod cli;
+pub mod consume;
 mod filesystem;
 #[cfg(unix)]
 mod unix;
@@ -29,7 +30,7 @@ pub use windows::{NamedPipeBinding, current_user_sid};
 pub struct ClientError(String);
 
 impl ClientError {
-	fn new(error: impl fmt::Display) -> Self {
+	pub fn new(error: impl fmt::Display) -> Self {
 		Self(error.to_string())
 	}
 
