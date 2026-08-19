@@ -1042,4 +1042,186 @@ mod tests {
 		drop(inbound);
 		std::fs::remove_file(path).unwrap();
 	}
+
+	#[test]
+	fn forwarding_records_every_listed_identity_in_one_seen_by() {
+		// TSP-0002 section 7: the distributor adds its local identity, the
+		// immediate incoming Peer, and every listed Send-To Peer it creates a
+		// copy for, in exactly one SeenBy, omitting unlisted identities.
+		let local_keys = SigningKeyPair::from_seed(&[40; 32]).unwrap();
+		let author_keys = SigningKeyPair::from_seed(&[41; 32]).unwrap();
+		let incoming_keys = SigningKeyPair::from_seed(&[42; 32]).unwrap();
+		let downstream_keys = SigningKeyPair::from_seed(&[43; 32]).unwrap();
+
+		let local: Address = "fidonet#1:104/36".parse().unwrap();
+		let author: Address = "fidonet#1:104/99".parse().unwrap();
+		let incoming: Address = "fidonet#1:104/1".parse().unwrap();
+		let downstream: Address = "fidonet#1:104/7".parse().unwrap();
+
+		let peers = format!(
+			"Peer local\nAddress {local}\nEnd\nPeer incoming\nAddress {incoming}\nEnd\n\
+			 Peer downstream\nAddress {downstream}\nEnd\nPeer anon\nAddress p2p#-1\nPublic-Key {}\nEnd\n",
+			STANDARD_NO_PAD.encode(downstream_keys.public.as_bytes())
+		);
+		let areas = format!(
+			"Areas {local}\nEchoArea SYNCHRONET\nReceive-From @incoming\nSend-To @incoming\n\
+			 Send-To @downstream\nSend-To @anon\nEnd\nEnd\n"
+		);
+		let configuration = Arc::new(
+			ConfigurationSet::parse(
+				&peers,
+				&format!("Routes {local}\nRoute All Using Direct Hold\nEnd\n"),
+				&areas,
+				"",
+			)
+			.unwrap(),
+		);
+		// Every listed address resolves from the nodelist; the unlisted Peer
+		// carries its own key in configuration.
+		let entry = |number: u16, keys: &SigningKeyPair| {
+			format!(
+				"\t{number}\tNode\tLocation\tSysop\t\tCM\t\tIIH:mail.example:24554:{}\t\t\n",
+				STANDARD_NO_PAD.encode(keys.public.as_bytes())
+			)
+		};
+		let nodelist = Arc::new(
+			Nodelist::parse(
+				"fidonet",
+				&format!(
+					"Zone\t1\tNode\tLocation\tSysop\t\tCM\t\t\t\t\n\
+					 Host\t104\tNode\tLocation\tSysop\t\tCM\t\t\t\t\n{}{}{}{}",
+					entry(1, &incoming_keys),
+					entry(7, &downstream_keys),
+					entry(36, &local_keys),
+					entry(99, &author_keys)
+				),
+			)
+			.unwrap(),
+		);
+
+		// An EchoMail signed by its author, already seen by one other node.
+		let item = build_originated_message(
+			MessageData {
+				destination: None,
+				timestamp: 1_755_518_400,
+				to_user: "All".to_owned(),
+				from_user: "Author".to_owned(),
+				subject: "Hello".to_owned(),
+				text: "Body".to_owned(),
+				area: Some("SYNCHRONET".to_owned()),
+				attachments: Vec::new(),
+				legacy_attributes: None,
+				timestamp_offset: None,
+				tear_line: None,
+				origin_line: None,
+				message_id: None,
+				reply_to: None,
+				additional_kludge_lines: Vec::new(),
+			},
+			&ItemProvenance {
+				origin: author.clone(),
+				signer: Some(Identity {
+					address: author.clone(),
+					public_key: author_keys.public,
+				}),
+			},
+			&author_keys.secret,
+			5,
+			1_755_518_400,
+			"peer 1.0",
+			&["fidonet#1:104/50".parse().unwrap()],
+		)
+		.unwrap();
+
+		let unique = SystemTime::now()
+			.duration_since(UNIX_EPOCH)
+			.unwrap()
+			.as_nanos();
+		let path = std::env::temp_dir().join(format!("tith-forward-{unique}.redb"));
+		let inbound_store = InboundStore::create(&path).unwrap();
+		let record = inbound_store
+			.insert(tith_store::NewInbound {
+				application: "tosser",
+				local_identity: &local.to_string(),
+				peer: &incoming.to_string(),
+				peer_key: incoming_keys.public,
+				received: 1_755_518_400,
+				authentication: tith_store::ItemAuthentication::OriginValid,
+				payload: &item.encode(),
+			})
+			.unwrap();
+		let claim = match inbound_store.claim("tosser", "worker", now(), 300).unwrap() {
+			tith_store::ClaimResult::Completed(claim) => claim,
+			other => panic!("expected a claim, got {other:?}"),
+		};
+		assert_eq!(claim.inbound_id, record.inbound_id);
+
+		let engine = SubmissionEngine::new(
+			Arc::clone(&configuration),
+			Arc::clone(&nodelist),
+			[(
+				local.to_string(),
+				LocalSigner {
+					reference: IdentityRef::Listed(local.clone()),
+					identity: Identity {
+						address: local.clone(),
+						public_key: local_keys.public,
+					},
+					secret: Arc::new(local_keys.secret),
+				},
+			)],
+		);
+		let request = SubmissionRequest::parse(
+			format!(
+				"TITH-IPC 1\nSubmit-Items\nJob Forward\nApplication \"tosser\"\nIdempotency-Key \"f1\"\nInbound {} {}\nEnd\nEnd\n",
+				claim.inbound_id, claim.claim_token
+			)
+			.as_bytes(),
+		)
+		.unwrap();
+		let store = inbound_store.outbound().unwrap();
+		let BatchCommit::Committed(outcomes) = engine.submit(&request, &store).unwrap() else {
+			panic!("commit expected");
+		};
+		let CommitOutcome::New { job_id, .. } = &outcomes[0] else {
+			panic!("new job expected");
+		};
+
+		let encoded = store.item(job_id).unwrap();
+		let values = parse_sequence(&encoded).unwrap();
+		let children = parse_sequence(&values[0].value).unwrap();
+		let seen: Vec<_> = children
+			.iter()
+			.filter(|child| child.type_code == tith_wire::types::SEEN_BY)
+			.collect();
+		assert_eq!(seen.len(), 1, "section 7 requires exactly one SeenBy");
+		let addresses = tith_wire::item::seen_by_addresses(seen[0]).unwrap();
+
+		// The existing SeenBy address is retained.
+		assert!(addresses.contains(&"fidonet#1:104/50".parse().unwrap()));
+		// The local identity.
+		assert!(addresses.contains(&local), "{addresses:?}");
+		// The immediate incoming Peer, which is also pruned from the copy set.
+		assert!(
+			addresses.contains(&incoming),
+			"the incoming peer is missing: {addresses:?}"
+		);
+		// A listed Send-To Peer which receives a copy.
+		assert!(addresses.contains(&downstream), "{addresses:?}");
+		// The unlisted Send-To Peer is not representable and is omitted.
+		assert!(
+			!addresses.iter().any(Address::is_unlisted),
+			"an unlisted identity reached SeenBy: {addresses:?}"
+		);
+
+		// No copy is created for the immediate incoming Peer.
+		let job = store.query(job_id).unwrap();
+		assert!(
+			!job.deliveries
+				.iter()
+				.any(|copy| copy.next_hop == incoming.to_string()),
+			"a copy was created back toward the incoming peer"
+		);
+		std::fs::remove_file(path).unwrap();
+	}
 }
