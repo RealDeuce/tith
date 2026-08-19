@@ -324,7 +324,12 @@ impl SubmissionEngine {
 					JobKind::EchoMail,
 					JobTarget::Area(message.destination_or_area.clone()),
 					None,
-					vec![signer.identity.address.clone()],
+					// An unlisted local identity is not representable in SeenBy.
+					if signer.identity.address.is_unlisted() {
+						Vec::new()
+					} else {
+						vec![signer.identity.address.clone()]
+					},
 					deliveries,
 				)
 			}
@@ -415,7 +420,12 @@ impl SubmissionEngine {
 			random_u64()?,
 			created,
 			SOFTWARE,
-			std::slice::from_ref(&signer.identity.address),
+			// A File repeats SeenBy, but an unlisted identity is still omitted.
+			if signer.identity.address.is_unlisted() {
+				&[]
+			} else {
+				std::slice::from_ref(&signer.identity.address)
+			},
 		)
 		.map_err(|error| BuildFailure::invalid(error.to_string()))?;
 		validate_item(&item, self.nodelist.as_ref())
@@ -508,9 +518,21 @@ impl SubmissionEngine {
 					.parse::<Address>()
 					.is_ok_and(|address| seen_by.contains(&address))
 		});
-		seen_by.insert(signer.identity.address.clone());
+		// TSP-0002 section 7: the distributor adds each listed identity known to
+		// have or to receive the item -- its local identity, the immediate
+		// incoming Peer, and every Send-To Peer it creates a copy for. Unlisted
+		// identities are not representable and are omitted.
+		let mut record_seen = |address: Address| {
+			if !address.is_unlisted() {
+				seen_by.insert(address);
+			}
+		};
+		record_seen(signer.identity.address.clone());
+		if let Ok(peer) = inbound.record.peer.parse::<Address>() {
+			record_seen(peer);
+		}
 		for copy in &deliveries {
-			seen_by.insert(
+			record_seen(
 				copy.next_hop
 					.parse()
 					.map_err(|_| BuildFailure::invalid("delivery next hop is not an address"))?,

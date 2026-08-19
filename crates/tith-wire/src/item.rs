@@ -2227,4 +2227,57 @@ mod tests {
 		assert!(read_standalone_file(&message).is_err());
 		assert!(read_file_request(&message).is_err());
 	}
+
+	#[test]
+	fn an_unlisted_identity_is_omitted_from_seen_by() {
+		// TSP-0002 section 7: "Unlisted identities are not representable in
+		// SeenBy and are omitted." The resulting item still contains exactly one
+		// SeenBy, whose collection may be empty.
+		let signer_keys = SigningKeyPair::from_seed(&[71; 32]).unwrap();
+		let origin: Address = "fidonet#1/100".parse().unwrap();
+		let provenance = ItemProvenance {
+			origin: origin.clone(),
+			signer: Some(Identity {
+				address: origin.clone(),
+				public_key: signer_keys.public,
+			}),
+		};
+		let message = build_originated_message(
+			MessageData {
+				destination: None,
+				timestamp: 1,
+				to_user: "All".to_owned(),
+				from_user: "Me".to_owned(),
+				subject: "Hi".to_owned(),
+				text: "Body".to_owned(),
+				area: Some("SYNCHRONET".to_owned()),
+				attachments: Vec::new(),
+				legacy_attributes: None,
+				timestamp_offset: None,
+				tear_line: None,
+				origin_line: None,
+				message_id: None,
+				reply_to: None,
+				additional_kludge_lines: Vec::new(),
+			},
+			&provenance,
+			&signer_keys.secret,
+			7,
+			1,
+			"test",
+			&[],
+		)
+		.unwrap();
+		let resolver = |address: &Address| (address == &origin).then_some(signer_keys.public);
+		validate_item(&message, &resolver).unwrap().unwrap();
+		let children = parse_sequence(&message.value).unwrap();
+		assert_eq!(
+			children
+				.iter()
+				.filter(|child| child.type_code == types::SEEN_BY)
+				.count(),
+			0,
+			"an empty collection emits no SeenBy at all"
+		);
+	}
 }
