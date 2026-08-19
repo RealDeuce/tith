@@ -125,6 +125,14 @@ pub struct Record {
 	pub note: String,
 	/// The claim token while one is current, for acknowledgement recovery.
 	pub claim_token: String,
+	/// The `EchoMail` or file distribution obligation, which TSP-0013 section 4
+	/// requires the ledger record.
+	///
+	/// Empty when the item has none. Otherwise the legacy area tag, and the
+	/// `JobID` of the native `Job Forward` once one is committed, so recovery can
+	/// tell an obligation which is still owed from one already discharged.
+	pub distribution: String,
+	pub forward_job: String,
 }
 
 pub struct Ledger {
@@ -168,6 +176,25 @@ impl Ledger {
 				None => return Err(LedgerError::CorruptRecord),
 			};
 			record.state = state;
+			table.insert(inbound_id, encode(&record).as_slice())?;
+		}
+		transaction.commit()?;
+		Ok(())
+	}
+
+	/// Records the `JobID` of a committed native `Job Forward`.
+	///
+	/// Durable before the item is acknowledged, so recovery can tell a
+	/// discharged distribution obligation from an outstanding one.
+	pub fn record_forward(&self, inbound_id: &str, job_id: &str) -> Result<(), LedgerError> {
+		let transaction = self.database.begin_write()?;
+		{
+			let mut table = transaction.open_table(INBOUND)?;
+			let mut record = match table.get(inbound_id)? {
+				Some(value) => decode(value.value())?,
+				None => return Err(LedgerError::CorruptRecord),
+			};
+			job_id.clone_into(&mut record.forward_job);
 			table.insert(inbound_id, encode(&record).as_slice())?;
 		}
 		transaction.commit()?;
@@ -251,6 +278,8 @@ fn encode(record: &Record) -> Vec<u8> {
 	push_string(&mut output, &record.inbound_id);
 	push_string(&mut output, &record.note);
 	push_string(&mut output, &record.claim_token);
+	push_string(&mut output, &record.distribution);
+	push_string(&mut output, &record.forward_job);
 	let count = u32::try_from(record.objects.len()).unwrap_or(u32::MAX);
 	output.extend_from_slice(&count.to_le_bytes());
 	for object in record.objects.iter().take(count as usize) {
@@ -267,6 +296,8 @@ fn decode(mut input: &[u8]) -> Result<Record, LedgerError> {
 		let inbound_id = take_string(&mut input)?;
 		let note = take_string(&mut input)?;
 		let claim_token = take_string(&mut input)?;
+		let distribution = take_string(&mut input)?;
+		let forward_job = take_string(&mut input)?;
 		let count = u32::from_le_bytes(take_fixed::<4>(&mut input)?);
 		let mut objects = Vec::new();
 		for _ in 0..count {
@@ -282,6 +313,8 @@ fn decode(mut input: &[u8]) -> Result<Record, LedgerError> {
 			objects,
 			note,
 			claim_token,
+			distribution,
+			forward_job,
 		})
 	};
 	read().ok_or(LedgerError::CorruptRecord)
@@ -318,6 +351,8 @@ mod tests {
 			],
 			note: "canonical".to_owned(),
 			claim_token: "T1".to_owned(),
+			distribution: "SYNCHRONET".to_owned(),
+			forward_job: String::new(),
 		}
 	}
 

@@ -28,6 +28,7 @@
 //!     Origin-Invalid        Orphan
 //!     Blocked-On-Standard   Defer
 //!     Unconvertible         Reject
+//!     Distribution          Native
 //! End
 //! ```
 
@@ -37,7 +38,7 @@ use std::path::PathBuf;
 use tith_config::{ConfigError, fields, lines};
 use tith_wire::Address;
 
-use crate::policy::{Action, Disposition, Policy, Refusals};
+use crate::policy::{Action, Disposition, Distribution, Policy, Refusals};
 
 /// One configured legacy link.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -262,6 +263,13 @@ fn parse_policy(
 				policy.signed_origin_invalid = action(line.number, value)?;
 			}
 			["Origin-Invalid", value] => policy.origin_invalid = action(line.number, value)?,
+			["Distribution", value] => {
+				policy.distribution = match *value {
+					"Native" => Distribution::Native,
+					"Legacy" => Distribution::Legacy,
+					_ => return Err(fail(line.number, "expected Native or Legacy")),
+				};
+			}
 			["Reply-Origin", value] => {
 				policy.reply_origin = match *value {
 					"Enabled" => true,
@@ -333,6 +341,7 @@ End
 			Action::DeliverWarn
 		);
 		assert!(!configuration.policy.reply_origin);
+		assert_eq!(configuration.policy.distribution, Distribution::Native);
 		assert_eq!(
 			configuration.refusals.blocked_on_standard,
 			Disposition::Defer

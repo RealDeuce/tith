@@ -341,6 +341,72 @@ pub fn query(binding: &impl Binding, inbound_id: &str) -> Result<Option<String>,
 	)
 }
 
+/// The outcome of a `Submit-Items` batch carrying one `Job Forward`.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum Forwarded {
+	/// The Job exists. `New` committed it now; `Existing` means its idempotency
+	/// identity was already committed, which TSP-0006 section 8 says confirms
+	/// the same thing.
+	Committed { job_id: String, state: String },
+	/// The batch did not commit. The description is the service's.
+	NotCommitted { reason: String, description: String },
+}
+
+/// Commits the native distribution copies for a claimed inbound item.
+///
+/// TSP-0013 section 4 lets an adapter satisfy an `EchoMail` or file
+/// distribution obligation either by relying on the legacy tosser or by
+/// committing "the equivalent native copies with TSP-0006 Job Forward while the
+/// claim remains current". This is that second branch, which is why the caller
+/// must not have acknowledged yet.
+///
+/// A Forward Job preserves the exact signed children and Signature of its
+/// inbound item, so the item's authentication state survives the fan-out
+/// unchanged. TSP-0006 section 6 accordingly refuses one for an Unsigned,
+/// `Origin-Invalid`, or `SignedOrigin-Invalid` item: those are final-delivery
+/// work and have no native onward copy.
+pub fn forward(
+	binding: &impl Binding,
+	application: &str,
+	idempotency_key: &str,
+	inbound_id: &str,
+	claim_token: &str,
+) -> Result<Forwarded, ClientError> {
+	let request = format!(
+		"TITH-IPC 1\nSubmit-Items\nJob Forward\nApplication {}\nIdempotency-Key {}\nInbound {inbound_id} {claim_token}\nEnd\nEnd\n",
+		quote(application),
+		quote(idempotency_key)
+	);
+	let result = binding.transact(request.as_bytes())?;
+	let document = validate(&result, EnvelopeKind::Result)?;
+	let outcome = line_fields(&document, "Submit-Items")
+		.ok_or_else(|| ClientError::new("result is not a Submit-Items result"))?;
+	match outcome.first().copied() {
+		Some("Committed") => {
+			let job = line_fields(&document, "Job")
+				.ok_or_else(|| ClientError::new("committed result has no Job line"))?;
+			Ok(Forwarded::Committed {
+				job_id: job
+					.get(2)
+					.copied()
+					.ok_or_else(|| ClientError::new("Job line has no JobID"))?
+					.to_owned(),
+				state: job.get(3).copied().unwrap_or_default().to_owned(),
+			})
+		}
+		Some("Not-Committed") => {
+			let failure = line_fields(&document, "Failure").unwrap_or_default();
+			Ok(Forwarded::NotCommitted {
+				reason: failure.get(1).copied().unwrap_or("Invalid").to_owned(),
+				description: failure.get(2).copied().unwrap_or_default().to_owned(),
+			})
+		}
+		other => Err(ClientError::new(format!(
+			"unknown Submit-Items outcome {other:?}"
+		))),
+	}
+}
+
 #[cfg(test)]
 mod tests {
 	use super::*;
@@ -502,5 +568,52 @@ mod tests {
 		assert!(claim.read_payload().is_err(), "a hash mismatch must refuse");
 
 		fs::remove_dir_all(directory).unwrap();
+	}
+
+	#[test]
+	fn a_forward_job_uses_the_documented_grammar_and_reads_its_job_line() {
+		let binding =
+			canned("TITH-IPC-Result 1\nSubmit-Items Committed\nJob 1 New J0123 Queued\nEnd\n");
+		assert_eq!(
+			forward(&binding, "tosser", "fwd:I1", "I1", "T1").unwrap(),
+			Forwarded::Committed {
+				job_id: "J0123".to_owned(),
+				state: "Queued".to_owned()
+			}
+		);
+		assert_eq!(
+			String::from_utf8(binding.seen.into_inner()).unwrap(),
+			"TITH-IPC 1\nSubmit-Items\nJob Forward\nApplication \"tosser\"\nIdempotency-Key \"fwd:I1\"\nInbound I1 T1\nEnd\nEnd\n"
+		);
+	}
+
+	#[test]
+	fn an_existing_forward_is_as_good_as_a_new_one() {
+		// TSP-0006 section 8: "Either result confirms that delivery no longer
+		// depends on the Source fields in this request."
+		let binding =
+			canned("TITH-IPC-Result 1\nSubmit-Items Committed\nJob 1 Existing J9 Sent\nEnd\n");
+		assert!(matches!(
+			forward(&binding, "tosser", "k", "I1", "T1").unwrap(),
+			Forwarded::Committed { .. }
+		));
+	}
+
+	#[test]
+	fn a_refused_forward_reports_why() {
+		// A Job Forward for an Invalid item is itself Invalid, which is how the
+		// service says the item is final-delivery work with no onward copy.
+		let binding = canned(
+			"TITH-IPC-Result 1\nSubmit-Items Not-Committed\nFailure 1 Invalid \"Forward requires EchoMail or standalone File\"\nEnd\n",
+		);
+		let Forwarded::NotCommitted {
+			reason,
+			description,
+		} = forward(&binding, "tosser", "k", "I1", "T1").unwrap()
+		else {
+			panic!("expected Not-Committed");
+		};
+		assert_eq!(reason, "Invalid");
+		assert!(description.contains("EchoMail"));
 	}
 }

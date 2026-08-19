@@ -241,6 +241,14 @@ lengths and outstanding-response accounting cannot resolve.
   state which transfers responsibility are durable. It must not append to an
   already published packet: TSP-0013 section 5 forbids replacing a published
   object, and a tosser reads and deletes packets without any lock.
+  An `EchoMail` or file distribution item owes onward copies. The default is to
+  discharge that natively with a TSP-0006 `Job Forward` while the claim is
+  current, because that preserves the exact signed bytes and leaves the legacy
+  object terminal. Leaving the fan-out to the tosser is configurable and
+  permitted, but a message re-entering TITH from a legacy area has no TITHSIG
+  and is re-imported as `SignedOrigin-Valid` whatever it was, so an item known
+  to be modified in transit becomes gateway-attested; do not make that the
+  default. An item TSP-0006 section 6 will not forward owes no native copy.
 - `crates/tithd` is the blocking reference service and contains host bindings.
   Its native mail listener accepts only operations whose wire grammar and
   durable behavior are implemented; unsupported work receives an explicit

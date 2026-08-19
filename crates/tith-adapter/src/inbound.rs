@@ -25,6 +25,13 @@ pub enum Outcome {
 	Publish {
 		objects: Vec<Publication>,
 		note: String,
+		/// The legacy area tag when this item carries a distribution
+		/// obligation, which TSP-0013 section 4 requires the ledger record.
+		distribution: Option<String>,
+		/// Whether that obligation can be discharged with a native
+		/// `Job Forward`. TSP-0006 section 6 refuses one for an Unsigned or
+		/// Invalid item, which is final-delivery work with no onward copy.
+		forwardable: bool,
 	},
 	/// Nothing is published. The payload is taken into administrative ownership
 	/// and the item acknowledged.
@@ -185,6 +192,7 @@ fn plan_message(
 		});
 	}
 
+	let converted_area = converted.message.area.clone();
 	let packet = Packet {
 		origin: endpoint_of(context, true),
 		destination: endpoint_of(context, false),
@@ -217,7 +225,22 @@ fn plan_message(
 			converted.diagnostic.unwrap_or_default()
 		),
 	};
-	Ok(Some(Outcome::Publish { objects, note }))
+	let distribution = converted_area.clone();
+	Ok(Some(Outcome::Publish {
+		objects,
+		note,
+		forwardable: distribution.is_some() && is_forwardable(claim.authentication),
+		distribution,
+	}))
+}
+
+/// TSP-0006 section 6: a Forward Job requires `Origin-Valid` or
+/// `SignedOrigin-Valid`.
+const fn is_forwardable(authentication: ItemAuthentication) -> bool {
+	matches!(
+		authentication,
+		ItemAuthentication::OriginValid | ItemAuthentication::SignedOriginValid
+	)
 }
 
 fn plan_file(
@@ -272,6 +295,13 @@ fn plan_file(
 			},
 		],
 		note: "TIC distribution".to_owned(),
+		distribution: Some(
+			context
+				.area_tag(&read.data.area)
+				.map_err(|error| InboundError::Payload(error.to_string()))?
+				.to_owned(),
+		),
+		forwardable: is_forwardable(claim.authentication),
 	}))
 }
 
@@ -308,8 +338,17 @@ pub fn commit(
 	configuration: &Configuration,
 	ledger: &Ledger,
 ) -> Result<Result<(), String>, InboundError> {
-	let (objects, note) = match outcome {
-		Outcome::Publish { objects, note } => (objects.clone(), note.clone()),
+	let (objects, note, distribution) = match outcome {
+		Outcome::Publish {
+			objects,
+			note,
+			distribution,
+			..
+		} => (
+			objects.clone(),
+			note.clone(),
+			distribution.clone().unwrap_or_default(),
+		),
 		Outcome::Orphan { reason } => {
 			ledger.stage(&Record {
 				inbound_id: claim.inbound_id.clone(),
@@ -318,6 +357,8 @@ pub fn commit(
 				objects: Vec::new(),
 				note: format!("orphan: {reason}"),
 				claim_token: claim.claim_token.clone(),
+				distribution: String::new(),
+				forward_job: String::new(),
 			})?;
 			return Ok(Ok(()));
 		}
@@ -339,6 +380,8 @@ pub fn commit(
 			.collect(),
 		note,
 		claim_token: claim.claim_token.clone(),
+		distribution,
+		forward_job: String::new(),
 	})?;
 
 	match publish(&configuration.inbound, &objects) {
@@ -380,6 +423,9 @@ Domain  fidonet
 Link uplink
 \tPeer  fidonet#1:104/1
 \tLocal fidonet#1:104/36
+End
+Area SYNCHRONET
+\tTag SYNCHRONET
 End
 ";
 
@@ -449,6 +495,44 @@ End
 			1_755_518_400,
 			"tith 0.1",
 			&[],
+		)
+		.unwrap();
+		(item.encode(), keys, origin)
+	}
+
+	fn echomail_item() -> (Vec<u8>, SigningKeyPair, Address) {
+		let keys = SigningKeyPair::from_seed(&[98; 32]).unwrap();
+		let origin: Address = "fidonet#1:104/1".parse().unwrap();
+		let item = build_originated_message(
+			MessageData {
+				destination: None,
+				timestamp: 1_755_518_400,
+				to_user: "All".to_owned(),
+				from_user: "Sender".to_owned(),
+				subject: "Hello".to_owned(),
+				text: "Body".to_owned(),
+				area: Some("SYNCHRONET".to_owned()),
+				attachments: Vec::new(),
+				legacy_attributes: Some(0),
+				timestamp_offset: Some(0),
+				tear_line: Some("TITH".to_owned()),
+				origin_line: Some("A board (1:104/1)".to_owned()),
+				message_id: Some("fidonet#1:104/1 1a2b3c4d".to_owned()),
+				reply_to: None,
+				additional_kludge_lines: Vec::new(),
+			},
+			&ItemProvenance {
+				origin: origin.clone(),
+				signer: Some(Identity {
+					address: origin.clone(),
+					public_key: keys.public,
+				}),
+			},
+			&keys.secret,
+			8,
+			1_755_518_400,
+			"tith 0.1",
+			&["fidonet#1:104/36".parse().unwrap()],
 		)
 		.unwrap();
 		(item.encode(), keys, origin)
@@ -647,5 +731,69 @@ End
 		)
 		.unwrap_err();
 		assert!(matches!(error, InboundError::UnknownPeer(_)), "{error}");
+	}
+
+	#[test]
+	fn an_echomail_records_its_distribution_obligation() {
+		// TSP-0013 section 4: "For EchoMail or file distribution, the ledger also
+		// records every applicable routing or distribution obligation."
+		let fixture = fixture("distribution");
+		let (payload, keys, origin) = echomail_item();
+		let resolver = move |address: &Address| (address == &origin).then_some(keys.public);
+		let claim = claimed(ItemAuthentication::OriginValid);
+		let outcome = plan(
+			&claim,
+			&payload,
+			&fixture.configuration,
+			&fixture.ledger,
+			&resolver,
+		)
+		.unwrap()
+		.unwrap();
+		let Outcome::Publish {
+			distribution,
+			forwardable,
+			..
+		} = &outcome
+		else {
+			panic!("expected a publication, got {outcome:?}");
+		};
+		assert_eq!(distribution.as_deref(), Some("SYNCHRONET"));
+		assert!(*forwardable, "an Origin-Valid EchoMail can be forwarded");
+		commit(&claim, &outcome, &fixture.configuration, &fixture.ledger)
+			.unwrap()
+			.unwrap();
+		assert_eq!(
+			fixture.ledger.get("I1").unwrap().unwrap().distribution,
+			"SYNCHRONET"
+		);
+	}
+
+	#[test]
+	fn an_item_the_service_will_not_forward_owes_no_native_copy() {
+		// TSP-0006 section 6 refuses a Forward Job for Unsigned and both Invalid
+		// states, so those are final-delivery work. Marking them forwardable
+		// would make the adapter request a Job the service must reject.
+		let fixture = fixture("unforwardable");
+		let (payload, keys, origin) = echomail_item();
+		let resolver = move |address: &Address| (address == &origin).then_some(keys.public);
+		let mut configuration = fixture.configuration.clone();
+		configuration.policy.unsigned = crate::policy::Action::DeliverWarn;
+		let claim = claimed(ItemAuthentication::Unsigned);
+		let outcome = plan(&claim, &payload, &configuration, &fixture.ledger, &resolver)
+			.unwrap()
+			.unwrap();
+		let Outcome::Publish {
+			distribution,
+			forwardable,
+			..
+		} = &outcome
+		else {
+			panic!("expected a publication, got {outcome:?}");
+		};
+		// The obligation is still recorded; it simply cannot be discharged
+		// natively, which is what makes the legacy copy terminal.
+		assert_eq!(distribution.as_deref(), Some("SYNCHRONET"));
+		assert!(!*forwardable);
 	}
 }

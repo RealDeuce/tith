@@ -10,12 +10,12 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use tith_adapter::config::Configuration;
 use tith_adapter::inbound::{Claimed, Outcome, commit, plan};
-use tith_adapter::policy::Disposition;
+use tith_adapter::policy::{Disposition, Distribution};
 use tith_adapter::publish::clear_staging;
 use tith_ledger::{Ledger, State};
 use tith_nodelist::Nodelist;
 use tith_submit::ConfiguredBinding;
-use tith_submit::consume::{self, Authentication, Claimed as ClaimResult};
+use tith_submit::consume::{self, Authentication, Claimed as ClaimResult, Forwarded};
 use tith_wire::Address;
 use tith_wire::bundle::KeyResolver;
 use tith_wire::item::ItemAuthentication;
@@ -112,7 +112,14 @@ fn execute(arguments: &mut impl Iterator<Item = String>) -> Result<i32, Box<dyn 
 			continue;
 		}
 		for pending in claimed {
-			match handle(&binding, &pending, &configuration, &ledger, &resolver) {
+			match handle(
+				&binding,
+				&pending,
+				&configuration,
+				&ledger,
+				&resolver,
+				&options.application,
+			) {
 				Ok(true) => {}
 				Ok(false) => failures += 1,
 				Err(error) => {
@@ -213,6 +220,7 @@ fn handle(
 	configuration: &Configuration,
 	ledger: &Ledger,
 	resolver: &impl KeyResolver,
+	application: &str,
 ) -> Result<bool, Box<dyn Error>> {
 	let Pending { claim, token, .. } = pending;
 	let token = token.as_str();
@@ -252,6 +260,12 @@ fn handle(
 
 	match commit(claim, &outcome, configuration, ledger)? {
 		Ok(()) => {
+			// A distribution obligation is discharged before the claim is
+			// resolved, because TSP-0013 section 4 requires the native copies be
+			// committed "while the claim remains current".
+			if !distribute(binding, claim, &outcome, configuration, ledger, application)? {
+				return Ok(false);
+			}
 			// Section 4: acknowledge only after every converted object and the
 			// ledger state which transfers responsibility are durable.
 			consume::acknowledge(binding, &claim.inbound_id, token)?;
@@ -261,6 +275,74 @@ fn handle(
 		Err(reason) => {
 			eprintln!("tith inbound: {}: {reason}", claim.inbound_id);
 			consume::defer(binding, &claim.inbound_id, token, now() + 300, &reason)?;
+			Ok(false)
+		}
+	}
+}
+
+/// Commits the native distribution copies for an item which owes them.
+///
+/// TSP-0013 section 4 offers two branches. The native one commits a TSP-0006
+/// `Job Forward`, which "MUST NOT decode and re-encode, alter, or re-sign any
+/// covered byte", so the item's authentication state survives the fan-out
+/// exactly and the legacy object published beside it is for local reading only.
+/// The legacy branch instead leaves the fan-out to the tosser, whose copies
+/// carry no TITHSIG and re-import as `SignedOrigin-Valid` whatever they were.
+///
+/// An item TSP-0006 section 6 will not forward -- Unsigned or either Invalid
+/// state -- has no native onward copy by definition and is final-delivery work,
+/// so it owes nothing here.
+fn distribute(
+	binding: &ConfiguredBinding,
+	claim: &Claimed,
+	outcome: &Outcome,
+	configuration: &Configuration,
+	ledger: &Ledger,
+	application: &str,
+) -> Result<bool, Box<dyn Error>> {
+	let Outcome::Publish {
+		distribution,
+		forwardable,
+		..
+	} = outcome
+	else {
+		return Ok(true);
+	};
+	let Some(area) = distribution else {
+		return Ok(true);
+	};
+	if configuration.policy.distribution == Distribution::Legacy || !forwardable {
+		return Ok(true);
+	}
+	// The key is derived from InboundID so a redelivery resolves to the same Job
+	// rather than committing a second fan-out.
+	let key = format!("forward:{}", claim.inbound_id);
+	match consume::forward(
+		binding,
+		application,
+		&key,
+		&claim.inbound_id,
+		&claim.claim_token,
+	)? {
+		Forwarded::Committed { job_id, .. } => {
+			ledger.record_forward(&claim.inbound_id, &job_id)?;
+			Ok(true)
+		}
+		Forwarded::NotCommitted {
+			reason,
+			description,
+		} => {
+			eprintln!(
+				"tith inbound: {}: native distribution of {area} was not committed: {reason} {description}",
+				claim.inbound_id
+			);
+			consume::defer(
+				binding,
+				&claim.inbound_id,
+				&claim.claim_token,
+				now() + 300,
+				&format!("native distribution not committed: {reason} {description}"),
+			)?;
 			Ok(false)
 		}
 	}
