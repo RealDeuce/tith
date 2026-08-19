@@ -406,6 +406,7 @@ pub fn commit(
 				claim_token: claim.claim_token.clone(),
 				distribution: String::new(),
 				forward_job: String::new(),
+				cleanup: Vec::new(),
 			})?;
 			return Ok(Ok(()));
 		}
@@ -422,6 +423,7 @@ pub fn commit(
 				claim_token: claim.claim_token.clone(),
 				distribution: String::new(),
 				forward_job: String::new(),
+				cleanup: Vec::new(),
 			})?;
 			return Ok(Ok(()));
 		}
@@ -445,6 +447,7 @@ pub fn commit(
 		claim_token: claim.claim_token.clone(),
 		distribution,
 		forward_job: String::new(),
+		cleanup: Vec::new(),
 	})?;
 
 	match publish(&configuration.inbound, &objects) {

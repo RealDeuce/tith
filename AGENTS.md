@@ -232,8 +232,13 @@ lengths and outstanding-response accounting cannot resolve.
   The response markers map only as far as TSP-0006 can promise — `=` is Delete,
   which fires after confirmed delivery, and `-` asks for erasure whatever
   happens, which has no native disposition, so it stays Keep and the adapter
-  removes the file itself. A node with no configured processor will never serve
-  a request, so it rejects one rather than deferring it forever.
+  removes the file itself. That removal is recorded in the ledger before the
+  submission which makes it owed and cleared only when every path is gone, so an
+  interrupted run recovers it; section 3 requires it be recorded rather than
+  remembered. "In any case" is not conditional on the file being sent, so a `-`
+  file the request's condition excludes is still owed. A node with no configured
+  processor will never serve a request, so it rejects one rather than deferring
+  it forever.
 - `crates/tith` is the client multiplexer binary. It carries no protocol logic
   and only dispatches subcommands. `tith-submit` is installed as a link to it,
   so the file stem of `argv[0]` may select the submit client directly; keep

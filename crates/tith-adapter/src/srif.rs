@@ -41,9 +41,9 @@ impl Afterward {
 	///
 	/// `=` is exactly Delete: TSP-0005 section 5 performs it only after every
 	/// delivery copy is Delivered. `+` is Keep. `-` asks for erasure whatever
-	/// happens, which section 5 has no expression for, so it maps to Keep and
-	/// the adapter performs its own cleanup instead of overstating the native
-	/// obligation.
+	/// happens, which no native disposition expresses, so it maps to Keep and
+	/// the adapter owes the removal itself rather than overstating what the Job
+	/// has promised.
 	#[must_use]
 	pub const fn disposition(self) -> &'static str {
 		match self {
@@ -52,7 +52,13 @@ impl Afterward {
 		}
 	}
 
-	/// Whether the adapter still owes a local removal after submission.
+	/// Whether the adapter still owes a local removal of its own.
+	///
+	/// TSP-0013 section 3 requires such a removal be recorded rather than merely
+	/// remembered, because it cannot be inferred from the Job. It is owed for
+	/// every `-` file the processor offered, including one excluded from the
+	/// reply by the request's condition: "in any case" is not conditional on the
+	/// file having been sent.
 	#[must_use]
 	pub const fn needs_local_cleanup(self) -> bool {
 		matches!(self, Self::EraseAlways)

@@ -631,7 +631,16 @@ The response markers map to what TSP-0006 can actually promise. `=` becomes
 `Source-Disposition Delete`, which TSP-0005 section 5 performs only after every
 delivery copy is Delivered. `+` becomes `Keep`. `-` asks for erasure whatever
 happens, which has no native disposition, so it stays `Keep` and the adapter
-removes the file itself after the submission commits.
+removes the file itself.
+
+That removal is an obligation, not a side effect, so it is recorded in the
+ledger before the submission which makes it owed and cleared only once every
+path is gone — TSP-0013 section 3 requires the adapter record its own later
+legacy cleanup rather than remember it. `recover()` finishes whatever an
+interrupted run left, and a removal which fails stays owed for the next one.
+"In any case" is also not conditional on the file being sent: a `-` file the
+request's `Newer-Than` condition excludes from the reply is still one the
+processor asked to be rid of.
 
 TTS-0005 section 6 permits an accepted `FileRequest` to return no files, and a
 peer with no usable endpoint collects its answer by polling, so nothing here

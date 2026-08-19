@@ -12,7 +12,7 @@ use tith_adapter::config::Configuration;
 use tith_adapter::inbound::{Claimed, Outcome, commit, plan};
 use tith_adapter::policy::{Disposition, Distribution};
 use tith_adapter::publish::clear_staging;
-use tith_adapter::srif::{Processor, Session};
+use tith_adapter::srif::{Offered, Processor, Session};
 use tith_ledger::{Ledger, State};
 use tith_nodelist::Nodelist;
 use tith_submit::ConfiguredBinding;
@@ -164,6 +164,16 @@ fn recover(ledger: &Ledger, configuration: &Configuration) -> Result<(), Box<dyn
 			State::Acknowledged | State::Retired => {}
 		}
 	}
+	// A legacy removal the adapter owes outlives the conversion which created it,
+	// so it is recovered on its own rather than with the unfinished records.
+	for record in ledger.pending_cleanup()? {
+		eprintln!(
+			"tith inbound: {}: finishing {} interrupted legacy removals",
+			record.inbound_id,
+			record.cleanup.len()
+		);
+		discharge_cleanup(ledger, &record.inbound_id, &record.cleanup)?;
+	}
 	Ok(())
 }
 
@@ -267,7 +277,7 @@ fn handle(
 			if !distribute(binding, claim, &outcome, configuration, ledger, application)? {
 				return Ok(false);
 			}
-			if !serve(binding, claim, &outcome, configuration, application)? {
+			if !serve(binding, claim, &outcome, configuration, ledger, application)? {
 				return Ok(false);
 			}
 			// Section 4: acknowledge only after every converted object and the
@@ -367,6 +377,7 @@ fn serve(
 	claim: &Claimed,
 	outcome: &Outcome,
 	configuration: &Configuration,
+	ledger: &Ledger,
 	application: &str,
 ) -> Result<bool, Box<dyn Error>> {
 	let Outcome::ServeRequest {
@@ -404,31 +415,18 @@ fn serve(
 		fnv(&claim.inbound_id),
 	)?;
 
-	let mut offered = Vec::new();
-	let mut cleanup = Vec::new();
-	for file in &response.offered {
-		if let Some(newer_than) = newer_than
-			&& !newer_than_condition(&file.path, *newer_than)
-		{
-			continue;
-		}
-		let Some(wire_filename) = file.path.file_name().and_then(|name| name.to_str()) else {
-			eprintln!(
-				"tith inbound: {}: offered path {} has no usable filename",
-				claim.inbound_id,
-				file.path.display()
-			);
-			continue;
-		};
-		if file.afterward.needs_local_cleanup() {
-			cleanup.push(file.path.clone());
-		}
-		offered.push(PeerFile {
-			path: file.path.clone(),
-			wire_filename: wire_filename.to_owned(),
-			disposition: file.afterward.disposition(),
-		});
+	let reply = plan_reply(&response.offered, *newer_than);
+	for path in &reply.unusable {
+		eprintln!(
+			"tith inbound: {}: offered path {} has no usable filename",
+			claim.inbound_id,
+			path.display()
+		);
 	}
+	// TSP-0013 section 2: durable before the external action which makes it owed,
+	// so a crash before the removals leaves them recoverable. Section 3 requires
+	// a disposition with no exact TSP-0006 mapping be recorded, not remembered.
+	ledger.record_cleanup(&claim.inbound_id, &reply.cleanup)?;
 
 	match consume::submit_peer_files(
 		binding,
@@ -436,20 +434,21 @@ fn serve(
 		&format!("request:{}", claim.inbound_id),
 		&link.local.to_string(),
 		&link.peer.to_string(),
-		&offered,
+		&reply.offered,
 	)? {
 		Forwarded::Committed { .. } => {
-			// FSC-0086 "-" erases whatever happens, which TSP-0006 has no
-			// disposition for, so the adapter owes the removal itself.
-			for path in cleanup {
-				let _ = std::fs::remove_file(path);
-			}
+			discharge_cleanup(ledger, &claim.inbound_id, &reply.cleanup)?;
 			Ok(true)
 		}
 		Forwarded::NotCommitted {
 			reason,
 			description,
 		} => {
+			// No reply exists, so nothing was sent and nothing is owed yet. The item
+			// is deferred and will be served again, which re-records the obligation
+			// against whatever the processor offers then; removing the files here
+			// would only sabotage that retry.
+			ledger.record_cleanup(&claim.inbound_id, &[])?;
 			eprintln!(
 				"tith inbound: {}: the file request reply was not committed: {reason} {description}",
 				claim.inbound_id
@@ -464,6 +463,73 @@ fn serve(
 			Ok(false)
 		}
 	}
+}
+
+/// What one processor run turned into.
+#[derive(Debug, Default)]
+struct Reply {
+	/// The files to submit as `Job Peer-File`.
+	offered: Vec<PeerFile>,
+	/// Paths the adapter owes a removal for whatever happens next.
+	cleanup: Vec<String>,
+	/// Offered paths with no usable final component, for the caller to report.
+	unusable: Vec<PathBuf>,
+}
+
+/// Sorts what the processor offered into the reply and the removals it owes.
+///
+/// The cleanup obligation is collected before anything can exclude a file from
+/// the reply. FSC-0086.001 `-` means "erase the file in any case after the
+/// session", and a file the request's condition rejects, or whose path has no
+/// usable final component, is still one the processor asked to be rid of.
+fn plan_reply(offered: &[Offered], newer_than: Option<u64>) -> Reply {
+	let mut reply = Reply::default();
+	for file in offered {
+		if file.afterward.needs_local_cleanup() {
+			reply.cleanup.push(file.path.to_string_lossy().into_owned());
+		}
+		if newer_than.is_some_and(|newer_than| !newer_than_condition(&file.path, newer_than)) {
+			continue;
+		}
+		let Some(wire_filename) = file.path.file_name().and_then(|name| name.to_str()) else {
+			reply.unusable.push(file.path.clone());
+			continue;
+		};
+		reply.offered.push(PeerFile {
+			path: file.path.clone(),
+			wire_filename: wire_filename.to_owned(),
+			disposition: file.afterward.disposition(),
+		});
+	}
+	reply
+}
+
+/// Removes every owed path, then clears the obligation.
+///
+/// The order is what makes it recoverable: the record is cleared only once every
+/// path is gone, so an interrupted run repeats the removals rather than
+/// forgetting them. A path which is already absent has nothing left to owe.
+fn discharge_cleanup(
+	ledger: &Ledger,
+	inbound_id: &str,
+	paths: &[String],
+) -> Result<(), Box<dyn Error>> {
+	if paths.is_empty() {
+		return Ok(());
+	}
+	let mut remaining = Vec::new();
+	for path in paths {
+		match std::fs::remove_file(path) {
+			Ok(()) => {}
+			Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+			Err(error) => {
+				eprintln!("tith inbound: {inbound_id}: could not remove {path}: {error}");
+				remaining.push(path.clone());
+			}
+		}
+	}
+	ledger.record_cleanup(inbound_id, &remaining)?;
+	Ok(())
 }
 
 /// A private directory beside the ledger for the SRIF and its two lists.
@@ -513,4 +579,148 @@ fn now() -> u64 {
 	SystemTime::now()
 		.duration_since(UNIX_EPOCH)
 		.map_or(0, |since| since.as_secs())
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+	use std::fs;
+	use tith_adapter::srif::Afterward;
+	use tith_ledger::{Record, State};
+
+	fn temp_dir(name: &str) -> PathBuf {
+		let path = std::env::temp_dir().join(format!(
+			"tith-inbound-{name}-{}-{:?}",
+			std::process::id(),
+			std::thread::current().id()
+		));
+		let _ = fs::remove_dir_all(&path);
+		fs::create_dir_all(&path).expect("temp directory");
+		path
+	}
+
+	fn ledger_with(path: &std::path::Path, inbound_id: &str) -> Ledger {
+		let ledger = Ledger::open(path.join("ledger.redb")).expect("ledger");
+		ledger
+			.stage(&Record {
+				inbound_id: inbound_id.to_owned(),
+				payload_hash: [0; 32],
+				state: State::Published,
+				objects: Vec::new(),
+				note: "file request".to_owned(),
+				claim_token: "C1".to_owned(),
+				distribution: String::new(),
+				forward_job: String::new(),
+				cleanup: Vec::new(),
+			})
+			.expect("stage");
+		ledger
+	}
+
+	#[test]
+	fn an_erase_always_file_is_owed_even_when_the_condition_excludes_it() {
+		// FSC-0086.001 "-" erases "in any case", which is not conditional on the
+		// file having been sent. Before this the condition filter ran first and
+		// such a file was left on disk forever.
+		let directory = temp_dir("condition");
+		let stale = directory.join("stale.zip");
+		let fresh = directory.join("fresh.zip");
+		fs::write(&stale, b"stale").expect("stale");
+		fs::write(&fresh, b"fresh").expect("fresh");
+		// Both are older than a condition far in the future, so neither is offered.
+		let future = now() + 86_400;
+
+		let reply = plan_reply(
+			&[
+				Offered {
+					path: stale.clone(),
+					afterward: Afterward::EraseAlways,
+				},
+				Offered {
+					path: fresh.clone(),
+					afterward: Afterward::Keep,
+				},
+			],
+			Some(future),
+		);
+		assert!(reply.offered.is_empty(), "the condition excludes both");
+		assert_eq!(
+			reply.cleanup,
+			[stale.to_string_lossy().into_owned()],
+			"only the \"-\" file is owed a removal"
+		);
+
+		// With no condition both are offered, and the obligation is unchanged.
+		let reply = plan_reply(
+			&[
+				Offered {
+					path: stale.clone(),
+					afterward: Afterward::EraseAlways,
+				},
+				Offered {
+					path: fresh,
+					afterward: Afterward::EraseIfSent,
+				},
+			],
+			None,
+		);
+		assert_eq!(reply.offered.len(), 2);
+		assert_eq!(reply.offered[0].disposition, "Keep");
+		assert_eq!(reply.offered[1].disposition, "Delete");
+		assert_eq!(reply.cleanup, [stale.to_string_lossy().into_owned()]);
+		fs::remove_dir_all(directory).expect("cleanup");
+	}
+
+	#[test]
+	fn a_discharged_obligation_removes_its_files_and_clears_the_record() {
+		let directory = temp_dir("discharge");
+		let ledger = ledger_with(&directory, "I1");
+		let present = directory.join("present.zip");
+		let absent = directory.join("absent.zip");
+		fs::write(&present, b"payload").expect("write");
+
+		let owed = vec![
+			present.to_string_lossy().into_owned(),
+			absent.to_string_lossy().into_owned(),
+		];
+		ledger.record_cleanup("I1", &owed).expect("record");
+		discharge_cleanup(&ledger, "I1", &owed).expect("discharge");
+
+		assert!(!present.exists(), "the file was not removed");
+		// A path which is already gone owes nothing, so the record clears.
+		assert!(
+			ledger.pending_cleanup().expect("pending").is_empty(),
+			"the obligation was not cleared"
+		);
+		fs::remove_dir_all(directory).expect("cleanup");
+	}
+
+	#[test]
+	fn a_removal_which_fails_stays_owed_for_the_next_recovery() {
+		let directory = temp_dir("retained");
+		let ledger = ledger_with(&directory, "I1");
+		// A directory is not removable with remove_file, which stands in for any
+		// permission or busy failure.
+		let stubborn = directory.join("stubborn");
+		fs::create_dir(&stubborn).expect("directory");
+		let gone = directory.join("gone.zip");
+		fs::write(&gone, b"payload").expect("write");
+
+		let owed = vec![
+			gone.to_string_lossy().into_owned(),
+			stubborn.to_string_lossy().into_owned(),
+		];
+		ledger.record_cleanup("I1", &owed).expect("record");
+		discharge_cleanup(&ledger, "I1", &owed).expect("discharge");
+
+		assert!(!gone.exists(), "the removable file should still be removed");
+		let pending = ledger.pending_cleanup().expect("pending");
+		assert_eq!(pending.len(), 1);
+		assert_eq!(
+			pending[0].cleanup,
+			[stubborn.to_string_lossy().into_owned()],
+			"only the failure stays owed"
+		);
+		fs::remove_dir_all(directory).expect("cleanup");
+	}
 }

@@ -133,6 +133,14 @@ pub struct Record {
 	/// tell an obligation which is still owed from one already discharged.
 	pub distribution: String,
 	pub forward_job: String,
+	/// Legacy pathnames the adapter still owes a removal for.
+	///
+	/// TSP-0013 section 3: where a legacy disposition has no exact TSP-0006
+	/// mapping, "the adapter uses Copy with Keep and records its own later legacy
+	/// cleanup". This is that record. It is durable before the submission which
+	/// makes the removal owed, and cleared once every path is gone, so a crash in
+	/// between leaves the obligation recoverable rather than forgotten.
+	pub cleanup: Vec<String>,
 }
 
 pub struct Ledger {
@@ -187,6 +195,24 @@ impl Ledger {
 	/// Durable before the item is acknowledged, so recovery can tell a
 	/// discharged distribution obligation from an outstanding one.
 	pub fn record_forward(&self, inbound_id: &str, job_id: &str) -> Result<(), LedgerError> {
+		self.amend(inbound_id, |record| {
+			job_id.clone_into(&mut record.forward_job);
+		})
+	}
+
+	/// Records the legacy pathnames the adapter still owes a removal for.
+	///
+	/// Called with the paths before the submission which makes them owed, and
+	/// with an empty slice once every one is gone. Recovery performs whatever is
+	/// left, so an interrupted run does not silently drop a removal a legacy
+	/// disposition asked for.
+	pub fn record_cleanup(&self, inbound_id: &str, paths: &[String]) -> Result<(), LedgerError> {
+		self.amend(inbound_id, |record| {
+			record.cleanup = paths.to_vec();
+		})
+	}
+
+	fn amend(&self, inbound_id: &str, change: impl FnOnce(&mut Record)) -> Result<(), LedgerError> {
 		let transaction = self.database.begin_write()?;
 		{
 			let mut table = transaction.open_table(INBOUND)?;
@@ -194,7 +220,7 @@ impl Ledger {
 				Some(value) => decode(value.value())?,
 				None => return Err(LedgerError::CorruptRecord),
 			};
-			job_id.clone_into(&mut record.forward_job);
+			change(&mut record);
 			table.insert(inbound_id, encode(&record).as_slice())?;
 		}
 		transaction.commit()?;
@@ -223,6 +249,25 @@ impl Ledger {
 			let (_, value) = entry?;
 			let record = decode(value.value())?;
 			if matches!(record.state, State::Staged | State::Published) {
+				records.push(record);
+			}
+		}
+		Ok(records)
+	}
+
+	/// Every record which still owes a legacy removal, whatever its state.
+	///
+	/// Unlike [`Ledger::unfinished`] this ignores State: the obligation outlives
+	/// the conversion it came from, and a record which reached a terminal state
+	/// with paths still listed is exactly the case recovery must not miss.
+	pub fn pending_cleanup(&self) -> Result<Vec<Record>, LedgerError> {
+		let transaction = self.database.begin_read()?;
+		let table = transaction.open_table(INBOUND)?;
+		let mut records = Vec::new();
+		for entry in table.iter()? {
+			let (_, value) = entry?;
+			let record = decode(value.value())?;
+			if !record.cleanup.is_empty() {
 				records.push(record);
 			}
 		}
@@ -286,6 +331,11 @@ fn encode(record: &Record) -> Vec<u8> {
 		push_string(&mut output, &object.name);
 		output.extend_from_slice(&object.digest.to_le_bytes());
 	}
+	let count = u32::try_from(record.cleanup.len()).unwrap_or(u32::MAX);
+	output.extend_from_slice(&count.to_le_bytes());
+	for path in record.cleanup.iter().take(count as usize) {
+		push_string(&mut output, path);
+	}
 	output
 }
 
@@ -306,6 +356,15 @@ fn decode(mut input: &[u8]) -> Result<Record, LedgerError> {
 				digest: u64::from_le_bytes(take_fixed::<8>(&mut input)?),
 			});
 		}
+		// A record written before cleanup obligations were tracked simply ends
+		// here, and reads back with none.
+		let mut cleanup = Vec::new();
+		if !input.is_empty() {
+			let count = u32::from_le_bytes(take_fixed::<4>(&mut input)?);
+			for _ in 0..count {
+				cleanup.push(take_string(&mut input)?);
+			}
+		}
 		input.is_empty().then_some(Record {
 			inbound_id,
 			payload_hash,
@@ -315,6 +374,7 @@ fn decode(mut input: &[u8]) -> Result<Record, LedgerError> {
 			claim_token,
 			distribution,
 			forward_job,
+			cleanup,
 		})
 	};
 	read().ok_or(LedgerError::CorruptRecord)
@@ -353,6 +413,7 @@ mod tests {
 			claim_token: "T1".to_owned(),
 			distribution: "SYNCHRONET".to_owned(),
 			forward_job: String::new(),
+			cleanup: Vec::new(),
 		}
 	}
 
@@ -415,6 +476,43 @@ mod tests {
 		assert_eq!(ledger.next_identity("object").unwrap(), 3);
 		assert_eq!(ledger.next_identity("other").unwrap(), 1);
 		std::fs::remove_file(path).unwrap();
+	}
+
+	#[test]
+	fn a_cleanup_obligation_survives_until_it_is_cleared() {
+		// TSP-0013 section 3: a legacy disposition with no exact TSP-0006 mapping
+		// leaves the adapter owing its own removal, and section 2 requires the
+		// ledger record it rather than a pathname's disappearance.
+		let path = temporary("cleanup");
+		let ledger = Ledger::open(&path).unwrap();
+		ledger.stage(&record("I1", State::Published)).unwrap();
+		assert!(ledger.pending_cleanup().unwrap().is_empty());
+
+		let owed = ["/tmp/a.zip".to_owned(), "/tmp/b.zip".to_owned()];
+		ledger.record_cleanup("I1", &owed).unwrap();
+		let pending = ledger.pending_cleanup().unwrap();
+		assert_eq!(pending.len(), 1);
+		assert_eq!(pending[0].cleanup, owed);
+
+		// A terminal state does not discharge it: the obligation outlives the
+		// conversion, so recovery must still find it.
+		ledger.advance("I1", State::Acknowledged).unwrap();
+		assert!(ledger.unfinished().unwrap().is_empty());
+		assert_eq!(ledger.pending_cleanup().unwrap().len(), 1);
+
+		ledger.record_cleanup("I1", &[]).unwrap();
+		assert!(ledger.pending_cleanup().unwrap().is_empty());
+		std::fs::remove_file(path).unwrap();
+	}
+
+	#[test]
+	fn a_record_written_before_cleanup_was_tracked_still_decodes() {
+		// The field is appended, so an existing ledger reads back with no
+		// obligation rather than as a corrupt record.
+		let value = record("I1", State::Published);
+		let encoded = encode(&value);
+		let legacy = &encoded[..encoded.len() - 4];
+		assert_eq!(decode(legacy).unwrap(), value);
 	}
 
 	#[test]
