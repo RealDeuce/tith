@@ -165,7 +165,10 @@ pub fn build(message: &StoredMessage, context: &Context<'_>) -> Result<Submissio
 		lines.push(line(vec![unquoted("Subject"), quoted(&message.subject)]));
 	}
 	if !message.text.is_empty() {
-		lines.push(line(vec![unquoted("Message-Text"), quoted(&message.text)]));
+		lines.push(line(vec![
+			unquoted("Message-Text"),
+			quoted(&tith_message_legacy::decode_body(&message.text)),
+		]));
 	}
 	lines.extend(legacy_attributes(message.attributes));
 	if let Some(msgid) = message.control("MSGID") {
@@ -293,7 +296,10 @@ pub fn build_packed(
 		lines.push(line(vec![unquoted("Subject"), quoted(&message.subject)]));
 	}
 	if !message.text.is_empty() {
-		lines.push(line(vec![unquoted("Message-Text"), quoted(&message.text)]));
+		lines.push(line(vec![
+			unquoted("Message-Text"),
+			quoted(&tith_message_legacy::decode_body(&message.text)),
+		]));
 	}
 	lines.extend(legacy_attributes(message.attributes));
 	if let Some(msgid) = message.control("MSGID") {
@@ -561,6 +567,10 @@ mod tests {
 		// Bit 4 was the only attribute set, and the Attachment lines already say
 		// the message has one, so nothing is left for Legacy-Attributes to carry.
 		assert!(!text.contains("Legacy-Attributes"), "{text}");
+		// The legacy body is bytes 0x0D and 0x0A; TTS-0005 type 106 stores
+		// paragraphs terminated by U+000A, so the body is decoded rather than
+		// handed over raw. The IPC form escapes that terminator as \n.
+		assert!(text.contains(r#"Message-Text "Hello\n""#), "{text}");
 		fs::remove_dir_all(directory).unwrap();
 	}
 

@@ -3,7 +3,7 @@ TITH                                              THIS ISN'T THAT HARD
 **********************************************************************
 
 Publication:  TSP‑0006
-Revision:     6
+Revision:     7
 Title:        Outbound Job Submission
 Author(s):    Stephen Hurd
 Date:         2026‑08‑19
@@ -381,6 +381,15 @@ Contents
   ToUserName and FromUserName.
   Subject and Message-Text supply Subject and MessageText.  An omitted
   Subject or Message-Text supplies an empty value.  All four are UTF‑8.
+
+  TTS‑0005 makes MessageText paragraphs each terminated by one U+000A.
+  Message-Text is the text of the message and not that encoding, so the
+  service supplies a final U+000A when a nonempty value does not end in
+  one, and replaces each CRLF pair and each remaining U+000D with one
+  U+000A.  An Application need not know the rule, and no Application is
+  refused for writing its last paragraph without a trailing line break.
+  This normalization happens before the Message is constructed and
+  signed, so it never alters signed content.
 
   The service MUST NOT derive Subject or MessageText from a Source
   pathname, WireFilename, JobID, or Idempotency-Key.  A pathname appears
@@ -1181,5 +1190,9 @@ B. History
    Rev.6, 2026‑08‑19: Added the Peer-File and FileRequest Kinds so a
    peer‐addressed standalone File and a FileRequest can be originated,
    and defined their single directly committed delivery copy.
+
+   Rev.7, 2026‑08‑19: Had the service supply the MessageText paragraph
+   terminator TTS‑0005 requires rather than refuse a Message-Text
+   without one.
 
 **********************************************************************

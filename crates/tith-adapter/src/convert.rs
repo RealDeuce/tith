@@ -967,7 +967,7 @@ mod tests {
 			to_user: "Recipient".to_owned(),
 			from_user: "Sender".to_owned(),
 			subject: subject.to_owned(),
-			text: "Body line one\nline two".to_owned(),
+			text: "Body line one\nline two\n".to_owned(),
 			area: None,
 			attachments,
 			legacy_attributes: None,
@@ -1153,7 +1153,7 @@ mod tests {
 		// NetMail carrying them carries them as ordinary Message Text. They need
 		// no mapping and must survive the round trip inside MessageText.
 		let mut data = netmail(Vec::new(), "Hello");
-		data.text = "Body line one\n--- tosser 1.0\n * Origin: A board (1:104/36)".to_owned();
+		data.text = "Body line one\n--- tosser 1.0\n * Origin: A board (1:104/36)\n".to_owned();
 		let (read, keys, _) = signed(data);
 		let converted = to_legacy(
 			&read,
@@ -1186,7 +1186,7 @@ mod tests {
 			to_user: "All".to_owned(),
 			from_user: "Sender".to_owned(),
 			subject: "Hello".to_owned(),
-			text: "Body line one\nline two".to_owned(),
+			text: "Body line one\nline two\n".to_owned(),
 			area: Some("SYNCHRONET".to_owned()),
 			attachments: Vec::new(),
 			legacy_attributes: None,

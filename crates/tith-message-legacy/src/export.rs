@@ -209,10 +209,15 @@ pub fn parse_date_time(value: &str) -> Result<i64, ExportError> {
 
 /// Folds a native `MessageText` into a legacy body.
 ///
-/// TSP-0003 section 3: each CRLF pair and each remaining CR or LF becomes one
-/// byte 0x0D, other UTF-8 bytes are unchanged, U+0000 is not representable, and
-/// the body is followed by 0x0D when it is neither empty nor already
-/// terminated.
+/// TSP-0003 section 3: each U+000A becomes one byte 0x0D and other UTF-8 bytes
+/// are unchanged, so a conforming value arrives already terminated and nothing
+/// is appended. U+0000 is not representable.
+///
+/// The remaining conversions are for a value which does not conform to TTS-0005:
+/// each CRLF pair and each remaining CR also becomes one 0x0D, and the body is
+/// followed by 0x0D when it is neither empty nor already terminated. Such a
+/// value cannot be exported canonically, because [`decode_body`] returns the
+/// terminator this supplied and the reconstruction then differs.
 pub fn encode_body(text: &str) -> Result<String, ExportError> {
 	if text.contains('\0') {
 		return Err(ExportError::Unrepresentable("U+0000 in MessageText"));
@@ -238,16 +243,28 @@ pub fn encode_body(text: &str) -> Result<String, ExportError> {
 	Ok(output)
 }
 
-/// The inverse: a legacy body split back into lines joined by LF.
+/// The inverse: a legacy body's paragraphs, each terminated by U+000A.
 ///
-/// A legacy body cannot distinguish a hard line break from a soft one, so this
-/// maps every 0x0D to U+000A and drops one trailing break. TSP-0003 makes no
-/// byte-preservation claim for a legacy-to-TITH-to-legacy round trip, but the
-/// TITH-to-legacy-to-TITH direction this inverts is exact.
+/// Both sides terminate a paragraph rather than separate two. FTS-0001.016 says
+/// a hard carriage return "marks the end of a paragraph, and must be preserved",
+/// and TTS-0005 makes `MessageText` paragraphs each terminated by one U+000A, so
+/// every 0x0D becomes one U+000A and none is dropped. Bytes 0x0A are ignored, as
+/// TSP-0003 section 3 requires.
+///
+/// A legacy final paragraph may end at the NUL rather than at a hard carriage
+/// return, so its terminator is supplied. That cannot disturb a section 3.1
+/// reconstruction: a canonical body always carries the terminator already,
+/// because the `MessageText` it came from ended in one.
 #[must_use]
 pub fn decode_body(body: &str) -> String {
-	let trimmed = body.strip_suffix('\r').unwrap_or(body);
-	trimmed.replace('\r', "\n")
+	if body.is_empty() {
+		return String::new();
+	}
+	let mut text = body.replace('\n', "").replace('\r', "\n");
+	if !text.ends_with('\n') {
+		text.push('\n');
+	}
+	text
 }
 
 /// Writes one control paragraph: byte 0x01, the payload, byte 0x0D.
@@ -673,7 +690,28 @@ mod tests {
 			encode_body("a\0b").unwrap_err(),
 			ExportError::Unrepresentable("U+0000 in MessageText")
 		);
-		assert_eq!(decode_body("a\rb\rc\r"), "a\nb\nc");
+	}
+
+	/// Both sides terminate a paragraph, so a conforming `MessageText` survives
+	/// the round trip exactly and no two of them share a legacy encoding.
+	#[test]
+	fn a_terminated_body_round_trips_exactly() {
+		for text in ["", "a\n", "a\nb\n", "\n", "\n\n", "a\n\nb\n"] {
+			let legacy = encode_body(text).unwrap();
+			assert_eq!(decode_body(&legacy), text, "{text:?} -> {legacy:?}");
+		}
+		// One paragraph per terminator, in both directions.
+		assert_eq!(encode_body("a\nb\n").unwrap(), "a\rb\r");
+		assert_eq!(decode_body("a\rb\r"), "a\nb\n");
+		// A final paragraph which ended at the NUL is given its terminator, and
+		// ignored line feeds do not become paragraphs.
+		assert_eq!(decode_body("a\rb"), "a\nb\n");
+		assert_eq!(decode_body("a\r\nb\r\n"), "a\nb\n");
+
+		// A value which does not conform is exported with a terminator it did
+		// not have, so it cannot come back unchanged and cannot be canonical.
+		assert_eq!(encode_body("a").unwrap(), "a\r");
+		assert_ne!(decode_body(&encode_body("a").unwrap()), "a");
 	}
 
 	#[test]

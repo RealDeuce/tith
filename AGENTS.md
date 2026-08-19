@@ -236,13 +236,16 @@ lengths and outstanding-response accounting cannot resolve.
   work fails loudly naming its issue rather than degrading silently.
   That self-check is what makes TTS-0005 keep one native representation of each
   legacy fact: an absent `LegacyAttributes` or `TimestampOffset` is the only form
-  of a zero one, and attachment presence lives in the `File` children rather than
-  in AttributeWord bit 4. Legacy always carries the attribute word in a fixed
-  field and canonical output always emits `TZUTC`, so a second native form would
-  simply be unreconstructable. Enforce those rules where a Message is minted, in
-  `build_originated_message`; never in `validate_message`, because a received
-  item's authentication is its signature and not its conformance to a canonical
-  field list.
+  of a zero one, attachment presence lives in the `File` children rather than in
+  AttributeWord bit 4, and `MessageText` is paragraphs each terminated by one
+  U+000A with no U+000D. Legacy always carries the attribute word in a fixed
+  field, canonical output always emits `TZUTC`, and FTS-0001.016 makes a hard
+  carriage return the end of a paragraph rather than a separator between two, so
+  a second native form would simply be unreconstructable. Enforce those rules
+  where a Message is minted, in `build_originated_message`; never in
+  `validate_message`, because a received item's authentication is its signature
+  and not its conformance to a canonical field list. An Application is not held
+  to them: TSP-0006 has the service supply a missing `MessageText` terminator.
   A claimed FileRequest is answered rather than published: the processor decides
   which files the peer may have, and each becomes a TSP-0006 `Job Peer-File`
   addressed back to it, keyed on InboundID so a redelivery does not send twice.

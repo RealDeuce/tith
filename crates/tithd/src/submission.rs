@@ -361,7 +361,7 @@ impl SubmissionEngine {
 				to_user: message.to_user.clone(),
 				from_user: message.from_user.clone(),
 				subject: message.subject.clone(),
-				text: message.message_text.clone(),
+				text: message_text(&message.message_text),
 				area: (message.kind == MessageKind::EchoMail)
 					.then(|| message.destination_or_area.clone()),
 				attachments,
@@ -1041,6 +1041,25 @@ fn now() -> u64 {
 		.map_or(0, |value| value.as_secs())
 }
 
+/// The submitted `Message-Text` as the `MessageText` TTS-0005 defines.
+///
+/// TSP-0006 section 3: `Message-Text` is the text of the message and not that
+/// encoding, so the service supplies the final U+000A of a nonempty value which
+/// lacks one and folds each CRLF pair and remaining U+000D into one U+000A. An
+/// Application never has to know the rule, and none is refused for writing its
+/// last paragraph without a trailing line break. This runs before the Message is
+/// constructed, so it never alters signed content.
+fn message_text(submitted: &str) -> String {
+	if submitted.is_empty() {
+		return String::new();
+	}
+	let mut text = submitted.replace("\r\n", "\n").replace('\r', "\n");
+	if !text.ends_with('\n') {
+		text.push('\n');
+	}
+	text
+}
+
 struct BuildFailure {
 	kind: JobBuildFailure,
 	description: String,
@@ -1139,6 +1158,11 @@ mod tests {
 			validated.destination.unwrap().public_key,
 			destination_keys.public
 		);
+		// TSP-0006 section 3: the request said Message-Text "World", and TTS-0005
+		// type 106 stores paragraphs each terminated by U+000A, so the service
+		// supplied the terminator rather than refusing the Application.
+		let read = tith_wire::item::read_message(&values[0], &|_: &Address| None).unwrap();
+		assert_eq!(read.data.text, "World\n");
 		assert!(matches!(
 			engine.submit(&request, &store).unwrap(),
 			BatchCommit::Committed(ref values)
@@ -1253,7 +1277,7 @@ mod tests {
 				to_user: "All".to_owned(),
 				from_user: "Author".to_owned(),
 				subject: "Hello".to_owned(),
-				text: "Body".to_owned(),
+				text: "Body\n".to_owned(),
 				area: Some("SYNCHRONET".to_owned()),
 				attachments: Vec::new(),
 				legacy_attributes: None,

@@ -194,6 +194,18 @@ pub fn build_originated_message(
 	if data.area.is_none() && (data.tear_line.is_some() || data.origin_line.is_some()) {
 		return Err(BundleError::Unexpected("a NetMail TearLine or OriginLine"));
 	}
+	// TTS-0005 section 3 type 106: MessageText is paragraphs each terminated by
+	// one U+000A, which is the only line break. A caller with text in another
+	// shape converts it before submitting; TSP-0006 has the service do that for
+	// an Application, because this is where the signed bytes are decided.
+	if data.text.contains('\r') {
+		return Err(BundleError::Unexpected("U+000D in MessageText"));
+	}
+	if !data.text.is_empty() && !data.text.ends_with('\n') {
+		return Err(BundleError::Unexpected(
+			"a MessageText whose final paragraph is unterminated",
+		));
+	}
 	let mut signed = Vec::new();
 	push_provenance(&mut signed, provenance)?;
 	if let Some(destination) = &data.destination {
@@ -1945,7 +1957,7 @@ mod tests {
 				to_user: "You".to_owned(),
 				from_user: "Me".to_owned(),
 				subject: String::new(),
-				text: "Legacy".to_owned(),
+				text: "Legacy\n".to_owned(),
 				area: None,
 				attachments: Vec::new(),
 				legacy_attributes: None,
@@ -1997,7 +2009,7 @@ mod tests {
 				to_user: "You".to_owned(),
 				from_user: "Me".to_owned(),
 				subject: String::new(),
-				text: "Legacy".to_owned(),
+				text: "Legacy\n".to_owned(),
 				area: None,
 				attachments: Vec::new(),
 				legacy_attributes: None,
@@ -2066,7 +2078,7 @@ mod tests {
 				to_user: "All".to_owned(),
 				from_user: "Me".to_owned(),
 				subject: "Hello".to_owned(),
-				text: "Body".to_owned(),
+				text: "Body\n".to_owned(),
 				area: Some("SYNCHRONET".to_owned()),
 				attachments: Vec::new(),
 				legacy_attributes: None,
@@ -2166,7 +2178,7 @@ mod tests {
 			to_user: "Recipient".to_owned(),
 			from_user: "Sender".to_owned(),
 			subject: "work.zip".to_owned(),
-			text: "Body text".to_owned(),
+			text: "Body text\n".to_owned(),
 			area: None,
 			attachments: vec![
 				AttachmentData {
@@ -2272,7 +2284,7 @@ mod tests {
 				to_user: "You".to_owned(),
 				from_user: "Me".to_owned(),
 				subject: String::new(),
-				text: "Text".to_owned(),
+				text: "Text\n".to_owned(),
 				area: None,
 				attachments: Vec::new(),
 				legacy_attributes: None,
@@ -2459,7 +2471,7 @@ mod tests {
 				to_user: "All".to_owned(),
 				from_user: "Me".to_owned(),
 				subject: "Hi".to_owned(),
-				text: "Text".to_owned(),
+				text: "Text\n".to_owned(),
 				area: Some("SYNCHRONET".to_owned()),
 				attachments: Vec::new(),
 				legacy_attributes: None,
@@ -2526,7 +2538,7 @@ mod tests {
 				to_user: "All".to_owned(),
 				from_user: "Me".to_owned(),
 				subject: "Hi".to_owned(),
-				text: "Body".to_owned(),
+				text: "Body\n".to_owned(),
 				area: Some("SYNCHRONET".to_owned()),
 				attachments: Vec::new(),
 				legacy_attributes: None,
@@ -2641,7 +2653,7 @@ mod tests {
 			to_user: "You".to_owned(),
 			from_user: "Me".to_owned(),
 			subject: String::new(),
-			text: "Body".to_owned(),
+			text: "Body\n".to_owned(),
 			area: None,
 			attachments: Vec::new(),
 			legacy_attributes: None,
@@ -2659,13 +2671,36 @@ mod tests {
 		// A Message carrying none of them is what native origination produces.
 		assert!(build(netmail()).is_ok());
 
-		let cases: [(MessageData, &str); 4] = [
+		// An empty MessageText has no paragraph to terminate.
+		assert!(
+			build(MessageData {
+				text: String::new(),
+				..netmail()
+			})
+			.is_ok()
+		);
+
+		let cases: [(MessageData, &str); 6] = [
 			(
 				MessageData {
 					legacy_attributes: Some(0),
 					..netmail()
 				},
 				"zero LegacyAttributes",
+			),
+			(
+				MessageData {
+					text: "Body\r\nmore\r\n".to_owned(),
+					..netmail()
+				},
+				"U+000D in MessageText",
+			),
+			(
+				MessageData {
+					text: "Body".to_owned(),
+					..netmail()
+				},
+				"a MessageText whose final paragraph is unterminated",
 			),
 			(
 				MessageData {

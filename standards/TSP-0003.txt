@@ -3,7 +3,7 @@ TITH                                              THIS ISN'T THAT HARD
 **********************************************************************
 
 Publication:  TSP‑0003
-Revision:     5
+Revision:     6
 Title:        Legacy Data Formats and TITH
 Author(s):    Stephen Hurd
 Date:         2026‑08‑19
@@ -466,24 +466,39 @@ Contents
   This is "\x01CHRS: UTF-8 4\x0d".  U+002D HYPHEN-MINUS in
   "UTF-8" is literal protocol syntax.
 
-  On export, each CRLF pair and each remaining CR or LF in a native
-  MessageText becomes one byte 0x0D.  Other UTF‑8 bytes are unchanged.
-  U+0000 is not representable and makes conversion unavailable.  The
-  body is followed by 0x0D if it is not already empty or terminated by
-  0x0D.
+  Both sides terminate a paragraph rather than separate two.
+  FTS‑0001.016 says a hard carriage return "marks the end of a
+  paragraph, and must be preserved", and TTS‑0005 makes MessageText
+  paragraphs each terminated by one U+000A.  Each terminator therefore
+  maps to the other one‑for‑one, and canonical conversion neither
+  invents nor discards one.
 
-  Revision 1 canonical export requires MessageText to contain no
-  U+0000 or U+000D and to be either empty or end in U+000A.  Every
-  U+000A then maps one‑for‑one to a hard carriage return and back.  The
-  export self‑check in section 3.1 also rejects a user paragraph which
-  the legacy parser would classify as control or EchoMail framing.
+  On export, each U+000A in a native MessageText becomes one byte 0x0D.
+  Other UTF‑8 bytes are unchanged.  U+0000 is not representable and
+  makes conversion unavailable.  A conforming MessageText already ends
+  in its own terminator, so nothing is appended.  A value which does
+  not conform is compatibility input: each CRLF pair and each remaining
+  CR becomes one byte 0x0D as well, and the body is then followed by
+  0x0D if it is not already empty or terminated by 0x0D.  Canonical
+  export is unavailable for such a value, because the terminator the
+  export supplied is one the original did not have.
+
+  Revision 1 canonical export therefore requires MessageText to contain
+  no U+0000 or U+000D and to be either empty or end in U+000A, which is
+  what TTS‑0005 already requires of every producer.  The export
+  self‑check in section 3.1 also rejects a user paragraph which the
+  legacy parser would classify as control or EchoMail framing.
 
   On import, hard carriage returns in user text become U+000A.  Bytes
   0x0A are ignored.  In a declared seven‑bit or other configured
   single‑byte soft‑return encoding, byte 0x8D is also ignored.  In an
   eight‑bit character set or multibyte encoding, byte 0x8D is passed to
   that decoder.  The terminating NUL is framing and is not part of
-  MessageText.
+  MessageText.  A legacy final paragraph may end at that NUL rather
+  than at a hard carriage return; import supplies its U+000A, so an
+  imported MessageText always conforms.  This never affects a section
+  3.1 reconstruction, because a canonical legacy body always carries
+  the terminator the conversion is being checked against.
 
   CHRS and its permitted CHARSET synonym are parsed as specified by
   FTS‑5003.001.  The identifier is at most eight ASCII characters.  A
@@ -1487,5 +1502,10 @@ B. History
    File children, confined the tear and Origin lines to EchoMail, and
    authorised an author to construct the signed region rather than only
    carry one through a conversion.
+
+   Rev.6, 2026‑08‑19: Stated that both sides terminate a paragraph
+   rather than separate two, so each MessageText terminator maps to one
+   hard carriage return and back, and had import supply the terminator
+   of a final paragraph which ended at the NUL.
 
 **********************************************************************

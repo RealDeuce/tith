@@ -3,7 +3,7 @@ TITH                                              THIS ISN'T THAT HARD
 **********************************************************************
 
 Publication:  TTS‑0005
-Revision:     7
+Revision:     8
 Title:        Bundle Format
 Author(s):    Stephen Hurd
 Date:         2026‑08‑19
@@ -474,6 +474,19 @@ Contents
   ────────────────
   Contains a UTF‑8 string which is the contents of the message.
 
+  The string is zero or more paragraphs, each terminated by one U+000A.
+  It is therefore either empty or ends in U+000A, and the number of
+  U+000A values equals the number of paragraphs.  U+000A terminates a
+  paragraph; it does not separate one paragraph from the next, and a
+  final paragraph is terminated like every other.
+
+  U+000D MUST NOT appear.  A producer which has a carriage return, a
+  line feed, or a carriage return and line feed pair emits one U+000A
+  for it, so that one line break has one representation.  This matches
+  FTS‑0001.016, in which a hard carriage return "marks the end of a
+  paragraph", and lets a legacy conversion map each terminator to one
+  hard carriage return and back without inventing or discarding a byte.
+
   107. Area
   ─────────
   Contains an AreaName value optionally followed by an AreaDescription
@@ -727,5 +740,8 @@ B. History
    TimestampOffset the only representation of a zero value, moved
    attachment presence entirely into the File children, and confined
    TearLine and OriginLine to EchoMail.
+
+   Rev.8, 2026‑08‑19: Defined MessageText as paragraphs each terminated
+   by U+000A, with U+000A as the only line break.
 
 **********************************************************************

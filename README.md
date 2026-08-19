@@ -599,6 +599,15 @@ those rules a Message originated through `tith submit` — which carries none of
 them — could never be exported canonically, which is the case `TITHSIG` most
 needs to serve.
 
+`MessageText` works the same way and for the same reason. FTS-0001.016 makes a
+hard carriage return the *end* of a paragraph, so TTS-0005 makes U+000A the end
+of a native one: the text is empty or ends in U+000A, U+000D never appears, and
+each terminator maps to one 0x0D and back with nothing invented or dropped at
+the boundary. `tith submit` callers need not know that — TSP-0006 has the
+service supply a missing final U+000A — but two native texts differing only in a
+trailing newline would otherwise share one legacy encoding, and only one of them
+could come back.
+
 ### Batching
 
 `--batch-window` and `--batch-max` bound how many items one packet may carry.
