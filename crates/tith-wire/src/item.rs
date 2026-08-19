@@ -55,10 +55,26 @@ pub struct ValidatedItem {
 	pub duplicate_identity: Option<SignedItemIdentity>,
 	pub authentication: Option<ItemAuthentication>,
 	pub response_to: Option<TlvHash>,
+	/// Present only for a Rejected response.
+	pub rejection: Option<Rejection>,
 	pub provenance: Option<ItemProvenance>,
 	pub destination: Option<Identity>,
 	pub area: Option<String>,
 	pub raw: OwnedTlv,
+}
+
+/// The detail a Rejected response carries beyond the fact of rejection.
+///
+/// TSP-0002 section 6 treats each reason differently: 1 fails as Rejected, 2 as
+/// Authentication, 3 completes a conditional request and is not a failure at
+/// all, and 4 retains the item for retry no earlier than `retry_after`.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Rejection {
+	pub reason: RejectionReason,
+	/// The Timestamp a reason 4 rejection may carry. Absent means retry at the
+	/// next applicable schedule.
+	pub retry_after: Option<u64>,
+	pub description: String,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -68,6 +84,19 @@ pub enum RejectionReason {
 	Authentication = 2,
 	Condition = 3,
 	Temporary = 4,
+}
+
+impl RejectionReason {
+	#[must_use]
+	pub const fn from_code(code: u64) -> Option<Self> {
+		Some(match code {
+			1 => Self::Permanent,
+			2 => Self::Authentication,
+			3 => Self::Condition,
+			4 => Self::Temporary,
+			_ => return None,
+		})
+	}
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -830,6 +859,7 @@ fn validate_message(
 		duplicate_identity,
 		authentication: Some(authentication),
 		response_to: None,
+		rejection: None,
 		provenance: Some(provenance),
 		destination,
 		area,
@@ -975,6 +1005,7 @@ fn validate_file(
 		),
 		authentication,
 		response_to: None,
+		rejection: None,
 		provenance,
 		destination: None,
 		area,
@@ -998,6 +1029,7 @@ fn simple_request(value: &OwnedTlv, kind: ItemKind) -> Result<ValidatedItem, Bun
 		duplicate_identity: None,
 		authentication: None,
 		response_to: None,
+		rejection: None,
 		provenance: None,
 		destination: None,
 		area: None,
@@ -1028,6 +1060,7 @@ fn validate_file_request(value: &OwnedTlv) -> Result<ValidatedItem, BundleError>
 		duplicate_identity: None,
 		authentication: Some(ItemAuthentication::Transport),
 		response_to: None,
+		rejection: None,
 		provenance: None,
 		destination: None,
 		area: None,
@@ -1064,6 +1097,7 @@ fn validate_response(value: &OwnedTlv, accepted: bool) -> Result<ValidatedItem, 
 			duplicate_identity: None,
 			authentication: None,
 			response_to: Some(response_to),
+			rejection: None,
 			provenance: None,
 			destination: None,
 			area: None,
@@ -1089,24 +1123,31 @@ fn validate_response(value: &OwnedTlv, accepted: bool) -> Result<ValidatedItem, 
 			.expect("length checked above"),
 	);
 	let mut offset = used_request + used_hash;
+	let mut retry_after = None;
 	if let Ok((timestamp, used_timestamp)) = take_encoded_tlv(&bytes[offset..])
 		&& timestamp.type_code == types::TIMESTAMP
 	{
-		decode_u64(&timestamp.value)?;
+		retry_after = Some(decode_u64(&timestamp.value)?);
 		offset += used_timestamp;
 	}
 	let (reason, used_reason) = decode_u64_prefix(&bytes[offset..])?;
-	if !(1..=4).contains(&reason) {
-		return Err(BundleError::Unexpected("Rejected reason"));
-	}
+	let reason =
+		RejectionReason::from_code(reason).ok_or(BundleError::Unexpected("Rejected reason"))?;
 	offset += used_reason;
-	std::str::from_utf8(&bytes[offset..]).map_err(|_| BundleError::InvalidUtf8)?;
+	let description = std::str::from_utf8(&bytes[offset..])
+		.map_err(|_| BundleError::InvalidUtf8)?
+		.to_owned();
 	Ok(ValidatedItem {
 		kind: ItemKind::Rejected,
 		request_identifier,
 		duplicate_identity: None,
 		authentication: None,
 		response_to: Some(response_to),
+		rejection: Some(Rejection {
+			reason,
+			retry_after,
+			description,
+		}),
 		provenance: None,
 		destination: None,
 		area: None,
@@ -1174,6 +1215,33 @@ pub fn request_identifier(value: &OwnedTlv) -> Option<u64> {
 		.map(|child| decode_u64(&child.value));
 	let identifier = identifiers.next()?.ok()?;
 	identifiers.next().is_none().then_some(identifier)
+}
+
+/// Replaces a stored request's `RequestIdentifier` in place.
+///
+/// A `RequestIdentifier` identifies a request within one exchange, so a sender
+/// which spools an item and later combines several spooled items into one
+/// Bundle must renumber them. It sits outside every signed region — the
+/// signature covers the children which precede it — so rewriting it does not
+/// disturb end-to-end authentication.
+///
+/// # Errors
+///
+/// Returns [`BundleError`] when `value` is not a sequence of TLV values or does
+/// not carry exactly one `RequestIdentifier`.
+pub fn set_request_identifier(value: &OwnedTlv, identifier: u64) -> Result<OwnedTlv, BundleError> {
+	let mut children = parse_sequence(&value.value)?;
+	let mut found = 0usize;
+	for child in &mut children {
+		if child.type_code == types::REQUEST_IDENTIFIER {
+			child.value = crate::integer::encode_u64(identifier);
+			found += 1;
+		}
+	}
+	if found != 1 {
+		return Err(BundleError::Missing("exactly one RequestIdentifier"));
+	}
+	OwnedTlv::new(value.type_code, encoded_prefix(&children, children.len())).map_err(Into::into)
 }
 
 /// The signer-selecting values a legacy converter must carry across.
@@ -2279,5 +2347,65 @@ mod tests {
 			0,
 			"an empty collection emits no SeenBy at all"
 		);
+	}
+
+	#[test]
+	fn every_rejection_reason_and_its_retry_timestamp_survive_parsing() {
+		// TSP-0002 section 6 gives each reason a different meaning, and reason 4
+		// carries the instant before which the item must not be retried, so
+		// neither may be discarded by the parser.
+		let hash = TlvHash::from_bytes([3; 32]);
+		for (code, expected) in [
+			(1, RejectionReason::Permanent),
+			(2, RejectionReason::Authentication),
+			(3, RejectionReason::Condition),
+			(4, RejectionReason::Temporary),
+		] {
+			let value = rejected(7, hash, None, expected, "because").unwrap();
+			let parsed = validate_item(&value, &|_: &Address| None).unwrap().unwrap();
+			assert_eq!(parsed.kind, ItemKind::Rejected);
+			let rejection = parsed.rejection.expect("a Rejected carries its detail");
+			assert_eq!(rejection.reason, expected, "code {code}");
+			assert_eq!(rejection.retry_after, None);
+			assert_eq!(rejection.description, "because");
+		}
+
+		let value = rejected(
+			9,
+			hash,
+			Some(1_755_600_000),
+			RejectionReason::Temporary,
+			"try later",
+		)
+		.unwrap();
+		let parsed = validate_item(&value, &|_: &Address| None).unwrap().unwrap();
+		let rejection = parsed.rejection.unwrap();
+		assert_eq!(rejection.reason, RejectionReason::Temporary);
+		assert_eq!(rejection.retry_after, Some(1_755_600_000));
+
+		// An Accepted has no rejection detail at all.
+		let value = accepted(7, hash).unwrap();
+		let parsed = validate_item(&value, &|_: &Address| None).unwrap().unwrap();
+		assert_eq!(parsed.kind, ItemKind::Accepted);
+		assert!(parsed.rejection.is_none());
+	}
+
+	#[test]
+	fn a_reason_outside_the_defined_range_is_refused() {
+		let mut value = Vec::new();
+		OwnedTlv::new(types::REQUEST_IDENTIFIER, crate::integer::encode_u64(1))
+			.unwrap()
+			.write_to(&mut value)
+			.unwrap();
+		OwnedTlv::new(types::TLV_HASH, vec![0; 32])
+			.unwrap()
+			.write_to(&mut value)
+			.unwrap();
+		value.extend_from_slice(&crate::integer::encode_u64(5));
+		let item = OwnedTlv::new(types::REJECTED, value).unwrap();
+		assert!(matches!(
+			validate_item(&item, &|_: &Address| None),
+			Err(BundleError::Unexpected("Rejected reason"))
+		));
 	}
 }

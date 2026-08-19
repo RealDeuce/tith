@@ -2,6 +2,7 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use redb::{Database, ReadableDatabase, ReadableTable, TableDefinition};
+use tith_crypto::PublicKey;
 use tith_crypto::TlvHash;
 use tith_wire::{tlv::parse_sequence, types};
 
@@ -79,6 +80,13 @@ impl Default for FailurePolicy {
 pub struct NewDelivery {
 	pub local_identity: String,
 	pub next_hop: String,
+	/// The next hop's `PublicKey` when its address is the unlisted one.
+	///
+	/// TSP-0002 section 9 requires a copy record "its exact next-hop address and
+	/// unlisted `PublicKey`, if any". Two unlisted peers share the address
+	/// `p2p#-1`, so without this the address alone cannot tell them apart and a
+	/// Poll from one would collect the other's mail.
+	pub next_hop_key: Option<PublicKey>,
 	pub mode: DeliveryMode,
 	pub class: String,
 	pub retry_at: Option<u64>,
@@ -90,6 +98,8 @@ pub struct DeliveryRecord {
 	pub index: u64,
 	pub local_identity: String,
 	pub next_hop: String,
+	/// See [`NewDelivery::next_hop_key`].
+	pub next_hop_key: Option<PublicKey>,
 	pub mode: DeliveryMode,
 	pub class: String,
 	pub retry_at: Option<u64>,
@@ -651,22 +661,117 @@ impl OutboundStore {
 		Ok(value.value().to_vec())
 	}
 
+	/// Claims the next Active copy a schedule selects.
+	///
+	/// TSP-0002 section 8 selects on the schedule's Origin, its classes, and its
+	/// Next-Hop selectors. Those live in `tith-config`, which this crate does
+	/// not depend on, so the caller supplies the predicate and this adds the
+	/// rules the spool owns: only an Active copy, only one which is Queued or
+	/// Deferred, and only when its retry Timestamp has passed. A Passive copy is
+	/// collected by Poll and is never sent by a schedule.
 	pub fn claim_scheduled(
 		&self,
-		class: &str,
 		now: u64,
+		selects: impl Fn(&DeliveryRecord) -> bool,
 	) -> Result<Option<DeliveryClaim>, StoreError> {
 		self.claim_matching(now, |copy| {
-			copy.mode == DeliveryMode::Active && copy.class == class
+			copy.mode == DeliveryMode::Active && selects(copy)
 		})
 	}
 
-	pub fn claim_for_poll(
+	/// Claims the complete poll snapshot for one authenticated identity.
+	///
+	/// TTS-0005 section 3: the Destination "MUST atomically claim every matching
+	/// held value which is not already claimed for an active exchange" and "MUST
+	/// NOT select only part of the otherwise available matching set", so this
+	/// takes all of them in one transaction or none.
+	///
+	/// A held value matches only when it is held for the identity the Bundle
+	/// Origin represents, which for an unlisted Origin includes its `PublicKey`.
+	/// TSP-0002 section 8 adds that an inbound Poll "is not constrained by
+	/// schedules, delivery class, passive status, or a retry Timestamp", so
+	/// neither the mode nor `retry_at` is consulted here.
+	pub fn claim_poll_snapshot(
 		&self,
 		next_hop: &str,
+		next_hop_key: Option<&PublicKey>,
+		kinds: &[JobKind],
 		now: u64,
-	) -> Result<Option<DeliveryClaim>, StoreError> {
-		self.claim_matching(now, |copy| copy.next_hop == next_hop)
+	) -> Result<Vec<DeliveryClaim>, StoreError> {
+		let write = self.database.begin_write()?;
+		let mut selected: Vec<(OutboundJob, usize)> = Vec::new();
+		{
+			let jobs = write.open_table(JOBS)?;
+			for entry in jobs.iter()? {
+				let (_, value) = entry?;
+				let job = decode_job(value.value())?;
+				if !kinds.contains(&job.kind) {
+					continue;
+				}
+				for (index, copy) in job.deliveries.iter().enumerate() {
+					if copy.next_hop == next_hop
+						&& copy.next_hop_key.as_ref() == next_hop_key
+						&& matches!(copy.state, JobState::Queued | JobState::Deferred)
+					{
+						selected.push((job.clone(), index));
+					}
+				}
+			}
+		}
+		if selected.is_empty() {
+			return Ok(Vec::new());
+		}
+		// Order is stable so a snapshot is reproducible for diagnosis.
+		selected.sort_by(|(left, left_index), (right, right_index)| {
+			(
+				left.created,
+				&left.job_id,
+				left.deliveries[*left_index].index,
+			)
+				.cmp(&(
+					right.created,
+					&right.job_id,
+					right.deliveries[*right_index].index,
+				))
+		});
+		let mut claims = Vec::with_capacity(selected.len());
+		for (mut job, index) in selected {
+			let previous = job.state;
+			let token = random_identifier('W')?;
+			let copy = &mut job.deliveries[index];
+			copy.state = JobState::Active;
+			copy.attempts = copy
+				.attempts
+				.checked_add(1)
+				.ok_or(StoreError::CorruptRecord)?;
+			copy.retry_at = None;
+			copy.worker_token = Some(token.clone());
+			job.changed = now;
+			job.state = aggregate_state(&job.deliveries);
+			let item = {
+				let items = write.open_table(ITEMS)?;
+				items
+					.get(job.job_id.as_str())?
+					.ok_or(StoreError::CorruptRecord)?
+					.value()
+					.to_vec()
+			};
+			{
+				let mut jobs = write.open_table(JOBS)?;
+				jobs.insert(job.job_id.as_str(), encode_job(&job).as_slice())?;
+			}
+			append_event(&write, &job, Some(previous))?;
+			let delivery = job.deliveries[index].clone();
+			claims.push(DeliveryClaim {
+				job_id: job.job_id,
+				delivery_index: delivery.index,
+				worker_token: token,
+				item,
+				delivery,
+			});
+		}
+		write.commit()?;
+		Ok(claims)
 	}
 
 	fn claim_matching(
@@ -858,6 +963,7 @@ fn make_job(job_id: String, value: NewOutboundJob) -> OutboundJob {
 			index: index as u64 + 1,
 			local_identity: copy.local_identity,
 			next_hop: copy.next_hop,
+			next_hop_key: copy.next_hop_key,
 			mode: copy.mode,
 			class: copy.class,
 			retry_at: copy.retry_at,
@@ -1067,6 +1173,13 @@ fn encode_job(value: &OutboundJob) -> Vec<u8> {
 		put_u64(&mut output, copy.index);
 		put_string(&mut output, &copy.local_identity);
 		put_string(&mut output, &copy.next_hop);
+		match &copy.next_hop_key {
+			Some(key) => {
+				output.push(1);
+				output.extend_from_slice(key.as_bytes());
+			}
+			None => output.push(0),
+		}
 		output.push(copy.mode as u8);
 		put_string(&mut output, &copy.class);
 		put_optional_u64(&mut output, copy.retry_at);
@@ -1120,6 +1233,11 @@ fn decode_job(mut input: &[u8]) -> Result<OutboundJob, StoreError> {
 		let index = take_u64(&mut input)?;
 		let local_identity = take_string(&mut input)?;
 		let next_hop = take_string(&mut input)?;
+		let next_hop_key = match take_byte(&mut input)? {
+			0 => None,
+			1 => Some(PublicKey::from_bytes(take_bytes_fixed::<32>(&mut input)?)),
+			_ => return Err(StoreError::CorruptRecord),
+		};
 		let mode = match take_byte(&mut input)? {
 			0 => DeliveryMode::Active,
 			1 => DeliveryMode::Passive,
@@ -1146,6 +1264,7 @@ fn decode_job(mut input: &[u8]) -> Result<OutboundJob, StoreError> {
 			index,
 			local_identity,
 			next_hop,
+			next_hop_key,
 			mode,
 			class,
 			retry_at,
@@ -1300,6 +1419,7 @@ mod tests {
 			deliveries: vec![NewDelivery {
 				local_identity: "fidonet#1/1".to_owned(),
 				next_hop: "fidonet#1/2".to_owned(),
+				next_hop_key: None,
 				mode: DeliveryMode::Active,
 				class: "normal".to_owned(),
 				retry_at: None,
@@ -1344,7 +1464,10 @@ mod tests {
 			BatchCommit::Committed(ref values)
 				if matches!(values[0], CommitOutcome::Existing { .. })
 		));
-		let claim = store.claim_for_poll("fidonet#1/2", 11).unwrap().unwrap();
+		let claim = store
+			.claim_scheduled(11, |copy| copy.next_hop == "fidonet#1/2")
+			.unwrap()
+			.unwrap();
 		assert_eq!(claim.job_id, *job_id);
 		assert_eq!(claim.item, payload);
 		assert_eq!(
@@ -1424,7 +1547,10 @@ mod tests {
 			store.cancel("other", job_id, 20),
 			Err(StoreError::NotFound)
 		));
-		let claim = store.claim_scheduled("normal", 20).unwrap().unwrap();
+		let claim = store
+			.claim_scheduled(20, |copy| copy.class == "normal")
+			.unwrap()
+			.unwrap();
 		assert_eq!(
 			store.cancel("mailer", job_id, 21).unwrap(),
 			ControlOutcome::Busy(JobState::Active)
@@ -1448,6 +1574,197 @@ mod tests {
 		assert_eq!(store.events("mailer").unwrap().len(), 3);
 		drop(store);
 		drop(inbound);
+		std::fs::remove_file(path).unwrap();
+	}
+
+	fn held_job(
+		key: &str,
+		next_hop: &str,
+		next_hop_key: Option<PublicKey>,
+		kind: JobKind,
+		created: u64,
+	) -> NewOutboundJob {
+		// The item type and the target both have to agree with the kind.
+		let payload = OwnedTlv::new(
+			match kind {
+				JobKind::File => types::FILE,
+				JobKind::NetMail | JobKind::EchoMail => types::MESSAGE,
+			},
+			key.as_bytes().to_vec(),
+		)
+		.unwrap()
+		.encode();
+		let target = match kind {
+			JobKind::NetMail => JobTarget::Destination(next_hop.to_owned()),
+			JobKind::EchoMail | JobKind::File => JobTarget::Area("SYNCHRONET".to_owned()),
+		};
+		NewOutboundJob {
+			identity: identity(key, &payload),
+			kind,
+			target,
+			local_identity: "fidonet#1/1".to_owned(),
+			item: payload,
+			deliveries: vec![NewDelivery {
+				local_identity: "fidonet#1/1".to_owned(),
+				next_hop: next_hop.to_owned(),
+				next_hop_key,
+				// Passive, and with a future retry Timestamp: an inbound Poll is
+				// constrained by neither.
+				mode: DeliveryMode::Passive,
+				class: "normal".to_owned(),
+				retry_at: Some(u64::MAX),
+				policies: [FailurePolicy::default(); 5],
+			}],
+			sources: Vec::new(),
+			created,
+			forward_inbound: None,
+			forward_claim_token: None,
+		}
+	}
+
+	fn temporary_store() -> (std::path::PathBuf, super::super::InboundStore) {
+		let path = std::env::temp_dir().join(format!(
+			"tith-poll-{}.redb",
+			random_identifier('T').unwrap()
+		));
+		let inbound = super::super::InboundStore::create(&path).unwrap();
+		(path, inbound)
+	}
+
+	fn commit(store: &OutboundStore, job: &NewOutboundJob) -> String {
+		let id = job.identity.clone();
+		let BatchCommit::Committed(outcomes) = store
+			.commit_batch(std::slice::from_ref(&id), |_, _| Ok(vec![job.clone()]))
+			.unwrap()
+		else {
+			panic!("commit expected");
+		};
+		let (CommitOutcome::New { job_id, .. } | CommitOutcome::Existing { job_id, .. }) =
+			&outcomes[0];
+		job_id.clone()
+	}
+
+	#[test]
+	fn a_poll_snapshot_takes_every_matching_copy_and_ignores_mode_and_retry() {
+		let (path, inbound) = temporary_store();
+		let store = inbound.outbound().unwrap();
+		let first = commit(
+			&store,
+			&held_job("a", "fidonet#1/2", None, JobKind::NetMail, 10),
+		);
+		let second = commit(
+			&store,
+			&held_job("b", "fidonet#1/2", None, JobKind::NetMail, 20),
+		);
+		// A copy for a different peer must not be returned.
+		commit(
+			&store,
+			&held_job("c", "fidonet#1/3", None, JobKind::NetMail, 30),
+		);
+
+		let snapshot = store
+			.claim_poll_snapshot("fidonet#1/2", None, &[JobKind::NetMail], 100)
+			.unwrap();
+		let claimed: Vec<&str> = snapshot.iter().map(|claim| claim.job_id.as_str()).collect();
+		assert_eq!(claimed, [first.as_str(), second.as_str()]);
+
+		// Everything matching is now claimed, so a second Poll returns nothing.
+		assert!(
+			store
+				.claim_poll_snapshot("fidonet#1/2", None, &[JobKind::NetMail], 100)
+				.unwrap()
+				.is_empty()
+		);
+		std::fs::remove_file(path).unwrap();
+	}
+
+	#[test]
+	fn a_snapshot_is_scoped_to_the_authenticated_identity_not_just_the_address() {
+		// Two unlisted peers share the address p2p#-1, so the PublicKey is the
+		// only thing telling them apart. Without it one would collect the
+		// other's mail.
+		let (path, inbound) = temporary_store();
+		let store = inbound.outbound().unwrap();
+		let mine = PublicKey::from_bytes([1; 32]);
+		let theirs = PublicKey::from_bytes([2; 32]);
+		let held = commit(
+			&store,
+			&held_job("a", "p2p#-1", Some(mine), JobKind::NetMail, 10),
+		);
+		commit(
+			&store,
+			&held_job("b", "p2p#-1", Some(theirs), JobKind::NetMail, 20),
+		);
+
+		let snapshot = store
+			.claim_poll_snapshot("p2p#-1", Some(&mine), &[JobKind::NetMail], 100)
+			.unwrap();
+		assert_eq!(snapshot.len(), 1);
+		assert_eq!(snapshot[0].job_id, held);
+
+		// An address-only match returns neither.
+		assert!(
+			store
+				.claim_poll_snapshot("p2p#-1", None, &[JobKind::NetMail], 100)
+				.unwrap()
+				.is_empty()
+		);
+		std::fs::remove_file(path).unwrap();
+	}
+
+	#[test]
+	fn a_snapshot_selects_only_the_requested_kinds() {
+		let (path, inbound) = temporary_store();
+		let store = inbound.outbound().unwrap();
+		commit(
+			&store,
+			&held_job("a", "fidonet#1/2", None, JobKind::NetMail, 10),
+		);
+		let file = commit(
+			&store,
+			&held_job("b", "fidonet#1/2", None, JobKind::File, 20),
+		);
+		let snapshot = store
+			.claim_poll_snapshot("fidonet#1/2", None, &[JobKind::File], 100)
+			.unwrap();
+		assert_eq!(snapshot.len(), 1);
+		assert_eq!(snapshot[0].job_id, file);
+		std::fs::remove_file(path).unwrap();
+	}
+
+	#[test]
+	fn a_schedule_claims_only_active_copies_its_predicate_selects() {
+		let (path, inbound) = temporary_store();
+		let store = inbound.outbound().unwrap();
+		let payload = OwnedTlv::new(types::MESSAGE, Vec::new()).unwrap().encode();
+		// Held Passive, under its own next hop so this cannot match the Active
+		// copy committed below.
+		commit(
+			&store,
+			&held_job("a", "fidonet#1/9", None, JobKind::NetMail, 10),
+		);
+		let id = identity("b", &payload);
+		let active = commit(&store, &new_job(id, payload.clone()));
+
+		assert!(
+			store
+				.claim_scheduled(100, |copy| copy.next_hop == "fidonet#1/9")
+				.unwrap()
+				.is_none(),
+			"a Passive copy must not be claimed by a schedule"
+		);
+		let claim = store
+			.claim_scheduled(100, |copy| copy.class == "normal")
+			.unwrap()
+			.expect("the Active copy is claimable");
+		assert_eq!(claim.job_id, active);
+		// The predicate is what selects, so a non-matching one claims nothing.
+		assert!(
+			store
+				.claim_scheduled(100, |copy| copy.class == "bulk")
+				.unwrap()
+				.is_none()
+		);
 		std::fs::remove_file(path).unwrap();
 	}
 }

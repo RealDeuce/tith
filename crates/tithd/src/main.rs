@@ -1,9 +1,13 @@
 #![deny(unsafe_code)]
 
+mod accept;
+mod deliver;
 mod filesystem;
+mod framing;
 mod ipc;
 #[cfg(unix)]
 mod mail;
+mod schedule;
 mod submission;
 mod tcp;
 #[cfg(unix)]
@@ -17,6 +21,7 @@ use std::fs;
 use std::net::SocketAddr;
 use std::path::Path;
 use std::sync::Arc;
+use std::time::Duration;
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD_NO_PAD;
@@ -190,7 +195,7 @@ fn run() -> Result<(), Box<dyn Error>> {
 		}
 		#[cfg(unix)]
 		Some("serve-mail") => {
-			let usage = "usage: tithd serve-mail ADDRESS DATABASE APPLICATION CONFIG-DIRECTORY NODELIST-DOMAIN NODELIST-FILE LOCAL-IDENTITY NODE-SECRET-FILE";
+			let usage = "usage: tithd serve-mail ADDRESS DATABASE APPLICATION CONFIG-DIRECTORY NODELIST-DOMAIN NODELIST-FILE LOCAL-IDENTITY NODE-SECRET-FILE [--listen-only] [--local-offset SECONDS] [--timeout SECONDS]";
 			let address: SocketAddr = arguments.next().ok_or(usage)?.parse()?;
 			let database = arguments.next().ok_or(usage)?;
 			let application = arguments.next().ok_or(usage)?;
@@ -199,8 +204,23 @@ fn run() -> Result<(), Box<dyn Error>> {
 			let nodelist_file = arguments.next().ok_or(usage)?;
 			let local_name = arguments.next().ok_or(usage)?;
 			let secret_file = arguments.next().ok_or(usage)?;
-			if arguments.next().is_some() {
-				return Err(usage.into());
+			let mut outbound = mail::OutboundOptions {
+				enabled: true,
+				local_offset: None,
+				timeout: Duration::from_mins(1),
+			};
+			while let Some(option) = arguments.next() {
+				match option.as_str() {
+					"--listen-only" => outbound.enabled = false,
+					"--local-offset" => {
+						outbound.local_offset = Some(arguments.next().ok_or(usage)?.parse()?);
+					}
+					"--timeout" => {
+						outbound.timeout =
+							Duration::from_secs(arguments.next().ok_or(usage)?.parse()?);
+					}
+					_ => return Err(usage.into()),
+				}
 			}
 			let configuration = load_config(Path::new(&config_directory))?;
 			let nodelist = Nodelist::parse(
@@ -220,6 +240,7 @@ fn run() -> Result<(), Box<dyn Error>> {
 					identity: local,
 					secret,
 				},
+				&outbound,
 			)
 		}
 		Some("serve-tcp") => {
@@ -283,7 +304,7 @@ fn run() -> Result<(), Box<dyn Error>> {
 				Some(submission),
 			)
 		}
-		_ => Err("usage: tithd check-config DIRECTORY | generate-node-key SECRET-FILE | generate-ipc-key SECRET-FILE | serve-mail ADDRESS DATABASE APPLICATION CONFIG-DIRECTORY NODELIST-DOMAIN NODELIST-FILE LOCAL-IDENTITY NODE-SECRET-FILE | serve-unix SOCKET DATABASE EXPORT-DIRECTORY APPLICATION | serve-unix-mailer SOCKET DATABASE EXPORT-DIRECTORY APPLICATION CONFIG-DIRECTORY NODELIST-DOMAIN NODELIST-FILE LOCAL-IDENTITY NODE-SECRET-FILE | serve-tcp ADDRESS DATABASE EXPORT-DIRECTORY APPLICATION SERVER-PUBLIC-KEY SERVER-SECRET-FILE CLIENT-PUBLIC-KEY".into()),
+		_ => Err("usage: tithd check-config DIRECTORY | generate-node-key SECRET-FILE | generate-ipc-key SECRET-FILE | serve-mail ADDRESS DATABASE APPLICATION CONFIG-DIRECTORY NODELIST-DOMAIN NODELIST-FILE LOCAL-IDENTITY NODE-SECRET-FILE [--listen-only] [--local-offset SECONDS] [--timeout SECONDS] | serve-unix SOCKET DATABASE EXPORT-DIRECTORY APPLICATION | serve-unix-mailer SOCKET DATABASE EXPORT-DIRECTORY APPLICATION CONFIG-DIRECTORY NODELIST-DOMAIN NODELIST-FILE LOCAL-IDENTITY NODE-SECRET-FILE | serve-tcp ADDRESS DATABASE EXPORT-DIRECTORY APPLICATION SERVER-PUBLIC-KEY SERVER-SECRET-FILE CLIENT-PUBLIC-KEY".into()),
 	}
 }
 
@@ -343,4 +364,13 @@ fn load_config(directory: &Path) -> Result<ConfigurationSet, Box<dyn Error>> {
 		&read("areas")?,
 		&read("schedules")?,
 	)?)
+}
+
+/// Seconds since the Unix epoch.
+#[must_use]
+pub fn now() -> u64 {
+	std::time::SystemTime::now()
+		.duration_since(std::time::UNIX_EPOCH)
+		.unwrap_or_default()
+		.as_secs()
 }

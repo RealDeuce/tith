@@ -9,7 +9,7 @@ use tith_crypto::{SecretKey, TlvHash, hash_tlv};
 use tith_wire::bundle::{
 	Bundle, BundleError, Identity, KeyResolver, build_bundle, build_signed_tlv,
 };
-use tith_wire::item::{ItemKind, PayloadError, ValidatedItem, validate_payload};
+use tith_wire::item::{ItemKind, PayloadError, Rejection, ValidatedItem, validate_payload};
 use tith_wire::tlv::{OwnedTlv, parse_sequence};
 use tith_wire::types;
 
@@ -54,6 +54,11 @@ pub enum ResponseKind {
 pub struct CompletedResponse {
 	pub request: OutstandingRequest,
 	pub response: ResponseKind,
+	/// The reason, retry Timestamp, and description of a Rejected response.
+	///
+	/// TSP-0002 section 6 gives each reason a different outcome, so a caller
+	/// applying failure policy needs this rather than the bare `ResponseKind`.
+	pub rejection: Option<Rejection>,
 }
 
 #[derive(Debug)]
@@ -208,6 +213,7 @@ impl ResponseTracker {
 					ItemKind::Rejected => ResponseKind::Rejected,
 					_ => continue,
 				};
+				let rejection = item.rejection.clone();
 				let response_hash = item.response_to.ok_or(ExchangeError::UnexpectedResponse)?;
 				let Some(position) = self.outstanding.iter().position(|request| {
 					request.signed_tlv_hash == response_hash
@@ -224,6 +230,7 @@ impl ResponseTracker {
 				self.completed.push(CompletedResponse {
 					request: self.outstanding[position].clone(),
 					response,
+					rejection,
 				});
 			}
 		}
@@ -335,6 +342,22 @@ impl ClientSession {
 	#[must_use]
 	pub const fn state(&self) -> SessionState {
 		self.state
+	}
+
+	/// Whether this exchange owes the peer a final Reply Bundle.
+	///
+	/// TTS-0006 section 4 keeps the client's write side open only for a Bundle
+	/// which carries a `FileRequest` or a Poll, because only those get values back
+	/// which must themselves be responded to.
+	#[must_use]
+	pub fn requires_return_bundle(&self) -> bool {
+		self.tracker.requires_return_bundle()
+	}
+
+	/// The responses received so far, in request order.
+	#[must_use]
+	pub fn responses(&self) -> &[CompletedResponse] {
+		self.tracker.completed()
 	}
 
 	pub fn initial_sent(&mut self) {

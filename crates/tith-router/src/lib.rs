@@ -218,7 +218,13 @@ fn eligible_ancestor(
 	})
 }
 
-fn selector_matches(
+/// Whether a configured selector names this identity.
+///
+/// TSP-0002 uses the same selector grammar for route, relay, failure, and
+/// schedule `Next-Hop` lines, so the schedule driver in `tithd` resolves them
+/// with the same function the router uses.
+#[must_use]
+pub fn selector_matches(
 	selector: &Selector,
 	identity: &Identity,
 	config: &ConfigurationSet,

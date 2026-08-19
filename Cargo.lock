@@ -434,6 +434,7 @@ dependencies = [
  "tith-exchange",
  "tith-ipc",
  "tith-ipc-tcp",
+ "tith-message-legacy",
  "tith-nodelist",
  "tith-router",
  "tith-store",

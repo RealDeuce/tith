@@ -12,6 +12,7 @@ nix.workspace = true
 tith-config.workspace = true
 tith-crypto.workspace = true
 tith-exchange = { path = "../tith-exchange" }
+tith-message-legacy = { path = "../tith-message-legacy" }
 tith-ipc = { path = "../tith-ipc" }
 tith-ipc-tcp.workspace = true
 tith-nodelist.workspace = true

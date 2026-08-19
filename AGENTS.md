@@ -253,6 +253,24 @@ lengths and outstanding-response accounting cannot resolve.
   Its native mail listener accepts only operations whose wire grammar and
   durable behavior are implemented; unsupported work receives an explicit
   response rather than being discarded.
+  `accept` owns turning an authenticated item into a stored item and a
+  response. Both the listener and the outbound driver dispatch through it,
+  because TSP-0002 draws no distinction between an item a peer sent and one a
+  poll returned: the same authorization applies and the same response is owed.
+  `framing` owns reading a Bundle prefix and is likewise shared, so the two
+  ends of an exchange cannot drift apart in how they frame a Header.
+  `schedule` owns TSP-0002 section 8 timing and nothing else; which work an
+  activation selects belongs to its caller. `Start Local` requires an explicit
+  offset rather than guessing, because safe portable Rust cannot read the host
+  civil offset and treating local time as UTC would move every schedule.
+  `deliver` owns the outbound connection. A connection carries only compatible
+  copies — the same local AKA and the same exact next-hop identity, including
+  the `PublicKey` when unlisted — and must never combine copies from different
+  local AKAs. Every claimed copy gets an outcome on every exit path, and a
+  connection which fails leaves its copies eligible rather than invoking
+  permanent failure policy; losing a claim is worse than sending twice. A poll
+  snapshot is claimed atomically or not at all, and a held copy stays claimed
+  until the peer says what became of it.
 - `poc/tith.c` handles command-line dispatch and key generation.
 - `poc/tith-common.c` owns TLV parsing, construction, signing, validation, and
   process-wide cleanup state.

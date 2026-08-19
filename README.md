@@ -53,12 +53,13 @@ addresses, signed bundles, exchange behavior, and the distribution nodelist.
 The Rust workspace implements those foundations plus configuration, routing,
 durable storage, and local IPC building blocks.
 
-The reference daemon is not yet a production mailer. It has an initial native
-network listener with durable local Message and standalone File acceptance,
-duplicate handling, and authenticated replies. Outbound delivery and Poll and
-FileRequest handling remain under construction. The C implementation under
-[`poc/`](poc/) is a frozen historical proof of concept; new implementation work
-belongs in Rust.
+The reference daemon is not yet a production mailer, but it now exchanges mail
+in both directions: a native listener with durable local Message and standalone
+File acceptance, duplicate handling, and authenticated replies, and a
+schedule-driven outbound driver that delivers queued copies and polls its peers.
+Relay delivery and FileRequest handling remain under construction. The C
+implementation under [`poc/`](poc/) is a frozen historical proof of concept; new
+implementation work belongs in Rust.
 
 ## Rust workspace
 
@@ -328,9 +329,9 @@ Peer configuration:
 cargo run -p tithd -- generate-node-key /secure/path/node.secret
 ```
 
-The initial mail listener loads the normal four-file configuration set and one
-TTS-5000 domain nodelist. `LOCAL-IDENTITY` is a listed canonical address or an
-unlisted Peer reference such as `@point`:
+`serve-mail` loads the normal four-file configuration set and one TTS-5000
+domain nodelist. `LOCAL-IDENTITY` is a listed canonical address or an unlisted
+Peer reference such as `@point`:
 
 ```sh
 cargo run -p tithd -- serve-mail 0.0.0.0:24555 \
@@ -339,11 +340,64 @@ cargo run -p tithd -- serve-mail 0.0.0.0:24555 \
     /secure/path/node.secret
 ```
 
-Local Messages and standalone Files are durably stored before `Accepted` is
-sent, and signed-item duplicates receive `Accepted` without creating another
-inbound item. Unsupported relay, Poll, and FileRequest work receives a retryable
-rejection. EchoMail and area Files are accepted only from configured
-`Receive-From` peers.
+It both receives and sends. Local Messages and standalone Files are durably
+stored before `Accepted` is sent, and signed-item duplicates receive `Accepted`
+without creating another inbound item. Unsupported relay and FileRequest work
+receives a retryable rejection. EchoMail and area Files are accepted only from
+configured `Receive-From` peers.
+
+### Outbound delivery
+
+Submission commits a delivery copy per next hop into the spool; the schedules
+file decides when those copies move. Each `Schedule` block is activated at its
+`Start`, runs for its `Duration`, and repeats `Repeat-After` later. A Duration
+of zero makes one pass over the work its Origin, Class, and Next-Hop lines
+select and ends; a nonzero one stays open and picks up work that appears during
+the interval. Missed activations coalesce to the most recent, and a schedule
+never has two activations at once.
+
+One connection carries the copies TSP-0002 section 9 calls compatible: the same
+local AKA and the same exact next-hop identity, including the `PublicKey` when
+that identity is unlisted. Copies for different local AKAs are never combined.
+Endpoints come from the next hop's configured `Endpoint` lines in file order,
+falling back to the usable TITH endpoints in its nodelist entry.
+
+Responses are applied per TSP-0002 section 6. Rejected reason 1 fails as
+Rejected and reason 2 as Authentication; reason 3 completes a conditional
+request and is not a failure; reason 4 retries no earlier than its Timestamp, or
+at the next activation of the schedule when it carries none. A request with no
+complete response stays eligible and does not invoke permanent failure policy,
+which is also what happens to every copy in a connection that fails outright.
+Copies left claimed by a killed daemon are returned to the queue at startup.
+
+### Poll
+
+A `Poll <peer>` line contacts that Peer at every activation even when nothing is
+queued for it, sending one `PollMessages`, one `PollFiles`, and one
+`PollFileRequests`. Values the peer returns are stored by the same path an
+incoming connection uses — the same authorization, the same duplicate handling —
+and answered in the final Reply Bundle.
+
+Inbound Poll is answered the same way in reverse. The snapshot is claimed
+atomically: every held value matching the authenticated Bundle Origin, or none,
+never part of the set. A value committed after that claim waits for a later
+exchange. Held copies stay claimed until the peer's final Reply Bundle says what
+became of them, so a connection that dies mid-transfer loses nothing. An inbound
+Poll is not constrained by schedules, delivery class, passive status, or a retry
+Timestamp. `PollFileRequests` is always answered with an empty snapshot, because
+a FileRequest cannot yet be submitted.
+
+Three options tune the outbound half:
+
+| Option | Effect |
+| --- | --- |
+| `--listen-only` | Never connect out and never poll. |
+| `--local-offset SECONDS` | Seconds east of UTC, required by a schedule using `Start Local`. |
+| `--timeout SECONDS` | Connect and read timeout for one outbound connection, 60 by default. |
+
+`--local-offset` is required rather than detected because safe portable Rust
+cannot read the host's civil offset, and silently treating local time as UTC
+would move every schedule.
 
 The original C proof of concept is retained for historical reference and can
 still be built with:

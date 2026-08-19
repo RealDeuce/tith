@@ -190,6 +190,7 @@ impl SubmissionEngine {
 		Ok(NewDelivery {
 			local_identity: signer.identity.address.to_string(),
 			next_hop: target.address.to_string(),
+			next_hop_key: unlisted_key(&target),
 			mode,
 			class: job.deliveries[0].class.clone(),
 			retry_at: None,
@@ -300,6 +301,7 @@ impl SubmissionEngine {
 				let delivery = NewDelivery {
 					local_identity: signer.identity.address.to_string(),
 					next_hop: next_hop.address.to_string(),
+					next_hop_key: unlisted_key(&next_hop),
 					mode,
 					class: message.class.clone().unwrap_or_else(|| "Normal".to_owned()),
 					retry_at: None,
@@ -705,6 +707,7 @@ impl SubmissionEngine {
 				Ok(NewDelivery {
 					local_identity: local_identity.address.to_string(),
 					next_hop: identity.address.to_string(),
+					next_hop_key: unlisted_key(&identity),
 					mode: if peer.endpoints.is_empty() {
 						DeliveryMode::Passive
 					} else {
@@ -904,6 +907,18 @@ fn validate_area_name(value: &str) -> Result<(), BuildFailure> {
 	} else {
 		Ok(())
 	}
+}
+
+/// The next hop's key, recorded only when its address is the unlisted one.
+///
+/// TSP-0002 section 9 requires a copy record "its exact next-hop address and
+/// unlisted `PublicKey`, if any". A listed address takes its key from the current
+/// nodelist, which a stored copy must not override.
+fn unlisted_key(identity: &Identity) -> Option<tith_crypto::PublicKey> {
+	identity
+		.address
+		.is_unlisted()
+		.then_some(identity.public_key)
 }
 
 fn now() -> u64 {
