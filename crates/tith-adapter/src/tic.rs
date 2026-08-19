@@ -104,7 +104,16 @@ pub fn to_tic(
 		Ok(())
 	};
 
-	push("Area", context.area_tag(&file.data.area)?)?;
+	// A peer-addressed File has no Area, so it has no TIC. TSP-0003 section 9
+	// maps a TIC to a distribution File and nothing else.
+	let area = file
+		.data
+		.area
+		.as_deref()
+		.ok_or(ConvertError::Unrepresentable(
+			"a TIC for a File with no Area",
+		))?;
+	push("Area", context.area_tag(area)?)?;
 	push("Origin", &address::five_dimensional(&file.signing.origin)?)?;
 	push("From", &address::five_dimensional(&context.packet_origin)?)?;
 	if let Some(to) = &options.to {
@@ -201,7 +210,7 @@ mod tests {
 				filename: filename.to_owned(),
 				timestamp: Some(1_755_400_000),
 				contents: b"payload".to_vec(),
-				area: "SYNCDATA".to_owned(),
+				area: Some("SYNCDATA".to_owned()),
 				short_description: Some("A file".to_owned()),
 				long_description_lines: vec!["First".to_owned(), "Second".to_owned()],
 				tear_line: Some("TITH 0.1".to_owned()),

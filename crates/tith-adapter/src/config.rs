@@ -26,7 +26,6 @@
 //!     `SignedOrigin`-Valid    Deliver-Warn
 //!     `SignedOrigin`-Invalid  Orphan
 //!     Origin-Invalid        Orphan
-//!     Blocked-On-Standard   Defer
 //!     Unconvertible         Reject
 //!     Distribution          Native
 //! End
@@ -277,9 +276,6 @@ fn parse_policy(
 					_ => return Err(fail(line.number, "expected Enabled or Disabled")),
 				};
 			}
-			["Blocked-On-Standard", value] => {
-				refusals.blocked_on_standard = disposition(line.number, value)?;
-			}
 			["Unconvertible", value] => {
 				refusals.unconvertible = disposition(line.number, value)?;
 			}
@@ -312,7 +308,6 @@ End
 
 Policy
 \tUnsigned             Orphan
-\tBlocked-On-Standard  Defer
 \tUnconvertible        Reject
 End
 ";
@@ -342,10 +337,7 @@ End
 		);
 		assert!(!configuration.policy.reply_origin);
 		assert_eq!(configuration.policy.distribution, Distribution::Native);
-		assert_eq!(
-			configuration.refusals.blocked_on_standard,
-			Disposition::Defer
-		);
+		assert_eq!(configuration.refusals.unconvertible, Disposition::Reject);
 	}
 
 	#[test]

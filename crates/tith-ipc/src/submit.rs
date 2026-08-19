@@ -59,6 +59,7 @@ pub struct SubmissionJob {
 pub enum SubmissionBody {
 	Message(MessageSubmission),
 	File(FileSubmission),
+	FileRequest(FileRequestSubmission),
 	Forward {
 		inbound_id: String,
 		claim_token: String,
@@ -95,17 +96,64 @@ pub struct MessageSubmission {
 	pub attachments: Vec<SourceSubmission>,
 }
 
+/// Where a standalone File Job sends its File.
+///
+/// TSP-0006 section 2 gives the two shapes separate Job kinds: `Job File`
+/// carries an Area and fans out over its configured links, `Job Peer-File`
+/// carries a Destination and is committed directly to that one peer.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum FileTarget {
+	Area(String),
+	Peer(PeerDelivery),
+}
+
+/// The delivery lines a directly committed Job carries.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct PeerDelivery {
+	pub destination: String,
+	pub class: Option<String>,
+	/// `None` selects Active when the Destination has a usable endpoint at
+	/// commitment and Passive otherwise.
+	pub mode: Option<DeliveryMode>,
+	pub failure_policy: Option<FailureOverride>,
+}
+
+/// The restricted `Next-Hop` a directly committed Job accepts.
+///
+/// It names no identity: the submitted Destination is the only next hop the
+/// item can have, so the line selects only the mode.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DeliveryMode {
+	Active,
+	Passive,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct FileSubmission {
 	pub origin: String,
 	pub signed_origin: Option<String>,
-	pub area: String,
+	pub target: FileTarget,
 	pub source: SourceSubmission,
 	pub short_description: Option<String>,
 	pub long_description_lines: Vec<String>,
 	pub tear_line: Option<String>,
 	pub magic_word: Option<String>,
 	pub replaces: Option<String>,
+}
+
+/// One TSP-0006 `Job FileRequest`.
+///
+/// It has no Source and no Signed-Origin: TTS-0005 section 3 type 66 carries no
+/// Origin or Signature, so `origin` names only the local identity whose Bundle
+/// carries the request.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FileRequestSubmission {
+	pub origin: String,
+	pub delivery: PeerDelivery,
+	pub filename: String,
+	/// The TTS-0005 `FileRequest` Timestamp, making the request conditional on the
+	/// named file being newer than it.
+	pub newer_than: Option<u64>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -204,6 +252,8 @@ enum ParsedJobKind {
 	NetMail,
 	EchoMail,
 	File,
+	PeerFile,
+	FileRequest,
 	Forward,
 }
 
@@ -261,6 +311,8 @@ fn parse_job(
 				"NetMail" => ParsedJobKind::NetMail,
 				"EchoMail" => ParsedJobKind::EchoMail,
 				"File" => ParsedJobKind::File,
+				"Peer-File" => ParsedJobKind::PeerFile,
+				"FileRequest" => ParsedJobKind::FileRequest,
 				"Forward" => ParsedJobKind::Forward,
 				_ => return Err(fail(base_line, "invalid Job kind")),
 			},
@@ -286,7 +338,10 @@ fn parse_job(
 				claim_token: token.text.clone(),
 			}
 		}
-		ParsedJobKind::File => SubmissionBody::File(parse_file(&mut cursor)?),
+		ParsedJobKind::File | ParsedJobKind::PeerFile => {
+			SubmissionBody::File(parse_file(&mut cursor, kind == ParsedJobKind::PeerFile)?)
+		}
+		ParsedJobKind::FileRequest => SubmissionBody::FileRequest(parse_file_request(&mut cursor)?),
 		ParsedJobKind::NetMail | ParsedJobKind::EchoMail => {
 			SubmissionBody::Message(parse_message(&mut cursor, kind)?)
 		}
@@ -369,10 +424,45 @@ fn parse_message(
 	})
 }
 
-fn parse_file(cursor: &mut Cursor<'_>) -> Result<FileSubmission, IpcError> {
+fn parse_file_request(cursor: &mut Cursor<'_>) -> Result<FileRequestSubmission, IpcError> {
+	let origin = cursor.required_quoted("Origin")?;
+	let destination = cursor.required_quoted("Destination")?;
+	let filename = cursor.required_quoted("Filename")?;
+	// Auto has no meaning for a condition, so this is a plain integer rather than
+	// the Auto-or-integer form a File Timestamp uses.
+	let newer_than = cursor.optional_u64("Newer-Than")?;
+	let delivery = parse_peer_delivery(cursor, destination)?;
+	cursor.finish()?;
+	Ok(FileRequestSubmission {
+		origin,
+		delivery,
+		filename,
+		newer_than,
+	})
+}
+
+/// The Class, Next-Hop, and Failure-Policy lines a directly committed Job takes.
+fn parse_peer_delivery(
+	cursor: &mut Cursor<'_>,
+	destination: String,
+) -> Result<PeerDelivery, IpcError> {
+	Ok(PeerDelivery {
+		destination,
+		class: cursor.optional_quoted("Class")?,
+		mode: cursor.optional_delivery_mode()?,
+		failure_policy: cursor.optional_failure_policy()?,
+	})
+}
+
+fn parse_file(cursor: &mut Cursor<'_>, peer: bool) -> Result<FileSubmission, IpcError> {
 	let origin = cursor.required_quoted("Origin")?;
 	let signed_origin = cursor.optional_quoted("Signed-Origin")?;
-	let area = cursor.required_quoted("Area")?;
+	let target = if peer {
+		let destination = cursor.required_quoted("Destination")?;
+		FileTarget::Peer(parse_peer_delivery(cursor, destination)?)
+	} else {
+		FileTarget::Area(cursor.required_quoted("Area")?)
+	};
 	if !cursor.peek_exact("File") {
 		return Err(cursor.error("missing File block"));
 	}
@@ -398,7 +488,7 @@ fn parse_file(cursor: &mut Cursor<'_>) -> Result<FileSubmission, IpcError> {
 	Ok(FileSubmission {
 		origin,
 		signed_origin,
-		area,
+		target,
 		source,
 		short_description,
 		long_description_lines,
@@ -641,6 +731,31 @@ impl<'a> Cursor<'a> {
 		Ok(Some(value))
 	}
 
+	/// The `Next-Hop Active|Passive` a directly committed Job accepts.
+	///
+	/// TSP-0006 section 3: the line names no identity and Route is prohibited,
+	/// because the submitted Destination is the only next hop the item can have.
+	fn optional_delivery_mode(&mut self) -> Result<Option<DeliveryMode>, IpcError> {
+		let Some(fields) = self.current().and_then(|line| exact(line, &["Next-Hop"])) else {
+			return Ok(None);
+		};
+		let value = match fields {
+			[
+				Field {
+					text,
+					quoted: false,
+				},
+			] => match text.as_str() {
+				"Active" => DeliveryMode::Active,
+				"Passive" => DeliveryMode::Passive,
+				_ => return Err(self.error("invalid Next-Hop mode")),
+			},
+			_ => return Err(self.error("Next-Hop for this Kind names no identity")),
+		};
+		self.advance();
+		Ok(Some(value))
+	}
+
 	fn optional_failure_policy(&mut self) -> Result<Option<FailureOverride>, IpcError> {
 		let Some(fields) = self
 			.current()
@@ -751,6 +866,65 @@ mod tests {
 		assert!(
 			SubmissionRequest::parse(
 				b"TITH-IPC 1\nLookup-Submission \"fdn\"\nIdempotency-Key \"file\"\nEnd\n"
+			)
+			.is_err()
+		);
+	}
+
+	#[test]
+	fn parses_a_peer_file_and_a_file_request() {
+		let request = b"TITH-IPC 1\nSubmit-Items\nJob Peer-File\nApplication \"bso\"\nIdempotency-Key \"arc\"\nOrigin \"fidonet#1:1/1\"\nDestination \"fidonet#1:2/2\"\nNext-Hop Passive\nFile\nSource-Path \"/out/0068002400.su0\"\nSource-Disposition Delete\nWire-Filename \"0068002400.su0\"\nEnd\nEnd\nJob FileRequest\nApplication \"bso\"\nIdempotency-Key \"req\"\nOrigin \"fidonet#1:1/1\"\nDestination \"fidonet#1:2/2\"\nFilename \"nodediff.zip\"\nNewer-Than 1755400000\nClass \"Bulk\"\nEnd\nEnd\n";
+		let parsed = SubmissionRequest::parse(request).unwrap();
+		let SubmissionBody::File(file) = &parsed.jobs[0].body else {
+			panic!("peer file expected");
+		};
+		let FileTarget::Peer(delivery) = &file.target else {
+			panic!("peer target expected");
+		};
+		assert_eq!(delivery.destination, "fidonet#1:2/2");
+		assert_eq!(delivery.mode, Some(DeliveryMode::Passive));
+		assert_eq!(delivery.class, None);
+		assert_eq!(file.source.disposition, SourceDisposition::Delete);
+
+		let SubmissionBody::FileRequest(request) = &parsed.jobs[1].body else {
+			panic!("file request expected");
+		};
+		assert_eq!(request.filename, "nodediff.zip");
+		assert_eq!(request.newer_than, Some(1_755_400_000));
+		assert_eq!(request.delivery.class.as_deref(), Some("Bulk"));
+		// A FileRequest Job nests nothing, so its End closes the Job itself.
+		assert!(parsed.jobs[1].canonical.starts_with(b"Job FileRequest\n"));
+		assert!(parsed.jobs[1].canonical.ends_with(b"End\n"));
+	}
+
+	#[test]
+	fn a_directly_committed_job_refuses_a_routed_next_hop() {
+		// TSP-0006 section 3: the line names no identity and Route is prohibited,
+		// because the Destination is the only next hop these items can have.
+		for next_hop in [
+			"Next-Hop Route",
+			"Next-Hop Active \"fidonet#1:3/3\"",
+			"Next-Hop Hold",
+		] {
+			let request = format!(
+				"TITH-IPC 1\nSubmit-Items\nJob FileRequest\nApplication \"bso\"\nIdempotency-Key \"req\"\nOrigin \"fidonet#1:1/1\"\nDestination \"fidonet#1:2/2\"\nFilename \"a.zip\"\n{next_hop}\nEnd\nEnd\n"
+			);
+			assert!(
+				SubmissionRequest::parse(request.as_bytes()).is_err(),
+				"{next_hop} was accepted"
+			);
+		}
+		// A Peer-File carries a Destination, never an Area.
+		assert!(
+			SubmissionRequest::parse(
+				b"TITH-IPC 1\nSubmit-Items\nJob Peer-File\nApplication \"bso\"\nIdempotency-Key \"a\"\nOrigin \"fidonet#1:1/1\"\nArea \"FILES\"\nFile\nSource-Path \"/a\"\nWire-Filename \"a.zip\"\nEnd\nEnd\nEnd\n"
+			)
+			.is_err()
+		);
+		// Neither Kind exists under the original NetMail-only Submit operation.
+		assert!(
+			SubmissionRequest::parse(
+				b"TITH-IPC 1\nSubmit\nJob FileRequest\nApplication \"bso\"\nIdempotency-Key \"req\"\nOrigin \"fidonet#1:1/1\"\nDestination \"fidonet#1:2/2\"\nFilename \"a.zip\"\nEnd\nEnd\n"
 			)
 			.is_err()
 		);

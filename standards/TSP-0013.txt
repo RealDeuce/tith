@@ -3,10 +3,10 @@ TITH                                              THIS ISN'T THAT HARD
 **********************************************************************
 
 Publication:  TSP‑0013
-Revision:     3
+Revision:     4
 Title:        Legacy Mailer and Tosser IPC Adapters
 Author(s):    Stephen Hurd
-Date:         2026‑08‑18
+Date:         2026‑08‑19
 ══════════════════════════════════════════════════════════════════════
 
 Status of this document
@@ -317,10 +317,13 @@ Contents
   FSC‑0028.001.
   The adapter classifies what that legacy NetMail carriage represents.
   Ordinary NetMail uses TSP‑0006 Submit or a Submit-Items NetMail Job;
-  EchoMail and FDN use the corresponding Submit-Items Kind.  This
-  preserves the legacy carriage fact without applying TITH NetMail
-  Destination routing to an item whose native semantics require
-  explicit area links.
+  EchoMail and FDN use the corresponding Submit-Items Kind.  A file
+  transfer belonging to no area and to no message uses the Peer-File
+  Kind, and a converted WaZOO request uses the FileRequest Kind, one
+  Job per action.  This preserves the legacy carriage fact without
+  applying TITH NetMail Destination routing to an item whose native
+  semantics require explicit area links, and without inventing an area
+  for a transfer which has none.
 
   Compatibility tolerance for malformed packets, alternate headers,
   character sets, control paragraphs, .MSG variants, and flow file
@@ -392,7 +395,7 @@ A. References
 
   [TSP‑0005] "Durable Outbound Jobs", TITH, 2026‑08‑18.
 
-  [TSP‑0006] "Outbound Job Submission", TITH, 2026‑08‑18.
+  [TSP‑0006] "Outbound Job Submission", TITH, 2026‑08‑19.
 
   [TSP‑0011] "Durable Inbound Delivery Items", TITH, 2026‑08‑18.
 
@@ -414,5 +417,9 @@ B. History
    Rev.3, 2026‑08‑18: Applied final item authentication warning,
    reply, and orphan policy without modifying retained native payloads
    or File Contents.
+
+   Rev.4, 2026‑08‑19: Classified a transfer belonging to no area and
+   no message as a Peer-File Job and a converted WaZOO request as one
+   FileRequest Job per action.
 
 **********************************************************************

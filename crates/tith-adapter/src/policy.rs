@@ -105,15 +105,6 @@ pub enum Distribution {
 /// Why an item could not be converted, and what the adapter is allowed to do.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Refusal {
-	/// TSP-0006 has no Job which can originate a `FileRequest` response.
-	///
-	/// See issue 16. Until that is resolved the request is understood and the
-	/// SRIF processor may even run, but the reply cannot be submitted.
-	FileRequestUnsubmittable,
-	/// TSP-0006 has no Job for a peer-addressed standalone File.
-	///
-	/// See issue 17.
-	PeerFileUnsubmittable,
 	/// The conversion itself failed.
 	Unconvertible(String),
 }
@@ -121,15 +112,6 @@ pub enum Refusal {
 impl std::fmt::Display for Refusal {
 	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
 		match self {
-			Self::FileRequestUnsubmittable => f.write_str(
-				"a FileRequest response is a set of peer-addressed standalone Files, and TSP-0006 \
-				 has no Job which can originate one (issue 16); the request was processed but its \
-				 reply cannot be submitted until that is resolved",
-			),
-			Self::PeerFileUnsubmittable => f.write_str(
-				"a peer-addressed standalone File is carried by TTS-0005 and received by TSP-0011, \
-				 but TSP-0006 has no Job which can originate one (issue 17)",
-			),
 			Self::Unconvertible(reason) => write!(f, "{reason}"),
 		}
 	}
@@ -149,11 +131,6 @@ pub enum Disposition {
 /// The configurable refusal policy.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Refusals {
-	/// A conversion which cannot succeed until a standard changes.
-	///
-	/// Deferring is the default: rejecting would discard work which becomes
-	/// possible the moment the blocking issue is resolved.
-	pub blocked_on_standard: Disposition,
 	/// A conversion which will never succeed for this item.
 	pub unconvertible: Disposition,
 }
@@ -161,7 +138,6 @@ pub struct Refusals {
 impl Default for Refusals {
 	fn default() -> Self {
 		Self {
-			blocked_on_standard: Disposition::Defer,
 			unconvertible: Disposition::Reject,
 		}
 	}
@@ -171,9 +147,6 @@ impl Refusals {
 	#[must_use]
 	pub const fn disposition(&self, refusal: &Refusal) -> Disposition {
 		match refusal {
-			Refusal::FileRequestUnsubmittable | Refusal::PeerFileUnsubmittable => {
-				self.blocked_on_standard
-			}
 			Refusal::Unconvertible(_) => self.unconvertible,
 		}
 	}
@@ -232,31 +205,15 @@ mod tests {
 	}
 
 	#[test]
-	fn a_standards_blocked_refusal_defers_and_names_its_issue() {
+	fn an_unconvertible_item_is_rejected_and_carries_its_reason() {
 		let refusals = Refusals::default();
-		assert_eq!(
-			refusals.disposition(&Refusal::PeerFileUnsubmittable),
-			Disposition::Defer
-		);
-		assert_eq!(
-			refusals.disposition(&Refusal::FileRequestUnsubmittable),
-			Disposition::Defer
-		);
-		assert_eq!(
-			refusals.disposition(&Refusal::Unconvertible("bad".to_owned())),
-			Disposition::Reject
-		);
-		// The diagnostic must name the issue, so the deferral is traceable to the
-		// standards work which unblocks it rather than looking like a local bug.
-		assert!(
-			Refusal::PeerFileUnsubmittable
-				.to_string()
-				.contains("issue 17")
-		);
-		assert!(
-			Refusal::FileRequestUnsubmittable
-				.to_string()
-				.contains("issue 16")
-		);
+		let refusal = Refusal::Unconvertible("a TIC for a File with no Area".to_owned());
+		assert_eq!(refusals.disposition(&refusal), Disposition::Reject);
+		assert_eq!(refusal.to_string(), "a TIC for a File with no Area");
+		// Deferring is a deployment choice, not a property of the refusal.
+		let deferring = Refusals {
+			unconvertible: Disposition::Defer,
+		};
+		assert_eq!(deferring.disposition(&refusal), Disposition::Defer);
 	}
 }

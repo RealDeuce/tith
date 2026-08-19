@@ -54,12 +54,13 @@ The Rust workspace implements those foundations plus configuration, routing,
 durable storage, and local IPC building blocks.
 
 The reference daemon is not yet a production mailer, but it now exchanges mail
-in both directions: a native listener with durable local Message and standalone
-File acceptance, duplicate handling, and authenticated replies, and a
-schedule-driven outbound driver that delivers queued copies and polls its peers,
-and NetMail relay so a node can act as a hub or a boss. FileRequest handling
-remains under construction. The C implementation under [`poc/`](poc/) is a
-frozen historical proof of concept; new implementation work belongs in Rust.
+in both directions: a native listener with durable local Message, standalone
+File, and FileRequest acceptance, duplicate handling, and authenticated replies,
+a schedule-driven outbound driver that delivers queued copies and polls its
+peers, and NetMail relay so a node can act as a hub or a boss. File requests are
+served through an external FSC-0086.001 processor rather than internally. The C
+implementation under [`poc/`](poc/) is a frozen historical proof of concept; new
+implementation work belongs in Rust.
 
 ## Rust workspace
 
@@ -340,11 +341,12 @@ cargo run -p tithd -- serve-mail 0.0.0.0:24555 \
     /secure/path/node.secret
 ```
 
-It both receives and sends. Local Messages and standalone Files are durably
-stored before `Accepted` is sent, and signed-item duplicates receive `Accepted`
-without creating another inbound item. A NetMail for another node is relayed
-rather than stored. Unsupported FileRequest work receives a retryable rejection.
-EchoMail and area Files are accepted only from configured `Receive-From` peers.
+It both receives and sends. Local Messages, standalone Files, and FileRequests
+are durably stored before `Accepted` is sent, and signed-item duplicates receive
+`Accepted` without creating another inbound item. A NetMail for another node is
+relayed rather than stored; a peer-addressed File or a FileRequest never is,
+because neither carries a Destination a receiver could route on. EchoMail and
+area Files are accepted only from configured `Receive-From` peers.
 
 ### Relay
 
@@ -425,8 +427,9 @@ never part of the set. A value committed after that claim waits for a later
 exchange. Held copies stay claimed until the peer's final Reply Bundle says what
 became of them, so a connection that dies mid-transfer loses nothing. An inbound
 Poll is not constrained by schedules, delivery class, passive status, or a retry
-Timestamp. `PollFileRequests` is always answered with an empty snapshot, because
-a FileRequest cannot yet be submitted.
+Timestamp. `PollMessages` returns held NetMail and EchoMail, `PollFiles` returns
+both held distribution Files and held peer-addressed Files, and
+`PollFileRequests` returns held FileRequests.
 
 Three options tune the outbound half:
 
@@ -489,14 +492,21 @@ reference entry becomes one of:
 - an `Attachment` on the message whose Subject FileList names it, carrying the
   reference file's directive as a `Source-Disposition`;
 - reported as a TIC area distribution, when a `.tic` accompanies it;
-- reported and left in place otherwise, an ARCmail bundle being the usual case.
+- a TSP-0006 `Job Peer-File` otherwise, an ARCmail bundle being the usual case.
+  TSP-0003 section 9 maps an entry no message claims and no TIC accompanies to a
+  peer-addressed standalone File, addressed to the node whose outbound directory
+  it sits in.
 
-That last row is a submission-side gap, not a protocol one: a peer-addressed
-standalone File is something TTS-0005 carries and TSP-0011 receives, but
-TSP-0006 has no Job that can originate one
-([#17](https://github.com/RealDeuce/tith/issues/17)). `.req` file requests are
-likewise unconvertible today
-([#16](https://github.com/RealDeuce/tith/issues/16)).
+A `.req` request list is read too. TSP-0003 section 8 turns every parsed action
+into one `Job FileRequest`, with a `+time` becoming `Newer-Than`. An action with
+no exact TITH representation — a minus time is the documented case — is reported
+and written back, so the file is rewritten rather than deleted.
+
+Both need `--domain`: FTS-5005 has nowhere to record one, and a TTS-0004
+Destination cannot be built without it. Without `--domain` these entries are
+reported and left in place rather than addressed by guesswork. Under the Hold
+flavour each Job carries `Next-Hop Passive`, so "wait for their poll" survives
+the conversion.
 
 ### What it changes
 
@@ -558,8 +568,9 @@ authentication policy, whose defaults are the ones that document names.
 | Item | Objects, in publication order |
 |---|---|
 | Message | each attached File, then the `.pkt` naming them |
-| standalone File | the companion, then its `.tic` |
-| FileRequest | nothing; see below |
+| distribution File | the companion, then its `.tic` |
+| peer-addressed File | the file alone; it belongs to no area, so it has no TIC |
+| FileRequest | nothing; it is answered, not published. See below |
 
 Publication follows TSP-0013 section 5: each object is built under a private
 `.tith-staging-` name, made durable, then given its final name by an exclusive
@@ -605,15 +616,28 @@ onward copy. Under `Native` this is what makes the legacy copy of such an item
 genuinely terminal, and its Deliver-Warn diagnostic adequate marking rather
 than a laundering vector.
 
-### What it cannot finish yet
+### File requests
 
-A `FileRequest` reply is a set of peer-addressed standalone Files, and TSP-0006
-has no Job which can originate one. The FSC-0086.001 SRIF hook is implemented up
-to that point — it writes the SRIF and request list, runs the configured
-processor, and parses the `ResponseList` markers — and then fails loudly with a
-diagnostic naming the blocking issue rather than acknowledging an item whose
-reply was silently dropped. Such items are deferred by default, because they
-become deliverable the moment the standard is extended.
+A claimed `FileRequest` is answered rather than published. `Request-Processor`
+names an FSC-0086.001 external processor: the adapter writes the SRIF and request
+list, runs it, and reads the `ResponseList`. Each offered file becomes one
+TSP-0006 `Job Peer-File` addressed back to the requesting peer, which is the
+shape TTS-0005 gives a File belonging to no distribution area. The whole set is
+one Batch keyed on `InboundID`, so a redelivered request resolves to the original
+Jobs instead of sending everything twice, and it is submitted while the claim is
+still current.
+
+The response markers map to what TSP-0006 can actually promise. `=` becomes
+`Source-Disposition Delete`, which TSP-0005 section 5 performs only after every
+delivery copy is Delivered. `+` becomes `Keep`. `-` asks for erasure whatever
+happens, which has no native disposition, so it stays `Keep` and the adapter
+removes the file itself after the submission commits.
+
+TTS-0005 section 6 permits an accepted `FileRequest` to return no files, and a
+peer with no usable endpoint collects its answer by polling, so nothing here
+depends on the requester still being connected. With no `Request-Processor`
+configured the node will never serve a request, so it is rejected rather than
+deferred forever.
 
 ## Repository layout
 

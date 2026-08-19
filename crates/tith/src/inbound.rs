@@ -12,10 +12,11 @@ use tith_adapter::config::Configuration;
 use tith_adapter::inbound::{Claimed, Outcome, commit, plan};
 use tith_adapter::policy::{Disposition, Distribution};
 use tith_adapter::publish::clear_staging;
+use tith_adapter::srif::{Processor, Session};
 use tith_ledger::{Ledger, State};
 use tith_nodelist::Nodelist;
 use tith_submit::ConfiguredBinding;
-use tith_submit::consume::{self, Authentication, Claimed as ClaimResult, Forwarded};
+use tith_submit::consume::{self, Authentication, Claimed as ClaimResult, Forwarded, PeerFile};
 use tith_wire::Address;
 use tith_wire::bundle::KeyResolver;
 use tith_wire::item::ItemAuthentication;
@@ -255,7 +256,7 @@ fn handle(
 			}
 			return Ok(false);
 		}
-		Outcome::Publish { .. } | Outcome::Orphan { .. } => {}
+		Outcome::Publish { .. } | Outcome::Orphan { .. } | Outcome::ServeRequest { .. } => {}
 	}
 
 	match commit(claim, &outcome, configuration, ledger)? {
@@ -264,6 +265,9 @@ fn handle(
 			// resolved, because TSP-0013 section 4 requires the native copies be
 			// committed "while the claim remains current".
 			if !distribute(binding, claim, &outcome, configuration, ledger, application)? {
+				return Ok(false);
+			}
+			if !serve(binding, claim, &outcome, configuration, application)? {
 				return Ok(false);
 			}
 			// Section 4: acknowledge only after every converted object and the
@@ -346,6 +350,152 @@ fn distribute(
 			Ok(false)
 		}
 	}
+}
+
+/// Answers one claimed `FileRequest`.
+///
+/// The FSC-0086.001 processor decides which files the peer may have; this only
+/// carries its answer across the IPC boundary. Every offered file becomes one
+/// TSP-0006 `Job Peer-File` addressed back to the requesting peer, which is the
+/// shape TTS-0005 gives a File that belongs to no distribution area.
+///
+/// The whole set is one Batch keyed on `InboundID`, so a redelivered request
+/// resolves to the original Jobs rather than sending everything a second time.
+/// Like `distribute`, this runs before the claim is resolved.
+fn serve(
+	binding: &ConfiguredBinding,
+	claim: &Claimed,
+	outcome: &Outcome,
+	configuration: &Configuration,
+	application: &str,
+) -> Result<bool, Box<dyn Error>> {
+	let Outcome::ServeRequest {
+		filename,
+		newer_than,
+	} = outcome
+	else {
+		return Ok(true);
+	};
+	let program = configuration
+		.request_processor
+		.clone()
+		.ok_or("a FileRequest was planned with no Request-Processor configured")?;
+	let link = configuration
+		.link_for(&claim.peer)
+		.ok_or("no Link is configured for the requesting peer")?;
+
+	// The processor never sees the condition; TTS-0005 makes it the requester's,
+	// so it is applied to what the processor offered.
+	let response = Processor {
+		program,
+		working_directory: working_directory(configuration),
+	}
+	.run(
+		&Session {
+			sysop: String::new(),
+			akas: vec![link.peer.to_string()],
+			our_aka: link.local.to_string(),
+			// The Bundle signature authenticated the peer, which is strictly more
+			// than an FTN session password ever proved.
+			protected: true,
+			listed: !link.peer.is_unlisted(),
+		},
+		std::slice::from_ref(filename),
+		fnv(&claim.inbound_id),
+	)?;
+
+	let mut offered = Vec::new();
+	let mut cleanup = Vec::new();
+	for file in &response.offered {
+		if let Some(newer_than) = newer_than
+			&& !newer_than_condition(&file.path, *newer_than)
+		{
+			continue;
+		}
+		let Some(wire_filename) = file.path.file_name().and_then(|name| name.to_str()) else {
+			eprintln!(
+				"tith inbound: {}: offered path {} has no usable filename",
+				claim.inbound_id,
+				file.path.display()
+			);
+			continue;
+		};
+		if file.afterward.needs_local_cleanup() {
+			cleanup.push(file.path.clone());
+		}
+		offered.push(PeerFile {
+			path: file.path.clone(),
+			wire_filename: wire_filename.to_owned(),
+			disposition: file.afterward.disposition(),
+		});
+	}
+
+	match consume::submit_peer_files(
+		binding,
+		application,
+		&format!("request:{}", claim.inbound_id),
+		&link.local.to_string(),
+		&link.peer.to_string(),
+		&offered,
+	)? {
+		Forwarded::Committed { .. } => {
+			// FSC-0086 "-" erases whatever happens, which TSP-0006 has no
+			// disposition for, so the adapter owes the removal itself.
+			for path in cleanup {
+				let _ = std::fs::remove_file(path);
+			}
+			Ok(true)
+		}
+		Forwarded::NotCommitted {
+			reason,
+			description,
+		} => {
+			eprintln!(
+				"tith inbound: {}: the file request reply was not committed: {reason} {description}",
+				claim.inbound_id
+			);
+			consume::defer(
+				binding,
+				&claim.inbound_id,
+				&claim.claim_token,
+				now() + 300,
+				&format!("file request reply not committed: {reason} {description}"),
+			)?;
+			Ok(false)
+		}
+	}
+}
+
+/// A private directory beside the ledger for the SRIF and its two lists.
+fn working_directory(configuration: &Configuration) -> PathBuf {
+	configuration
+		.ledger
+		.parent()
+		.unwrap_or_else(|| std::path::Path::new("."))
+		.join("tith-request")
+}
+
+/// Whether a file satisfies the TTS-0005 `FileRequest` condition.
+///
+/// A file whose modification time cannot be read is offered: the processor
+/// already decided the peer may have it, and dropping it silently would answer
+/// a request with nothing and no reason.
+fn newer_than_condition(path: &std::path::Path, newer_than: u64) -> bool {
+	std::fs::metadata(path)
+		.and_then(|metadata| metadata.modified())
+		.ok()
+		.and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
+		.is_none_or(|since| since.as_secs() > newer_than)
+}
+
+/// A stable numeric identity for the SRIF filenames of one `InboundID`.
+fn fnv(value: &str) -> u64 {
+	let mut hash = 0xcbf2_9ce4_8422_2325_u64;
+	for byte in value.as_bytes() {
+		hash ^= u64::from(*byte);
+		hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+	}
+	hash
 }
 
 const fn authentication(value: Authentication) -> ItemAuthentication {

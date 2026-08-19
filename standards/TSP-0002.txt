@@ -3,10 +3,10 @@ TITH                                              THIS ISN'T THAT HARD
 **********************************************************************
 
 Publication:  TSP‑0002
-Revision:     6
+Revision:     7
 Title:        Routing and Distribution Configuration
 Author(s):    Stephen Hurd
-Date:         2026‑08‑18
+Date:         2026‑08‑19
 ══════════════════════════════════════════════════════════════════════
 
 Status of this document
@@ -283,6 +283,12 @@ Contents
   ultimate Destination is not local.  Local delivery does not require
   relay authorization.
 
+  No other item is relayed.  An EchoMail Message or distribution File
+  is distributed by section 7 rather than routed.  A peer‐addressed
+  standalone File and a FileRequest carry no Destination value at all,
+  so a receiver has nothing to route them on and MUST treat one
+  addressed to it by the Bundle as its own.
+
   Authenticated here means TSP‑0011 ItemAuthentication Origin-Valid or
   SignedOrigin-Valid.  An Unsigned, Origin-Invalid, or
   SignedOrigin-Invalid item MUST NOT be relayed or distributed as
@@ -333,7 +339,16 @@ Contents
   Loop, Relay-Denied, Rejected, or Authentication.  An All Destination
   selector also matches an EchoMail Message or distribution File which
   has an Area instead of a Destination.  Another Destination selector
-  does not match an item without a Destination.
+  does not match an item without a Destination.  A peer‐addressed
+  standalone File and a FileRequest have an ultimate Destination even
+  though the item contains no Destination value, so an ordinary
+  Destination selector matches both on that address.
+
+  A FileRequest has no Origin and no FromUserName.  An Origin selector
+  therefore does not match one, and Sender and Origin-Sysop have no
+  target to notify; those notices are omitted as this section already
+  requires for a target which cannot be determined.  The failure is
+  still logged.
 
   Failure lines are examined in file order.  The first line whose kind
   and selectors match supplies the policy.  Its Origin selector uses
@@ -468,7 +483,9 @@ Contents
   Poll MAY occur more than once.  At each activation, the named Peer
   is contacted and sent one PollMessages, one PollFiles, and one
   PollFileRequests request even when no outbound item is queued for
-  it.
+  it.  PollMessages returns held NetMail and EchoMail Messages,
+  PollFiles returns both held distribution Files and held
+  peer‐addressed Files, and PollFileRequests returns held FileRequests.
 
   Start MUST occur at most once.  The time has exactly two decimal
   hour digits from 00 through 23, a Colon (U+003A), and exactly two
@@ -555,7 +572,10 @@ Contents
   required copy above is durable.
 
   NetMail produces one delivery copy.  EchoMail and file distribution
-  produce one copy for each applicable Send-To link.  Copies MAY be
+  produce one copy for each applicable Send-To link.  A peer‐addressed
+  standalone File and a FileRequest each produce one copy committed
+  directly to their ultimate Destination, which is also their next hop.
+  Copies MAY be
   aggregated with compatible copies from other source Bundles.
   Compatible copies have the same local AKA and exact next‐hop
   identity and are concurrently eligible for the same connection.
@@ -760,5 +780,9 @@ B. History
    Rev.6, 2026‑08‑18: Restricted forwarding to Origin-Valid and
    SignedOrigin-Valid items while permitting separate final delivery
    policy for unsigned and invalid items.
+
+   Rev.7, 2026‑08‑19: Committed a peer‐addressed standalone File and a
+   FileRequest directly to their Destination, stated that neither is
+   relayed, and named what each Poll value returns.
 
 **********************************************************************

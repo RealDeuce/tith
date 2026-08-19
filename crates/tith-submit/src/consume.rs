@@ -377,7 +377,79 @@ pub fn forward(
 		quote(application),
 		quote(idempotency_key)
 	);
-	let result = binding.transact(request.as_bytes())?;
+	submitted(binding, request.as_bytes())
+}
+
+/// One file offered in answer to a `FileRequest`.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PeerFile {
+	/// The local path the request processor named.
+	pub path: PathBuf,
+	/// The TSP-0006 `Wire-Filename`, which a peer-addressed File must state
+	/// explicitly and which is never inferred from the path by the service.
+	pub wire_filename: String,
+	/// `Keep`, `Delete`, or `Truncate`.
+	pub disposition: &'static str,
+}
+
+/// Submits the files answering one `FileRequest` back to the peer that asked.
+///
+/// TSP-0006 section 2: each is one `Job Peer-File`, addressed by `Destination`
+/// rather than an Area, and the whole set is one all-or-nothing Batch. The
+/// caller's `idempotency_key` is derived from the `InboundID`, so a redelivered
+/// request resolves to the original Jobs instead of sending everything twice.
+///
+/// `Next-Hop` is omitted, so each copy is Active when the peer has a usable
+/// endpoint at commitment and Passive otherwise — a peer that cannot be called
+/// collects its answer by polling.
+///
+/// # Errors
+///
+/// Returns [`ClientError`] when the binding fails or the result is not a
+/// conforming `Submit-Items` result. An empty `files` list submits nothing and
+/// reports `Committed` with no Jobs, because TTS-0005 section 6 permits an
+/// accepted `FileRequest` to return no files at all.
+pub fn submit_peer_files(
+	binding: &impl Binding,
+	application: &str,
+	idempotency_key: &str,
+	origin: &str,
+	destination: &str,
+	files: &[PeerFile],
+) -> Result<Forwarded, ClientError> {
+	if files.is_empty() {
+		return Ok(Forwarded::Committed {
+			job_id: String::new(),
+			state: "Delivered".to_owned(),
+		});
+	}
+	let jobs: Vec<String> = files
+		.iter()
+		.enumerate()
+		.map(|(index, file)| {
+			format!(
+				"Job Peer-File\nApplication {}\nIdempotency-Key {}\nOrigin {}\n\
+				 Destination {}\nFile\nSource-Path {}\nIngestion Copy\n\
+				 Source-Disposition {}\nWire-Filename {}\nEnd\nEnd\n",
+				quote(application),
+				quote(&format!("{idempotency_key}-{}", index + 1)),
+				quote(origin),
+				quote(destination),
+				quote(&file.path.to_string_lossy()),
+				file.disposition,
+				quote(&file.wire_filename)
+			)
+		})
+		.collect();
+	submitted(
+		binding,
+		format!("TITH-IPC 1\nSubmit-Items\n{}End\n", jobs.concat()).as_bytes(),
+	)
+}
+
+/// Reads a `Submit-Items` result into the outcome it reports.
+fn submitted(binding: &impl Binding, request: &[u8]) -> Result<Forwarded, ClientError> {
+	let result = binding.transact(request)?;
 	let document = validate(&result, EnvelopeKind::Result)?;
 	let outcome = line_fields(&document, "Submit-Items")
 		.ok_or_else(|| ClientError::new("result is not a Submit-Items result"))?;

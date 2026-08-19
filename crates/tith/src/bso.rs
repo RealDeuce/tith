@@ -281,21 +281,40 @@ fn node(
 		let reference_path = matching_reference(files, file);
 		match file.kind {
 			FlowKind::Packet => {
-				packet(binding, options, features, file, reference_path, outcome)?;
+				packet(
+					binding,
+					options,
+					features,
+					address,
+					file,
+					reference_path,
+					outcome,
+				)?;
 			}
 			FlowKind::Reference => {
 				// Handled with its packet; a reference with no packet still has
-				// its entries reported.
+				// its entries submitted on their own.
 				if !files
 					.iter()
 					.any(|other| other.kind == FlowKind::Packet && other.flavour == file.flavour)
 				{
-					lone_reference(options, file, outcome)?;
+					lone_reference(binding, options, features, address, file, outcome)?;
 				}
 			}
+			FlowKind::Request => request_list(binding, options, address, file, outcome)?,
 		}
 	}
 	Ok(())
+}
+
+/// The TTS-0004 address a flow file's placement selects.
+///
+/// A canonical address needs a domain, which the outbound layout cannot supply
+/// on its own; FTS-5005 has no place to record one. Without `--domain` there is
+/// nothing correct to address a submission to, so nothing is submitted.
+fn destination(address: &NodeAddress) -> Option<String> {
+	address.domain.as_ref()?;
+	Some(address.to_string())
 }
 
 fn matching_reference<'a>(files: &'a [FlowFile], packet: &FlowFile) -> Option<&'a FlowFile> {
@@ -304,11 +323,13 @@ fn matching_reference<'a>(files: &'a [FlowFile], packet: &FlowFile) -> Option<&'
 		.find(|other| other.kind == FlowKind::Reference && other.flavour == packet.flavour)
 }
 
-/// Submits one packet's messages, then retires what committed.
+/// Submits one packet's messages and any unclaimed entries, then retires what
+/// committed.
 fn packet(
 	binding: &impl Binding,
 	options: &Options,
 	features: &BTreeSet<String>,
+	address: &NodeAddress,
 	file: &FlowFile,
 	reference: Option<&FlowFile>,
 	outcome: &mut Outcome,
@@ -343,15 +364,15 @@ fn packet(
 			}
 		}
 	}
-	for (entry, area) in &correlation.distributions {
-		eprintln!(
-			"tith bso scan: {}: \"{}\" is a TIC distribution for area {area}, which this tool does not submit yet",
-			file.path.display(),
-			entry.name
-		);
-		outcome.unclaimed += 1;
-	}
-	report_unclaimed(&correlation, &file.path, outcome);
+	consumed.extend(unclaimed_entries(
+		binding,
+		options,
+		features,
+		address,
+		file,
+		&correlation,
+		outcome,
+	));
 
 	// Section 3.1: the packet is deleted after its information is transferred.
 	// Committed is that point; anything short of it leaves everything alone.
@@ -371,16 +392,55 @@ fn packet(
 	Ok(())
 }
 
-/// A reference file with no packet beside it: nothing here has a submission
-/// path today, so it is reported and left untouched.
+/// A reference file with no packet beside it.
+///
+/// Its entries own no message, so each one is a peer-addressed File in its own
+/// right and is submitted as such.
 fn lone_reference(
+	binding: &impl Binding,
 	options: &Options,
+	features: &BTreeSet<String>,
+	address: &NodeAddress,
 	file: &FlowFile,
 	outcome: &mut Outcome,
 ) -> Result<(), Box<dyn Error>> {
 	let directory = file.path.parent().unwrap_or(Path::new("."));
 	let references = parse_reference(&fs::read_to_string(&file.path)?);
 	let correlation = correlate(Vec::new(), &references, directory, options.style);
+	let consumed = unclaimed_entries(
+		binding,
+		options,
+		features,
+		address,
+		file,
+		&correlation,
+		outcome,
+	);
+	if !consumed.is_empty() {
+		let keep: Vec<String> = references
+			.iter()
+			.map(|entry| entry.line.clone())
+			.filter(|line| !consumed.contains(line))
+			.collect();
+		rewrite_reference(&file.path, &keep)?;
+	}
+	Ok(())
+}
+
+/// Submits every entry no message claimed, returning the lines that committed.
+///
+/// TSP-0003 section 9: an entry with no owning message and no TIC maps to one
+/// peer-addressed standalone File. A TIC-accompanied entry is an area
+/// distribution and still needs the TIC conversion this tool does not do.
+fn unclaimed_entries(
+	binding: &impl Binding,
+	options: &Options,
+	features: &BTreeSet<String>,
+	address: &NodeAddress,
+	file: &FlowFile,
+	correlation: &Correlation,
+	outcome: &mut Outcome,
+) -> Vec<String> {
 	for (entry, area) in &correlation.distributions {
 		eprintln!(
 			"tith bso scan: {}: \"{}\" is a TIC distribution for area {area}, which this tool does not submit yet",
@@ -389,18 +449,137 @@ fn lone_reference(
 		);
 		outcome.unclaimed += 1;
 	}
-	report_unclaimed(&correlation, &file.path, outcome);
-	Ok(())
+	if correlation.unclaimed.is_empty() {
+		return Vec::new();
+	}
+	let Some(destination) = destination(address) else {
+		for entry in &correlation.unclaimed {
+			eprintln!(
+				"tith bso scan: {}: \"{}\" has no owning message and no --domain was given, so it cannot be addressed and is left in place",
+				file.path.display(),
+				entry.name
+			);
+			outcome.unclaimed += 1;
+		}
+		return Vec::new();
+	};
+
+	let entries: Vec<_> = correlation
+		.unclaimed
+		.iter()
+		.map(tith_bso::as_attachment)
+		.collect();
+	let directory = file.path.parent().unwrap_or(Path::new("."));
+	let fallback = match crate::netmail::generated_key() {
+		Ok(key) => key,
+		Err(error) => {
+			outcome.failures += 1;
+			eprintln!("tith bso scan: {}: {error}", file.path.display());
+			return Vec::new();
+		}
+	};
+	let built = submission::build_peer_files(
+		&entries,
+		&destination,
+		file.flavour == Flavour::Hold,
+		&Context {
+			application: &options.application,
+			origin: &options.origin,
+			legacy_origin: options.legacy_origin.clone(),
+			style: options.style,
+			features,
+			directory,
+			fallback_key: &fallback,
+		},
+	);
+	let sent = built
+		.map_err(|error| Box::new(error) as Box<dyn Error>)
+		.and_then(|built| commit(binding, &built));
+	match sent {
+		Ok(()) => {
+			outcome.committed += correlation.unclaimed.len();
+			correlation
+				.unclaimed
+				.iter()
+				.map(|entry| entry.line.clone())
+				.collect()
+		}
+		Err(error) => {
+			outcome.failures += 1;
+			eprintln!("tith bso scan: {}: {error}", file.path.display());
+			Vec::new()
+		}
+	}
 }
 
-fn report_unclaimed(correlation: &Correlation, path: &Path, outcome: &mut Outcome) {
-	for entry in &correlation.unclaimed {
+/// Submits every action in one request list, then retires what committed.
+///
+/// TSP-0003 section 8: every successfully parsed action becomes one
+/// `FileRequest`. An action with no exact TITH representation — a minus time is
+/// the documented case — is retained as unsupported work, which means the file
+/// is rewritten rather than deleted.
+fn request_list(
+	binding: &impl Binding,
+	options: &Options,
+	address: &NodeAddress,
+	file: &FlowFile,
+	outcome: &mut Outcome,
+) -> Result<(), Box<dyn Error>> {
+	let actions = tith_bso::parse_request(&fs::read_to_string(&file.path)?);
+	if actions.is_empty() {
+		return Ok(());
+	}
+	let Some(destination) = destination(address) else {
 		eprintln!(
-			"tith bso scan: {}: \"{}\" has no owning message; TSP-0006 has no Job for a peer-addressed standalone File, so it is left in place",
-			path.display(),
-			entry.name
+			"tith bso scan: {}: no --domain was given, so these requests cannot be addressed and are left in place",
+			file.path.display()
+		);
+		outcome.unclaimed += actions.len();
+		return Ok(());
+	};
+	let (submit, retain): (Vec<_>, Vec<_>) = actions.iter().partition(|action| !action.unsupported);
+	for action in &retain {
+		eprintln!(
+			"tith bso scan: {}: \"{}\" has no exact TITH representation and is left in place",
+			file.path.display(),
+			action.line
 		);
 		outcome.unclaimed += 1;
+	}
+	if submit.is_empty() {
+		return Ok(());
+	}
+
+	let owned: Vec<_> = submit.iter().map(|action| (*action).clone()).collect();
+	let features = BTreeSet::new();
+	let fallback = crate::netmail::generated_key()?;
+	let built = submission::build_file_requests(
+		&owned,
+		&destination,
+		file.flavour == Flavour::Hold,
+		&Context {
+			application: &options.application,
+			origin: &options.origin,
+			legacy_origin: options.legacy_origin.clone(),
+			style: options.style,
+			features: &features,
+			directory: file.path.parent().unwrap_or(Path::new(".")),
+			fallback_key: &fallback,
+		},
+	);
+	match commit(binding, &built) {
+		Ok(()) => {
+			outcome.committed += submit.len();
+			// Only the actions which committed are removed.
+			let keep: Vec<String> = retain.iter().map(|action| action.line.clone()).collect();
+			tith_bso::rewrite_request(&file.path, &keep)?;
+			Ok(())
+		}
+		Err(error) => {
+			outcome.failures += 1;
+			eprintln!("tith bso scan: {}: {error}", file.path.display());
+			Ok(())
+		}
 	}
 }
 
@@ -426,12 +605,21 @@ fn submit_message(
 			fallback_key: &fallback,
 		},
 	)?;
+	commit(binding, &built)
+}
+
+/// Sends one submission and requires a Committed result for its own operation.
+///
+/// TSP-0006 section 8: "A result MUST name the operation in its request", so
+/// the check is against the operation the document actually used rather than
+/// always `Submit`.
+fn commit(binding: &impl Binding, built: &submission::Submission) -> Result<(), Box<dyn Error>> {
 	let result = binding.transact(&built.request)?;
 	let document = validate(&result, EnvelopeKind::Result)?;
 	let committed = document.lines.first().is_some_and(|line| {
 		matches!(line.fields.as_slice(), [operation, status]
 			if !operation.quoted
-				&& operation.text == "Submit"
+				&& operation.text == built.operation
 				&& !status.quoted
 				&& status.text == "Committed")
 	});
@@ -453,38 +641,56 @@ mod tests {
 	use tith_ipc::SubmissionRequest;
 	use tith_submit::ClientError;
 
-	/// Accepts every submission and records the key it carried.
+	/// Accepts every submission and records what it carried.
 	#[derive(Default)]
 	struct Recorder {
 		keys: Mutex<Vec<String>>,
+		requests: Mutex<Vec<String>>,
 		reject: bool,
 	}
 
 	impl Binding for Recorder {
 		fn transact(&self, request: &[u8]) -> Result<Vec<u8>, ClientError> {
-			if String::from_utf8_lossy(request).contains("\nCapabilities\n") {
+			let text = String::from_utf8_lossy(request).into_owned();
+			if text.contains("\nCapabilities\n") {
 				return Ok(
 					b"TITH-IPC-Result 1\nCapabilities Completed\nOperation \"Capabilities\"\nFeature \"Submit.Delete\"\nEnd\n"
 						.to_vec(),
 				);
 			}
 			let parsed = SubmissionRequest::parse(request).expect("built request parses");
+			// TSP-0006 section 8: a result names the operation in its request.
+			let operation = match parsed.operation {
+				tith_ipc::SubmitOperation::Submit => "Submit",
+				tith_ipc::SubmitOperation::SubmitItems => "Submit-Items",
+			};
 			if self.reject {
-				return Ok(
-					b"TITH-IPC-Result 1\nSubmit Not-Committed\nFailure 1 Invalid \"refused\"\nEnd\n"
-						.to_vec(),
-				);
+				return Ok(format!(
+					"TITH-IPC-Result 1\n{operation} Not-Committed\nFailure 1 Invalid \"refused\"\nEnd\n"
+				)
+				.into_bytes());
 			}
-			for job in &parsed.jobs {
-				self.keys
-					.lock()
-					.expect("lock")
-					.push(job.idempotency_key.clone());
-			}
-			Ok(
-				b"TITH-IPC-Result 1\nSubmit Committed\nJob 1 New J0123456789abcdef0123456789abcdef Queued\nEnd\n"
-					.to_vec(),
+			self.requests.lock().expect("lock").push(text);
+			let jobs: Vec<String> = parsed
+				.jobs
+				.iter()
+				.enumerate()
+				.map(|(index, job)| {
+					self.keys
+						.lock()
+						.expect("lock")
+						.push(job.idempotency_key.clone());
+					format!(
+						"Job {} New J0123456789abcdef0123456789abcde{index:x} Queued\n",
+						index + 1
+					)
+				})
+				.collect();
+			Ok(format!(
+				"TITH-IPC-Result 1\n{operation} Committed\n{}End\n",
+				jobs.concat()
 			)
+			.into_bytes())
 		}
 	}
 
@@ -550,7 +756,7 @@ mod tests {
 	}
 
 	fn features() -> BTreeSet<String> {
-		BTreeSet::from(["Submit.Delete".to_owned()])
+		BTreeSet::from(["Submit.Delete".to_owned(), "Submit.Truncate".to_owned()])
 	}
 
 	#[test]
@@ -587,7 +793,8 @@ mod tests {
 		let outcome = sweep(&recorder, &options(&root, AttachStyle::Flags), &features());
 		assert_eq!(outcome.committed, 1);
 		assert_eq!(outcome.failures, 0);
-		// The ARCmail entry has no submission path and was reported.
+		// Without --domain the ARCmail entry cannot be addressed, so it is
+		// reported and left alone rather than guessed at.
 		assert_eq!(outcome.unclaimed, 1);
 
 		assert!(
@@ -605,6 +812,101 @@ mod tests {
 			b"payload"
 		);
 		assert!(!root.join("00680024.bsy").exists(), "lock was left behind");
+		fs::remove_dir_all(base).expect("cleanup");
+	}
+
+	#[test]
+	fn an_unclaimed_entry_is_submitted_as_a_peer_file_and_its_line_removed() {
+		// TSP-0003 section 9: an entry no message claims and no TIC accompanies
+		// is a peer-addressed standalone File.
+		let base = temp_dir("peerfile");
+		let root = base.join("outbound");
+		fs::create_dir_all(&root).expect("root");
+		fs::write(root.join("00680024.flo"), "#0068002400.su0\n").expect("flo");
+		fs::write(root.join("0068002400.su0"), b"arcmail").expect("payload");
+
+		let mut options = options(&root, AttachStyle::Flags);
+		options.domain = Some("fidonet".to_owned());
+		options.outbound = Outbound::new(&root, 1).with_default_domain("fidonet");
+		let recorder = Recorder::default();
+		let outcome = sweep(&recorder, &options, &features());
+		assert_eq!(outcome.committed, 1);
+		assert_eq!(outcome.failures, 0);
+		assert_eq!(outcome.unclaimed, 0);
+
+		let sent = recorder.requests.lock().expect("lock").concat();
+		assert!(sent.contains("Submit-Items"), "{sent}");
+		assert!(sent.contains("Job Peer-File"), "{sent}");
+		assert!(sent.contains("Destination \"fidonet#1:104/36\""), "{sent}");
+		assert!(sent.contains("Wire-Filename \"0068002400.su0\""), "{sent}");
+		// "#" is Truncate, and it travels as a Source-Disposition rather than
+		// being performed here.
+		assert!(sent.contains("Source-Disposition Truncate"), "{sent}");
+		assert!(
+			!root.join("00680024.flo").exists(),
+			"an emptied reference file is deleted"
+		);
+		assert_eq!(
+			fs::read(root.join("0068002400.su0")).expect("payload"),
+			b"arcmail",
+			"the scanner never truncates a referenced payload"
+		);
+		fs::remove_dir_all(base).expect("cleanup");
+	}
+
+	#[test]
+	fn a_request_list_is_submitted_and_unsupported_actions_are_retained() {
+		let base = temp_dir("request");
+		let root = base.join("outbound");
+		fs::create_dir_all(&root).expect("root");
+		fs::write(
+			root.join("00680024.req"),
+			"nodediff.zip\nfiles.zip +1755400000\nold.zip -1755400000\n",
+		)
+		.expect("req");
+
+		let mut options = options(&root, AttachStyle::Flags);
+		options.domain = Some("fidonet".to_owned());
+		options.outbound = Outbound::new(&root, 1).with_default_domain("fidonet");
+		let recorder = Recorder::default();
+		let outcome = sweep(&recorder, &options, &features());
+		assert_eq!(outcome.committed, 2);
+		assert_eq!(outcome.failures, 0);
+		// TSP-0003 section 8: a minus time has no exact TITH representation.
+		assert_eq!(outcome.unclaimed, 1);
+
+		let sent = recorder.requests.lock().expect("lock").concat();
+		assert!(sent.contains("Job FileRequest"), "{sent}");
+		assert!(sent.contains("Filename \"nodediff.zip\""), "{sent}");
+		assert!(sent.contains("Newer-Than 1755400000"), "{sent}");
+		assert!(!sent.contains("old.zip"), "{sent}");
+		assert_eq!(
+			fs::read_to_string(root.join("00680024.req")).expect("req"),
+			"old.zip -1755400000\n",
+			"only the actions which committed are removed"
+		);
+		fs::remove_dir_all(base).expect("cleanup");
+	}
+
+	#[test]
+	fn a_hold_flavoured_entry_is_committed_passive() {
+		// The Hold flavour means "wait for their poll", which is exactly what an
+		// explicit Passive Next-Hop preserves.
+		let base = temp_dir("holdpeer");
+		let root = base.join("outbound");
+		fs::create_dir_all(&root).expect("root");
+		fs::write(root.join("00680024.hlo"), "@held.zip\n").expect("hlo");
+		fs::write(root.join("held.zip"), b"payload").expect("payload");
+
+		let mut options = options(&root, AttachStyle::Flags);
+		options.domain = Some("fidonet".to_owned());
+		options.outbound = Outbound::new(&root, 1).with_default_domain("fidonet");
+		options.include_hold = true;
+		let recorder = Recorder::default();
+		let outcome = sweep(&recorder, &options, &features());
+		assert_eq!(outcome.committed, 1);
+		let sent = recorder.requests.lock().expect("lock").concat();
+		assert!(sent.contains("Next-Hop Passive"), "{sent}");
 		fs::remove_dir_all(base).expect("cleanup");
 	}
 

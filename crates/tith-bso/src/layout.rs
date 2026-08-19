@@ -71,6 +71,11 @@ pub enum FlowKind {
 	Packet,
 	/// A reference file, signature "lo".
 	Reference,
+	/// An FTS-0006.002 `WaZOO` request list, extension "req".
+	///
+	/// Unlike the other two this has no flavour letter: section 2 gives one
+	/// `.req` per node, so it is reported as Normal.
+	Request,
 }
 
 /// One recognised flow file.
@@ -92,6 +97,12 @@ pub fn classify_extension(extension: &str) -> Option<(Flavour, FlowKind)> {
 	let bytes = lower.as_bytes();
 	if bytes.len() != 3 {
 		return None;
+	}
+	// Section 2 gives a node one request list with no flavour of its own. It is
+	// checked before the flavour/signature split because "req" would otherwise
+	// read as flavour "r" and signature "eq".
+	if lower == "req" {
+		return Some((Flavour::Normal, FlowKind::Request));
 	}
 	let kind = match &lower[1..] {
 		"ut" => FlowKind::Packet,
@@ -359,8 +370,20 @@ mod tests {
 	fn rejects_extensions_that_are_not_flow_files() {
 		// "olo" and "fut" are the cross products that do not exist: "o" is
 		// netmail only and "f" reference only.
-		for extension in ["olo", "fut", "nlo", "req", "bsy", "hld", "try", "pkt", "lo"] {
+		for extension in ["olo", "fut", "nlo", "bsy", "hld", "try", "pkt", "lo"] {
 			assert_eq!(classify_extension(extension), None, "{extension}");
+		}
+	}
+
+	#[test]
+	fn a_request_list_has_no_flavour_of_its_own() {
+		// "req" must not read as flavour "r" with signature "eq".
+		for extension in ["req", "REQ", "Req"] {
+			assert_eq!(
+				classify_extension(extension),
+				Some((Flavour::Normal, FlowKind::Request)),
+				"{extension}"
+			);
 		}
 	}
 

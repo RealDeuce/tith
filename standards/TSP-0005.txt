@@ -3,10 +3,10 @@ TITH                                              THIS ISN'T THAT HARD
 **********************************************************************
 
 Publication:  TSP‑0005
-Revision:     3
+Revision:     4
 Title:        Durable Outbound Jobs
 Author(s):    Stephen Hurd
-Date:         2026‑08‑18
+Date:         2026‑08‑19
 ══════════════════════════════════════════════════════════════════════
 
 Status of this document
@@ -52,10 +52,10 @@ Contents
 ───────────────
 
   A Job is the mailer's durable unit of local outbound work.  It owns
-  one immutable TTS‑0005 NetMail Message, EchoMail Message, or
-  standalone distribution File, its private Source copies, zero or more
-  committed delivery copies, and the local metadata needed to deliver
-  and report it.
+  one immutable TTS‑0005 NetMail Message, EchoMail Message, standalone
+  distribution File, peer‐addressed standalone File, or FileRequest,
+  its private Source copies, zero or more committed delivery copies,
+  and the local metadata needed to deliver and report it.
 
   The Job model does not depend on an on‐disk spool layout or IPC
   binding.  TSP‑0006 defines the standard operations which create Jobs.
@@ -84,14 +84,20 @@ Contents
   Application and binding‐supplied caller identity jointly control
   access to the Job; spelling the Application name grants no authority.
 
-  A Job records Kind NetMail, EchoMail, or File and owns one complete
-  TTS‑0005 item of that kind.  NetMail and EchoMail own a Message; File
-  owns a standalone distribution File.  The Kind never changes.
+  A Job records Kind NetMail, EchoMail, File, Peer-File, or FileRequest
+  and owns one complete TTS‑0005 item of that kind.  NetMail and
+  EchoMail own a Message; File owns a standalone distribution File
+  carrying an Area; Peer-File owns a standalone File with no Area,
+  Via, or SeenBy, addressed by the Bundle which carries it; FileRequest
+  owns a TTS‑0005 FileRequest.  The Kind never changes.
 
   An Attachment is a File child inside a Message.  A Message may have
-  no Attachments.  A locally submitted standalone File has one Source
-  for its Contents; a Forward Job takes its complete item from a
-  TSP‑0011 inbound record.
+  no Attachments.  A locally submitted standalone File of either Kind
+  has one Source for its Contents; a Forward Job takes its complete
+  item from a TSP‑0011 inbound record.  A FileRequest Job has no
+  Source, private copy, WireFilename, or cleanup record; its complete
+  item is the requested Filename, an optional condition Timestamp, and
+  a RequestIdentifier.
   A Job MUST NOT impose a fixed Attachment count or contents length
   beyond representability, checked allocation arithmetic, available
   storage, and local resource policy.
@@ -141,6 +147,13 @@ Contents
   in Send-To order and are assigned stable one‐based delivery indexes.
   They remain committed to their exact Peers and never use a NetMail
   Route method.
+
+  A Peer-File or FileRequest Job has exactly one copy, committed
+  directly to its ultimate Destination.  That Destination is also its
+  next hop: neither item carries a Destination value which a receiving
+  node could route on, so a node given one in a Bundle addressed to
+  itself takes it as its own.  Such a copy never uses a NetMail Route
+  method and is never relayed.
 
   The permanent kinds are Unroutable, Loop, Relay-Denied, Rejected,
   and Authentication as defined by TSP‑0002.  Their policies are
@@ -200,6 +213,18 @@ Contents
   the committed next hop or recognition there of an already accepted
   duplicate.  It does not assert that an ultimate recipient
   Application consumed the item.
+
+  For a FileRequest copy, Delivered means the peer accepted the
+  request.  Files returned in response to it are separate TTS‑0005
+  values which become TSP‑0011 inbound items on arrival; they are not
+  part of this Job, and an accepted request which returns none is still
+  Delivered.
+
+  A complete Rejected response with reason 3 completes a conditional
+  request rather than failing it, as TSP‑0002 section 6 requires.  It
+  arises only for a FileRequest carrying a condition Timestamp.  Such a
+  copy becomes Delivered with the returned reason and description
+  recorded as its result, and MUST NOT be retried.
 
   Rejected means a complete remote response permanently rejected that
   copy's item.  TTS‑0005 reasons 1 and 2 produce Rejected.  Failed means
@@ -296,8 +321,10 @@ Contents
   Reroute is the explicit administrative operation permitted by
   TSP‑0002.  It applies only to a NetMail Job.  It is allowed for
   Queued, Deferred, Rejected, or Failed while contents remain, Busy for
-  Active, and NotPermitted for a distribution Job, Delivered, or
-  Cancelled.
+  Active, and NotPermitted for any Job whose Kind is not NetMail, and
+  for Delivered or Cancelled.  A distribution copy belongs to its
+  configured link, and a Peer-File or FileRequest has exactly one place
+  it can be delivered, so neither has another next hop to select.
 
   Reroute Route applies the current TSP‑0002 NetMail Route methods.
   Reroute Active or Passive instead commits the exact listed address or
@@ -354,7 +381,7 @@ Contents
   pathnames and requires separate authorization.
 
   Query is the original NetMail‐only result grammar retained for
-  existing Clients.  It returns NotFound for an EchoMail or File Job.
+  existing Clients.  It returns NotFound for a Job of any other Kind.
   Query-Job is the item‐aware operation and applies to every Kind.
 
   A successful Query result is:
@@ -401,7 +428,7 @@ Contents
     Query-Job Completed
     Job <job-id> <job-state>
     Application "<application-name>"
-    Kind NetMail|EchoMail|File
+    Kind NetMail|EchoMail|File|Peer-File|FileRequest
     Local-Identity "<local-identity>"
     Destination "<destination-identity>"|Area "<area-name>"
     Created <timestamp>
@@ -427,16 +454,18 @@ Contents
   Local-Identity is the routing AKA recorded with every copy and may
   differ from the item Origin of a Forward Job.  For an originated item
   using SignedOrigin, it is that effective signer rather than the reply
-  Origin.  Destination occurs only for NetMail; Area occurs only for
-  EchoMail and File.  A NetMail Job has exactly one Delivery block.
-  Other Jobs contain zero or more in stable delivery‐index order.  Zero
-  occurs only for the successful Forward case defined in section 4.
+  Origin.  Destination occurs for NetMail, Peer-File, and FileRequest;
+  Area occurs only for EchoMail and File.  A NetMail, Peer-File, or
+  FileRequest Job has exactly one Delivery block.  Other Jobs contain
+  zero or more in stable delivery‐index order.  Zero occurs only for the
+  successful Forward case defined in section 4.
   The state on a Delivery line is that copy's state, and its Attempts and
   Last-Result apply only to that copy.
 
   Source lines occur in Attachment order for a locally submitted
-  Message.  A locally submitted standalone File has exactly one File
-  Source; a Forward Job has none.  Source-Path uses the corresponding
+  Message.  A locally submitted standalone File of either Kind has
+  exactly one File Source; a Forward or FileRequest Job has none.
+  Source-Path uses the corresponding
   Source index and occurs only in an authorized Paths result.  Created,
   Changed, aggregate Attempts, and aggregate Last-Result have the
   meanings of the original Query result.
@@ -626,7 +655,7 @@ A. References
 
   [TSP‑0004] "Local IPC Format", TITH, 2026‑08‑17.
 
-  [TSP‑0006] "Outbound Job Submission", TITH, 2026‑08‑18.
+  [TSP‑0006] "Outbound Job Submission", TITH, 2026‑08‑19.
 
   [TSP‑0011] "Durable Inbound Delivery Items", TITH, 2026‑08‑18.
 
@@ -645,5 +674,9 @@ B. History
 
    Rev.3, 2026‑08‑18: Distinguished a delivery copy's local signing
    identity from an item's originating and reply Origin.
+
+   Rev.4, 2026‑08‑19: Added the Peer-File and FileRequest Kinds with
+   one directly committed delivery copy each, and completed a
+   conditional FileRequest answered with Rejected reason 3.
 
 **********************************************************************

@@ -17,11 +17,36 @@ const ITEMS: TableDefinition<&str, &[u8]> = TableDefinition::new("outbound-items
 const SUBMISSIONS: TableDefinition<&[u8], &[u8]> = TableDefinition::new("outbound-submissions");
 const EVENTS: TableDefinition<&str, &[u8]> = TableDefinition::new("outbound-events");
 
+/// The TSP-0005 section 2 Kind a Job records.
+///
+/// `encode_job` writes the discriminant, so new variants are appended and the
+/// existing three keep 0, 1, and 2.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum JobKind {
 	NetMail,
 	EchoMail,
 	File,
+	/// A standalone File with no Area, addressed by the Bundle which carries it.
+	PeerFile,
+	FileRequest,
+}
+
+impl JobKind {
+	/// Whether this Kind commits one copy straight to its Destination.
+	///
+	/// TSP-0005 section 3: neither a Peer-File nor a `FileRequest` carries a
+	/// Destination value a receiver could route on, so its Destination is also
+	/// its next hop.
+	#[must_use]
+	pub const fn is_direct(self) -> bool {
+		matches!(self, Self::PeerFile | Self::FileRequest)
+	}
+
+	/// Whether this Kind is addressed by a Destination rather than an Area.
+	#[must_use]
+	pub const fn has_destination(self) -> bool {
+		matches!(self, Self::NetMail | Self::PeerFile | Self::FileRequest)
+	}
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -934,13 +959,17 @@ fn validate_new_job(value: &NewOutboundJob) -> Result<(), StoreError> {
 	if parsed.len() != 1
 		|| !matches!(
 			(value.kind, parsed[0].type_code),
-			(JobKind::NetMail | JobKind::EchoMail, types::MESSAGE) | (JobKind::File, types::FILE)
+			(JobKind::NetMail | JobKind::EchoMail, types::MESSAGE)
+				| (JobKind::File | JobKind::PeerFile, types::FILE)
+				| (JobKind::FileRequest, types::FILE_REQUEST)
 		) {
 		return Err(StoreError::InvalidPayload);
 	}
-	if matches!(value.kind, JobKind::NetMail) != matches!(value.target, JobTarget::Destination(_))
-		|| (!matches!(value.kind, JobKind::NetMail) && !matches!(value.target, JobTarget::Area(_)))
+	if value.kind.has_destination() != matches!(value.target, JobTarget::Destination(_))
+		|| (!value.kind.has_destination() && !matches!(value.target, JobTarget::Area(_)))
 		|| (value.deliveries.is_empty() && value.forward_inbound.is_none())
+		// A directly committed Kind has exactly one copy: its Destination.
+		|| (value.kind.is_direct() && value.deliveries.len() != 1)
 		|| (value.forward_inbound.is_some() != value.forward_claim_token.is_some())
 		|| value.local_identity.is_empty()
 	{
@@ -1378,6 +1407,8 @@ fn decode_job_kind(value: u8) -> Result<JobKind, StoreError> {
 		0 => Ok(JobKind::NetMail),
 		1 => Ok(JobKind::EchoMail),
 		2 => Ok(JobKind::File),
+		3 => Ok(JobKind::PeerFile),
+		4 => Ok(JobKind::FileRequest),
 		_ => Err(StoreError::CorruptRecord),
 	}
 }
@@ -1587,16 +1618,18 @@ mod tests {
 		// The item type and the target both have to agree with the kind.
 		let payload = OwnedTlv::new(
 			match kind {
-				JobKind::File => types::FILE,
+				JobKind::File | JobKind::PeerFile => types::FILE,
+				JobKind::FileRequest => types::FILE_REQUEST,
 				JobKind::NetMail | JobKind::EchoMail => types::MESSAGE,
 			},
 			key.as_bytes().to_vec(),
 		)
 		.unwrap()
 		.encode();
-		let target = match kind {
-			JobKind::NetMail => JobTarget::Destination(next_hop.to_owned()),
-			JobKind::EchoMail | JobKind::File => JobTarget::Area("SYNCHRONET".to_owned()),
+		let target = if kind.has_destination() {
+			JobTarget::Destination(next_hop.to_owned())
+		} else {
+			JobTarget::Area("SYNCHRONET".to_owned())
 		};
 		NewOutboundJob {
 			identity: identity(key, &payload),
@@ -1729,6 +1762,88 @@ mod tests {
 			.unwrap();
 		assert_eq!(snapshot.len(), 1);
 		assert_eq!(snapshot[0].job_id, file);
+		std::fs::remove_file(path).unwrap();
+	}
+
+	#[test]
+	fn the_directly_committed_kinds_round_trip_and_answer_their_own_polls() {
+		let (path, inbound) = temporary_store();
+		let store = inbound.outbound().unwrap();
+		let peer_file = commit(
+			&store,
+			&held_job("a", "fidonet#1/2", None, JobKind::PeerFile, 10),
+		);
+		let request = commit(
+			&store,
+			&held_job("b", "fidonet#1/2", None, JobKind::FileRequest, 20),
+		);
+
+		// The Kind survives encode and decode, and a Peer-File is addressed by a
+		// Destination rather than an Area.
+		let job = store.query_for("mailer", &peer_file).unwrap();
+		assert_eq!(job.kind, JobKind::PeerFile);
+		assert_eq!(job.target, JobTarget::Destination("fidonet#1/2".to_owned()));
+		assert_eq!(
+			store.query_for("mailer", &request).unwrap().kind,
+			JobKind::FileRequest
+		);
+
+		// PollFiles collects both File flavours; PollFileRequests collects only
+		// the requests.
+		let files = store
+			.claim_poll_snapshot(
+				"fidonet#1/2",
+				None,
+				&[JobKind::File, JobKind::PeerFile],
+				100,
+			)
+			.unwrap();
+		assert_eq!(files.len(), 1);
+		assert_eq!(files[0].job_id, peer_file);
+		let requests = store
+			.claim_poll_snapshot("fidonet#1/2", None, &[JobKind::FileRequest], 100)
+			.unwrap();
+		assert_eq!(requests.len(), 1);
+		assert_eq!(requests[0].job_id, request);
+
+		// Neither may be rerouted: its Destination is its only next hop.
+		assert!(matches!(
+			store
+				.reroute(
+					"mailer",
+					&peer_file,
+					110,
+					held_job("a", "fidonet#1/3", None, JobKind::PeerFile, 10).deliveries[0].clone(),
+				)
+				.unwrap(),
+			ControlOutcome::NotPermitted(_)
+		));
+		std::fs::remove_file(path).unwrap();
+	}
+
+	#[test]
+	fn a_directly_committed_job_needs_one_copy_and_a_destination() {
+		let (path, inbound) = temporary_store();
+		let store = inbound.outbound().unwrap();
+		let mut job = held_job("a", "fidonet#1/2", None, JobKind::PeerFile, 10);
+		job.target = JobTarget::Area("FILES".to_owned());
+		assert!(matches!(
+			store.commit_batch(std::slice::from_ref(&job.identity.clone()), |_, _| Ok(
+				vec![job.clone()]
+			)),
+			Err(StoreError::CorruptRecord)
+		));
+
+		// A FileRequest owns a FileRequest, never a File.
+		let mut wrong_item = held_job("b", "fidonet#1/2", None, JobKind::FileRequest, 10);
+		wrong_item.item = OwnedTlv::new(types::FILE, Vec::new()).unwrap().encode();
+		assert!(matches!(
+			store.commit_batch(
+				std::slice::from_ref(&wrong_item.identity.clone()),
+				|_, _| Ok(vec![wrong_item.clone()])
+			),
+			Err(StoreError::InvalidPayload)
+		));
 		std::fs::remove_file(path).unwrap();
 	}
 

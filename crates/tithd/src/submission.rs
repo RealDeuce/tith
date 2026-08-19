@@ -9,8 +9,9 @@ use base64::engine::general_purpose::STANDARD_NO_PAD;
 use tith_config::{ConfigurationSet, IdentityRef};
 use tith_crypto::{SecretKey, hash_submission_file, hash_submission_job, random_bytes};
 use tith_ipc::{
-	FailureDisposition as IpcDisposition, FailureNotification as IpcNotification, FailureOverride,
-	FileSubmission, Ingestion, MessageKind, MessageSubmission, NextHop, Source,
+	DeliveryMode as IpcDeliveryMode, FailureDisposition as IpcDisposition,
+	FailureNotification as IpcNotification, FailureOverride, FileRequestSubmission, FileSubmission,
+	FileTarget, Ingestion, MessageKind, MessageSubmission, NextHop, PeerDelivery, Source,
 	SourceDisposition as IpcSourceDisposition, SourceSubmission, SubmissionBody, SubmissionRequest,
 	WireFilename,
 };
@@ -24,8 +25,8 @@ use tith_store::{
 use tith_wire::address::Address;
 use tith_wire::bundle::{Identity, KeyResolver};
 use tith_wire::item::{
-	AttachmentData, ItemProvenance, MessageData, StandaloneFileData, build_originated_file,
-	build_originated_message, forward_item, validate_item,
+	AttachmentData, ItemProvenance, MessageData, StandaloneFileData, build_file_request,
+	build_originated_file, build_originated_message, forward_item, validate_item,
 };
 
 pub const SOFTWARE: &str = "tithd 0.1.0";
@@ -216,6 +217,9 @@ impl SubmissionEngine {
 				self.build_message_job(job_id, identity.clone(), message)
 			}
 			SubmissionBody::File(file) => self.build_file_job(identity.clone(), file),
+			SubmissionBody::FileRequest(request) => {
+				self.build_file_request_job(identity.clone(), request)
+			}
 			SubmissionBody::Forward {
 				inbound_id,
 				claim_token,
@@ -401,18 +405,40 @@ impl SubmissionEngine {
 	) -> Result<NewOutboundJob, BuildFailure> {
 		let (signer, provenance) =
 			self.item_provenance(&file.origin, file.signed_origin.as_deref())?;
-		validate_area_name(&file.area)?;
+		let area = match &file.target {
+			FileTarget::Area(area) => {
+				validate_area_name(area)?;
+				Some(area.clone())
+			}
+			FileTarget::Peer(_) => None,
+		};
 		let ingested = ingest_source(&file.source, "", 1, false)?;
-		let deliveries =
-			self.area_deliveries(&signer.reference, &signer.identity, &file.area, true)?;
+		let (kind, target, deliveries) = match &file.target {
+			FileTarget::Area(area) => (
+				JobKind::File,
+				JobTarget::Area(area.clone()),
+				self.area_deliveries(&signer.reference, &signer.identity, area, true)?,
+			),
+			FileTarget::Peer(peer) => {
+				let (target, delivery) = self.direct_delivery(signer, peer)?;
+				(JobKind::PeerFile, target, vec![delivery])
+			}
+		};
 		let created = now();
 		let source_record = ingested.record(SourceKind::File, 1);
+		// A distribution File repeats SeenBy, but an unlisted identity is still
+		// omitted. A peer-addressed File has no SeenBy at all.
+		let seen_by: &[Address] = if area.is_none() || signer.identity.address.is_unlisted() {
+			&[]
+		} else {
+			std::slice::from_ref(&signer.identity.address)
+		};
 		let item = build_originated_file(
 			StandaloneFileData {
 				filename: ingested.filename.clone(),
 				timestamp: ingested.timestamp,
 				contents: ingested.contents,
-				area: file.area.clone(),
+				area,
 				short_description: file.short_description.clone(),
 				long_description_lines: file.long_description_lines.clone(),
 				tear_line: file.tear_line.clone(),
@@ -424,12 +450,7 @@ impl SubmissionEngine {
 			random_u64()?,
 			created,
 			SOFTWARE,
-			// A File repeats SeenBy, but an unlisted identity is still omitted.
-			if signer.identity.address.is_unlisted() {
-				&[]
-			} else {
-				std::slice::from_ref(&signer.identity.address)
-			},
+			seen_by,
 		)
 		.map_err(|error| BuildFailure::invalid(error.to_string()))?;
 		validate_item(&item, self.nodelist.as_ref())
@@ -437,8 +458,8 @@ impl SubmissionEngine {
 			.ok_or_else(|| BuildFailure::invalid("submission did not construct an item"))?;
 		Ok(NewOutboundJob {
 			identity,
-			kind: JobKind::File,
-			target: JobTarget::Area(file.area.clone()),
+			kind,
+			target,
 			local_identity: signer.identity.address.to_string(),
 			item: item.encode(),
 			deliveries,
@@ -447,6 +468,90 @@ impl SubmissionEngine {
 			forward_inbound: None,
 			forward_claim_token: None,
 		})
+	}
+
+	fn build_file_request_job(
+		&self,
+		identity: SubmissionIdentity,
+		request: &FileRequestSubmission,
+	) -> Result<NewOutboundJob, BuildFailure> {
+		// TTS-0005 section 3 type 66 has no Origin or Signature, so the local
+		// identity supplies only the AKA and routing configuration. There is no
+		// SignedOrigin to resolve and nothing to sign.
+		let signer = self.signer(&request.origin)?;
+		if request.filename.is_empty() || request.filename.contains(['/', '\\']) {
+			return Err(BuildFailure::invalid(
+				"FileRequest Filename must be nonempty and contain no path component",
+			));
+		}
+		let (target, delivery) = self.direct_delivery(signer, &request.delivery)?;
+		let item = build_file_request(&request.filename, request.newer_than, random_u64()?)
+			.map_err(|error| BuildFailure::invalid(error.to_string()))?;
+		validate_item(&item, self.nodelist.as_ref())
+			.map_err(|error| BuildFailure::invalid(error.to_string()))?
+			.ok_or_else(|| BuildFailure::invalid("submission did not construct an item"))?;
+		Ok(NewOutboundJob {
+			identity,
+			kind: JobKind::FileRequest,
+			target,
+			local_identity: signer.identity.address.to_string(),
+			item: item.encode(),
+			deliveries: vec![delivery],
+			sources: Vec::new(),
+			created: now(),
+			forward_inbound: None,
+			forward_claim_token: None,
+		})
+	}
+
+	/// The one copy a Peer-File or `FileRequest` commits to its Destination.
+	///
+	/// TSP-0006 section 6: no Route method applies, because the item carries no
+	/// Destination a receiving node could route on. Absent an explicit mode the
+	/// copy is Active when the Destination has a usable endpoint at commitment
+	/// and Passive otherwise, which is the rule an area copy already uses.
+	fn direct_delivery(
+		&self,
+		signer: &LocalSigner,
+		peer: &PeerDelivery,
+	) -> Result<(JobTarget, NewDelivery), BuildFailure> {
+		let destination = self.resolve_identity(&peer.destination)?;
+		let usable = self.has_usable_endpoint(&peer.destination);
+		if peer.mode == Some(IpcDeliveryMode::Active) && !usable {
+			return Err(BuildFailure::permanent(
+				"explicit Active delivery has no usable endpoint",
+			));
+		}
+		// Absent, the mode follows the endpoint, which is the same rule an area
+		// copy uses; an explicit line overrides it in either direction.
+		let mode = match (peer.mode, usable) {
+			(Some(IpcDeliveryMode::Active), _) | (None, true) => DeliveryMode::Active,
+			(Some(IpcDeliveryMode::Passive), _) | (None, false) => DeliveryMode::Passive,
+		};
+		let routes = routes_for(&self.configuration, &signer.reference)
+			.ok_or_else(|| BuildFailure::permanent("local signing identity has no Routes block"))?;
+		let configured = failure_policies(
+			&self.configuration,
+			routes,
+			&signer.identity,
+			&destination,
+			// No Route line selected this hop, so no Route override applies.
+			None,
+			None,
+			&self.nodelist,
+		);
+		Ok((
+			JobTarget::Destination(destination.address.to_string()),
+			NewDelivery {
+				local_identity: signer.identity.address.to_string(),
+				next_hop: destination.address.to_string(),
+				next_hop_key: unlisted_key(&destination),
+				mode,
+				class: peer.class.clone().unwrap_or_else(|| "Normal".to_owned()),
+				retry_at: None,
+				policies: convert_policies(configured, peer.failure_policy),
+			},
+		))
 	}
 
 	fn build_forward_job(
@@ -496,10 +601,11 @@ impl SubmissionEngine {
 				));
 			}
 		};
-		let area = validated
-			.area
-			.clone()
-			.ok_or_else(|| BuildFailure::invalid("distribution item has no Area"))?;
+		// TSP-0006 section 3: a peer-addressed File owes no onward copy, so a
+		// Forward Job naming one is Invalid rather than an area lookup failure.
+		let area = validated.area.clone().ok_or_else(|| {
+			BuildFailure::invalid("Forward requires a distribution item, and this one has no Area")
+		})?;
 		let children = tith_wire::tlv::parse_sequence(&root.value)
 			.map_err(|error| BuildFailure::invalid(error.to_string()))?;
 		// Each SeenBy is a Trimmed Collection, so it must be expanded before an
@@ -1246,5 +1352,142 @@ mod tests {
 			"a copy was created back toward the incoming peer"
 		);
 		std::fs::remove_file(path).unwrap();
+	}
+
+	#[test]
+	fn a_peer_file_and_a_file_request_commit_one_copy_to_their_destination() {
+		let local_keys = SigningKeyPair::from_seed(&[50; 32]).unwrap();
+		let reachable_keys = SigningKeyPair::from_seed(&[51; 32]).unwrap();
+		let unreachable_keys = SigningKeyPair::from_seed(&[52; 32]).unwrap();
+		let local = Address::unlisted("p2p".to_owned()).unwrap();
+		// Every identity is unlisted, so no nodelist is needed: each carries its
+		// own key, which is exactly what tells two peers sharing `p2p#-1` apart
+		// and what a held copy has to record.
+		let peers = format!(
+			"Peer local\nAddress p2p#-1\nPublic-Key {}\nEnd\n\
+			 Peer reachable\nAddress p2p#-1\nPublic-Key {}\nEndpoint localhost 24555\nEnd\n\
+			 Peer unreachable\nAddress p2p#-1\nPublic-Key {}\nEnd\n",
+			STANDARD_NO_PAD.encode(local_keys.public.as_bytes()),
+			STANDARD_NO_PAD.encode(reachable_keys.public.as_bytes()),
+			STANDARD_NO_PAD.encode(unreachable_keys.public.as_bytes())
+		);
+		let configuration = Arc::new(
+			ConfigurationSet::parse(
+				&peers,
+				"Routes @local\nRoute All Using Direct Hold\nEnd\n",
+				"",
+				"",
+			)
+			.unwrap(),
+		);
+		let engine = SubmissionEngine::new(
+			Arc::clone(&configuration),
+			Arc::new(Nodelist::default()),
+			[(
+				"@local".to_owned(),
+				LocalSigner {
+					reference: IdentityRef::Peer("local".to_owned()),
+					identity: Identity {
+						address: local.clone(),
+						public_key: local_keys.public,
+					},
+					secret: Arc::new(local_keys.secret),
+				},
+			)],
+		);
+
+		let unique = SystemTime::now()
+			.duration_since(UNIX_EPOCH)
+			.unwrap()
+			.as_nanos();
+		let directory = std::env::temp_dir().join(format!("tith-peer-{unique}"));
+		std::fs::create_dir_all(&directory).unwrap();
+		let source = directory.join("bundle.su0");
+		std::fs::write(&source, b"arcmail").unwrap();
+		let path = directory.join("state.redb");
+		let inbound = InboundStore::create(&path).unwrap();
+		let store = inbound.outbound().unwrap();
+
+		// A peer with an endpoint gets an Active copy; one without gets Passive,
+		// which is the rule TSP-0006 section 6 states for an absent Next-Hop. An
+		// explicit Passive overrides the reachable peer.
+		let request = SubmissionRequest::parse(
+			format!(
+				"TITH-IPC 1\nSubmit-Items\n\
+				 Job Peer-File\nApplication \"bso\"\nIdempotency-Key \"arc\"\nOrigin \"@local\"\n\
+				 Destination \"@reachable\"\nFile\nSource-Path \"{}\"\n\
+				 Wire-Filename \"bundle.su0\"\nEnd\nEnd\n\
+				 Job Peer-File\nApplication \"bso\"\nIdempotency-Key \"held\"\nOrigin \"@local\"\n\
+				 Destination \"@unreachable\"\nFile\nSource-Path \"{}\"\n\
+				 Wire-Filename \"bundle.su0\"\nEnd\nEnd\n\
+				 Job Peer-File\nApplication \"bso\"\nIdempotency-Key \"forced\"\nOrigin \"@local\"\n\
+				 Destination \"@reachable\"\nNext-Hop Passive\nFile\nSource-Path \"{}\"\n\
+				 Wire-Filename \"bundle.su0\"\nEnd\nEnd\n\
+				 Job FileRequest\nApplication \"bso\"\nIdempotency-Key \"req\"\nOrigin \"@local\"\n\
+				 Destination \"@reachable\"\nFilename \"nodediff.zip\"\nNewer-Than 1755400000\nEnd\n\
+				 End\n",
+				source.display(),
+				source.display(),
+				source.display()
+			)
+			.as_bytes(),
+		)
+		.unwrap();
+		let BatchCommit::Committed(outcomes) = engine.submit(&request, &store).unwrap() else {
+			panic!("commit expected");
+		};
+		let ids: Vec<&str> = outcomes
+			.iter()
+			.map(|outcome| {
+				let CommitOutcome::New { job_id, .. } = outcome else {
+					panic!("new job expected");
+				};
+				job_id.as_str()
+			})
+			.collect();
+
+		for (id, expected) in ids.iter().zip([
+			DeliveryMode::Active,
+			DeliveryMode::Passive,
+			DeliveryMode::Passive,
+			DeliveryMode::Active,
+		]) {
+			let job = store.query_for("bso", id).unwrap();
+			assert_eq!(job.deliveries.len(), 1, "{id} has more than one copy");
+			assert_eq!(job.deliveries[0].mode, expected, "{id} has the wrong mode");
+			// The next hop is the Destination itself; there is nowhere else to go.
+			assert!(matches!(
+				&job.target,
+				JobTarget::Destination(value) if value == &job.deliveries[0].next_hop
+			));
+		}
+		assert_eq!(
+			store.query_for("bso", ids[0]).unwrap().kind,
+			JobKind::PeerFile
+		);
+
+		// The Peer-File carries no Area, Via, or SeenBy, and the FileRequest is
+		// the unsigned request TTS-0005 type 66 defines.
+		let values = parse_sequence(&store.item(ids[0]).unwrap()).unwrap();
+		let validated = validate_item(&values[0], &|_: &Address| None)
+			.unwrap()
+			.unwrap();
+		assert_eq!(validated.kind, ItemKind::File);
+		assert_eq!(validated.area, None);
+
+		let request_job = store.query_for("bso", ids[3]).unwrap();
+		assert_eq!(request_job.kind, JobKind::FileRequest);
+		assert!(
+			request_job.sources.is_empty(),
+			"a FileRequest has no Source"
+		);
+		let values = parse_sequence(&store.item(ids[3]).unwrap()).unwrap();
+		let read = tith_wire::item::read_file_request(&values[0]).unwrap();
+		assert_eq!(read.filename, "nodediff.zip");
+		assert_eq!(read.timestamp, Some(1_755_400_000));
+
+		drop(store);
+		drop(inbound);
+		std::fs::remove_dir_all(directory).unwrap();
 	}
 }

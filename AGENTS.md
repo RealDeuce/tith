@@ -163,6 +163,12 @@ need to guess.
 - NetMail has a Destination and no Area; Echomail has an Area and no
   Destination.  This lets Echomail replicate without rewriting a signed,
   peer-specific destination.
+- A standalone File is addressed the same two ways, but only one of them is in
+  the item.  A distribution File carries an Area, Via, and SeenBy; a
+  peer-addressed File carries none of the three and is addressed solely by the
+  Bundle Destination, as is a FileRequest.  Neither can therefore be routed or
+  relayed: a node given one in a Bundle addressed to itself takes it as its own,
+  so its Destination is always also its next hop.
 - Nodelist public keys are part of the authentication trust path, not merely
   connection metadata.
 
@@ -199,11 +205,13 @@ lengths and outstanding-response accounting cannot resolve.
   bytes; the caller states which applies. `K/S` is the message, not its
   attachments.
 - `crates/tith-bso` owns the FTS-5005.003 Binkley Style Outbound layout, flow
-  file naming and flavour order, reference files, and the `.bsy` and `.hld`
-  control files. It is a legacy boundary like the two crates above. It follows
-  FTS-5005 as written rather than any one implementation's documented
+  file naming and flavour order, reference files, request lists, and the `.bsy`
+  and `.hld` control files. It is a legacy boundary like the two crates above. It
+  follows FTS-5005 as written rather than any one implementation's documented
   limitations: derived names are matched in either case, and the default zone
-  is searched under both the bare root and its zone-suffixed form.
+  is searched under both the bare root and its zone-suffixed form. A `.req` has
+  no flavour letter of its own, so it is classified before the flavour and
+  signature are split apart.
 - `crates/tith-ledger` is the TSP-0013 section 2 private durable adapter
   ledger. It records the intended conversion and generated names before
   publication, and its state ordering is what recovery uses; it must never be
@@ -218,6 +226,14 @@ lengths and outstanding-response accounting cannot resolve.
   the FSC-0086.001 request-processor boundary. A conversion which cannot be
   represented is refused, never made lossy, and a step blocked on standards
   work fails loudly naming its issue rather than degrading silently.
+  A claimed FileRequest is answered rather than published: the processor decides
+  which files the peer may have, and each becomes a TSP-0006 `Job Peer-File`
+  addressed back to it, keyed on InboundID so a redelivery does not send twice.
+  The response markers map only as far as TSP-0006 can promise — `=` is Delete,
+  which fires after confirmed delivery, and `-` asks for erasure whatever
+  happens, which has no native disposition, so it stays Keep and the adapter
+  removes the file itself. A node with no configured processor will never serve
+  a request, so it rejects one rather than deferring it forever.
 - `crates/tith` is the client multiplexer binary. It carries no protocol logic
   and only dispatches subcommands. `tith-submit` is installed as a link to it,
   so the file stem of `argv[0]` may select the submit client directly; keep
@@ -231,9 +247,14 @@ lengths and outstanding-response accounting cannot resolve.
   `tith bso scan` holds the same invariant through the `.bsy` lock, which is
   taken with an exclusive create and released on every exit path. It reads an
   outbound and submits from it; it never lays one down. It deletes a packet and
-  rewrites a reference file only after Committed, and never deletes or
-  truncates a referenced payload — that directive is carried to the service as
-  a `Source-Disposition` and performed there, after delivery.
+  rewrites a reference file or request list only after Committed, and never
+  deletes or truncates a referenced payload — that directive is carried to the
+  service as a `Source-Disposition` and performed there, after delivery.
+  A reference entry no message claims and no TIC accompanies is a peer-addressed
+  standalone File, and a `.req` action is a FileRequest. Both need a Destination,
+  which needs `--domain`; without one they are reported and left in place rather
+  than addressed by guesswork. The Hold flavour becomes `Next-Hop Passive` so
+  "wait for their poll" survives the conversion.
   `tith inbound run` is the same boundary in the other direction. It publishes
   every object under a private staging name and then an exclusive create which
   never replaces an existing file, publishes companions before the object that

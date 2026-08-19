@@ -3,10 +3,10 @@ TITH                                              THIS ISN'T THAT HARD
 **********************************************************************
 
 Publication:  TSP‑0003
-Revision:     3
+Revision:     4
 Title:        Legacy Data Formats and TITH
 Author(s):    Stephen Hurd
-Date:         2026‑08‑18
+Date:         2026‑08‑19
 ════════════════════════════════════════════════════════════════════════
 
 Status of this document
@@ -1105,6 +1105,12 @@ Contents
   rejection record, so an adapter MUST NOT manufacture Accepted or
   Rejected from a missing response or from the end of a legacy session.
 
+  An adapter converting a REQ file for onward native transmission
+  submits each action as one TSP‑0006 Job FileRequest addressed to the
+  peer its legacy placement selected.  The files answering an accepted
+  request are peer‐addressed standalone Files and are submitted as
+  TSP‑0006 Peer-File Jobs; they are not a distribution area.
+
 
 9. TIC File Distribution
 ──────────────────────────
@@ -1189,6 +1195,18 @@ Contents
   grant authority.  A gateway which requires end‑to‑end preservation of
   an unknown keyword must retain the work rather than claim a lossless
   conversion.
+
+  An FTS‑5005.003 reference file entry which no packed Message claims
+  and which has no accompanying TIC is neither an attachment nor an
+  area distribution.  An ARCmail bundle is the ordinary example.  It
+  maps to one peer‐addressed standalone TTS‑0005 File and is submitted
+  as a TSP‑0006 Peer-File Job.  Its Filename is the final component of
+  the entry, which is a legacy pathname and not itself a Filename
+  value; its Destination is the address the entry's placement selects;
+  and its section 3.1 directive supplies the TSP‑0006
+  Source-Disposition rather than authorizing an immediate removal.
+  The entry has no legacy description, magic name, or replacement name,
+  so the resulting File carries none.
 
 
 10. Validation and Compatibility
@@ -1360,6 +1378,9 @@ A. References
 
   [FTS‑0006.002] "YOOHOO and YOOHOO/2U2", FTSC, 1991‑11‑30.
 
+  [FTS‑5005.003] Revision 3, "Advanced BinkleyTerm Style Outbound flow
+  and control files", FTSC, 2016‑10‑31.
+
   [FTS‑5006.001] Revision 1, "TIC file format", FTSC,
   2016‑11‑07.
 
@@ -1370,6 +1391,8 @@ A. References
   2006‑10.
 
   [Policy] "FidoNet Policy Document", Version 4.07, 1989‑06‑09.
+
+  [TSP‑0006] "Outbound Job Submission", TITH, 2026‑08‑19.
 
   [TSP‑0013] "Legacy Mailer and Tosser IPC Adapters", TITH,
   2026‑08‑18.
@@ -1398,5 +1421,9 @@ B. History
    item authentication states and documented warning integrity,
    automatic‐reply flood risk, and the distinct Policy 4.07 routing
    return obligation.
+
+   Rev.4, 2026‑08‑19: Mapped an unclaimed reference file entry to a
+   peer‐addressed standalone File and named the TSP‑0006 Jobs which
+   submit a converted request and its answering files.
 
 **********************************************************************

@@ -3,10 +3,10 @@ TITH                                              THIS ISN'T THAT HARD
 **********************************************************************
 
 Publication:  TSP‑0006
-Revision:     5
+Revision:     6
 Title:        Outbound Job Submission
 Author(s):    Stephen Hurd
-Date:         2026‑08‑18
+Date:         2026‑08‑19
 ══════════════════════════════════════════════════════════════════════
 
 Status of this document
@@ -24,10 +24,11 @@ Abstract
 
   This document defines the local IPC operations through which an
   Application atomically submits one or more TSP‑0005 outbound Jobs.
-  It specifies NetMail, EchoMail, and file distribution Job syntax,
-  private file ingestion, ownership, idempotency and conflict
-  detection, source‐independent lookup, batch commitment, generated
-  wire filenames, results, and a command‐line client.
+  It specifies NetMail, EchoMail, file distribution, peer‐addressed
+  file, and file request Job syntax, private file ingestion,
+  ownership, idempotency and conflict detection, source‐independent
+  lookup, batch commitment, generated wire filenames, results, and a
+  command‐line client.
 
 Contents
 ────────
@@ -76,9 +77,20 @@ Contents
 
   Submit-Items is the item‐aware operation.  It uses the same Job,
   ingestion, ownership, idempotency, and result model for NetMail,
-  EchoMail, and standalone file distribution.  Submit remains its
-  original NetMail‐only grammar so an existing IPC version 1 operation
-  is not silently changed.
+  EchoMail, standalone file distribution, a peer‐addressed standalone
+  File, and a FileRequest.  Submit remains its original NetMail‐only
+  grammar so an existing IPC version 1 operation is not silently
+  changed.
+
+  TTS‑0005 addresses a standalone File in two different ways.  A
+  distribution File carries an Area and travels to every configured
+  link for that area.  A File which is not part of a distribution
+  network carries no Area, Via, or SeenBy, and the enclosing Bundle
+  Destination addresses it; an ARCmail bundle handed to one peer is the
+  ordinary example.  A FileRequest is likewise addressed only by its
+  Bundle Destination.  Neither item contains a Destination a receiver
+  could route on, so both are committed directly to the submitted
+  Destination and are never relayed through another node.
 
   At a legacy FTN boundary, exported EchoMail and file distribution
   network (FDN) transfers are NetMail traffic: individual messages,
@@ -214,6 +226,56 @@ Contents
     End
     End
 
+  A peer‐addressed standalone File item Job has this grammar:
+
+    Job Peer-File
+    Application "<application-name>"
+    Idempotency-Key "<key>"
+    Origin "<origin>"
+    [Signed-Origin "<local-identity>"]
+    Destination "<destination-identity>"
+    [Class "<configuration-name>"]
+    [Next-Hop Active|Passive]
+    [Failure-Policy Route|<disposition> Notify <notification>]
+    File
+    Source-Path "<local-pathname>"|Source-Handle <unsigned-integer>
+    [Ingestion Copy|Move]
+    [Source-Disposition Keep|Delete|Truncate]
+    Wire-Filename "<UTF-8-string>"
+    [File-Timestamp Auto|<unsigned-integer>]
+    [Short-Description "<UTF-8-string>"]
+    [Long-Description-Line "<UTF-8-string>"]...
+    [Tear-Line "<UTF-8-string>"]
+    [Magic-Word "<UTF-8-string>"]
+    [Replaces "<UTF-8-string>"]
+    [Expected-Size <unsigned-integer>]
+    [Expected-Hash "<base64-hash>"]
+    End
+    End
+
+  Its File block is the one in a Kind File Job unchanged.  Only the
+  Job‐level Area is replaced by Destination and the three delivery
+  lines a directly committed item needs.
+
+  A file request Job has this grammar:
+
+    Job FileRequest
+    Application "<application-name>"
+    Idempotency-Key "<key>"
+    Origin "<origin>"
+    Destination "<destination-identity>"
+    Filename "<UTF-8-string>"
+    [Newer-Than <unsigned-integer>]
+    [Class "<configuration-name>"]
+    [Next-Hop Active|Passive]
+    [Failure-Policy Route|<disposition> Notify <notification>]
+    End
+
+  One Job carries exactly one TTS‑0005 FileRequest.  An Application
+  requesting several files submits one Job for each, which may be one
+  Batch.  A FileRequest Job has no Source, no ingestion, and no
+  cleanup obligation.
+
   A claimed inbound distribution item uses this grammar:
 
     Job Forward
@@ -243,12 +305,17 @@ Contents
   item or transmitted.
 
   The opening line of an originating Submit-Items Job records its
-  TSP‑0005 Kind.  The original Submit operation always creates Kind
-  NetMail.  Job Forward preserves the Kind of its claimed inbound item.
+  TSP‑0005 Kind: NetMail, EchoMail, File, Peer-File, or FileRequest.
+  The original Submit operation always creates Kind NetMail.  Job
+  Forward preserves the Kind of its claimed inbound item.
 
   Without Signed-Origin, Origin identifies one local identity having a
   TSP‑0002 Routes block.  It uses the local identity syntax defined
   there, and the service MUST possess its secret signing key.
+
+  A FileRequest has no Origin, SignedOrigin, or Signature of its own,
+  so its Origin line identifies only the local identity whose Bundle
+  carries the request.  Signed-Origin is prohibited for that Kind.
 
   With Signed-Origin, Origin is a canonical listed TTS‑0004 address
   used as the item's originating and reply address.  No public key may
@@ -262,6 +329,10 @@ Contents
   item Kind.  The Service MUST authorize the Application to originate
   that area and to use both the submitted Origin and Signed-Origin.
 
+  A Peer-File or FileRequest is authorized against its Destination
+  rather than an area.  Its local identity requires a Routes block and
+  requires no Areas block at all.
+
   Inbound identifies one current TSP‑0011 item and ClaimToken obtained
   by the same Application through TSP‑0012.  For a New Forward Job, the
   item MUST be EchoMail or a standalone distribution File.  Its
@@ -269,6 +340,12 @@ Contents
   peer supplies distribution exclusion.  The Service MUST authorize
   the caller for the claim and MUST NOT accept a pathname, replacement
   payload, Origin, Area, or routing override in that Job.
+
+  A peer‐addressed standalone File and a FileRequest owe no onward
+  copy: neither carries an Area to distribute into, and neither has a
+  Destination beyond the peer which sent it.  Both are final‐delivery
+  or administrative work, and a Job Forward request naming one is
+  Invalid.
 
   Destination is a canonical listed TTS‑0004 address or a peer
   reference naming an exact unlisted identity in the TSP‑0002 peers
@@ -278,11 +355,27 @@ Contents
   PublicKey when its resolved Origin is unlisted.  Signed-Origin itself
   has the conditional PublicKey required by TTS‑0005.
 
-  Destination occurs only for NetMail.  Area occurs only for EchoMail
-  and File and supplies the exact nonempty TTS‑0005 AreaName.  It is
-  compared with TSP‑0002 configuration by exact UTF‑8 bytes without
-  normalization or case folding.  It MUST NOT contain a control code
-  point, Space, or Horizontal Tab at either end.
+  Destination occurs for NetMail, Peer-File, and FileRequest.  For a
+  NetMail it is the Message Destination and the item's ultimate
+  recipient.  For a Peer-File or FileRequest the item contains no
+  Destination value at all; the submitted Destination is the exact peer
+  the enclosing Bundle addresses, and it is therefore also the next
+  hop.  When it is unlisted, the Service retains that peer's PublicKey
+  as the local delivery metadata TTS‑0005 section 3 requires for a held
+  value.
+
+  Area occurs only for EchoMail and File and supplies the exact
+  nonempty TTS‑0005 AreaName.  It is compared with TSP‑0002
+  configuration by exact UTF‑8 bytes without normalization or case
+  folding.  It MUST NOT contain a control code point, Space, or
+  Horizontal Tab at either end.
+
+  Filename occurs only for FileRequest and supplies the TTS‑0005
+  Filename naming the requested file.  It MUST be nonempty and MUST NOT
+  contain a path component.  Newer-Than supplies the optional TTS‑0005
+  FileRequest Timestamp, which makes the request conditional on the
+  requested file being newer than that instant.  Auto is not accepted;
+  a condition has no local instant to derive.
 
   To-User and From-User occur only for a Message and supply TTS‑0005
   ToUserName and FromUserName.
@@ -301,32 +394,48 @@ Contents
   restrictions specified by TTS‑0005.  The service supplies Signature,
   RequestIdentifier, Via, and routing metadata.
 
-  Class occurs only for NetMail.  It is a TSP‑0002 delivery class
-  configuration name, defaults to Normal, and is not transmitted.
+  Class occurs for NetMail, Peer-File, and FileRequest.  It is a
+  TSP‑0002 delivery class configuration name, defaults to Normal, and
+  is not transmitted.  An EchoMail or File area copy instead takes its
+  Class from its Send-To line.
 
-  Next-Hop occurs only for NetMail.  Absent or Route applies normal
-  TSP‑0002 routing.  Active or Passive explicitly commits the Job to the
-  listed address or peer reference in that line without applying a
-  NetMail Route method.  The service MUST authorize an explicit next
-  hop.  Loop detection, Down status, and failure handling still apply.
-  Active requires a usable endpoint and satisfaction of caller
-  restrictions when committed; Passive does not require an endpoint.
+  Next-Hop occurs for NetMail, Peer-File, and FileRequest, and has a
+  different form for each group.
 
-  Failure-Policy occurs only for NetMail.  Absent or Route uses
-  policies resolved by TSP‑0002.  Otherwise it supplies one complete
-  override for all permanent failure kinds.  Disposition is Dead-Letter
-  or Discard; notification is None, Sender, Origin-Sysop, or Both.  An
-  override requires authorization and is distinct from
-  Source-Disposition.
+  For NetMail, absent or Route applies normal TSP‑0002 routing.  Active
+  or Passive explicitly commits the Job to the listed address or peer
+  reference in that line without applying a NetMail Route method.  The
+  service MUST authorize an explicit next hop.  Loop detection, Down
+  status, and failure handling still apply.
+
+  For a Peer-File or FileRequest the line names no identity and Route
+  is prohibited.  The submitted Destination is the only next hop the
+  item can have, so the line selects only the delivery mode.  Absent,
+  the copy is Active when the Destination has a usable endpoint at
+  commitment and Passive otherwise.
+
+  In every form, Active requires a usable endpoint and satisfaction of
+  caller restrictions when committed; Passive does not require an
+  endpoint.
+
+  Failure-Policy occurs for NetMail, Peer-File, and FileRequest.
+  Absent or Route uses policies resolved by TSP‑0002.  Otherwise it
+  supplies one complete override for all permanent failure kinds.
+  Disposition is Dead-Letter or Discard; notification is None, Sender,
+  Origin-Sysop, or Both.  An override requires authorization and is
+  distinct from Source-Disposition.  A FileRequest has no Origin and no
+  FromUserName, so Sender and Origin-Sysop have no target for one and
+  the notice is omitted as TSP‑0002 section 6 already requires.
 
 
 4. Attachment and File Sources
 ──────────────────────────────
 
   Each Attachment becomes one File child in submission order.  The File
-  block in a Kind File Job supplies the one standalone File's Contents
-  and metadata.  Attachment and File blocks are both Sources for the
-  ingestion and ownership rules below.
+  block in a Kind File or Peer-File Job supplies the one standalone
+  File's Contents and metadata.  Attachment and File blocks are both
+  Sources for the ingestion and ownership rules below.  A FileRequest
+  Job contains neither and has no Source.
 
   Source-Path identifies an arbitrary‐length local pathname in the
   host's UTF‑8 pathname representation.  It MUST NOT contain Null.  The
@@ -371,9 +480,13 @@ Contents
 
   Short-Description, Long-Description-Line, Tear-Line, Magic-Word, and
   Replaces in a standalone File have the corresponding TTS‑0005
-  meanings, encodings, ordering, and restrictions.  The Service
-  supplies its Area, Origin, PublicKey when required, Signature,
-  RequestIdentifier, initial Via, and routing metadata.
+  meanings, encodings, ordering, and restrictions.  For a distribution
+  File the Service supplies its Area, Origin, PublicKey when required,
+  Signature, RequestIdentifier, initial Via, and routing metadata.  For
+  a Peer-File it supplies the Origin, PublicKey when required,
+  Signature, and RequestIdentifier, and supplies no Area, Via, or
+  SeenBy, because TTS‑0005 section 3 type 65 marks all three as values
+  of a file that is part of a distribution network.
 
   Expected-Size is the exact Source byte count.  Expected-Hash is the
   43‑character base 64 representation, without trailing Equals Sign,
@@ -469,6 +582,17 @@ Contents
   conditionally required PublicKey, and the submitted optional File
   metadata.
 
+  A Peer-File Job produces one standalone TTS‑0005 File containing the
+  same values except Area.  It contains no Area, no Via, and no SeenBy.
+  The Bundle carrying it addresses its recipient.
+
+  A FileRequest Job produces one TTS‑0005 FileRequest containing the
+  submitted Filename, the Newer-Than Timestamp when one was supplied,
+  and a RequestIdentifier.  It has no Origin, SignedOrigin, PublicKey,
+  or Signature, and the Service MUST NOT add one.  Its enclosing
+  payload SignedTLV is its complete and intended authentication, as
+  TSP‑0011 section 5.1 states.
+
   The service generates the TSP‑0005 JobID before generating filenames.
   Generate produces the 32 hexadecimal JobID digits, Hyphen‐Minus
   (U+002D), the Attachment's one‐based decimal position without leading
@@ -484,10 +608,13 @@ Contents
 
   The Service signs a newly originated Message or standalone File after
   all signed children and private Contents are fixed.  It then appends
-  RequestIdentifier and the initial Via.  A Message next appends the
+  RequestIdentifier, and appends the initial Via for every item which
+  carries one.  A Peer-File carries none.  A Message next appends the
   submitted AdditionalKludgeLine values.  The effective local signer,
   not a distinct reply Origin, supplies routing configuration, Via,
-  SeenBy, and the local AKA recorded with every delivery copy.
+  SeenBy, and the local AKA recorded with every delivery copy.  A
+  FileRequest is not signed; its local identity supplies only the local
+  AKA and routing configuration.
 
   A Forward Job preserves the exact signed children and end‐to‐end
   Signature of its inbound item.  It replaces RequestIdentifier for the
@@ -507,6 +634,16 @@ Contents
   it creates one copy for every Send-To in the applicable area block.
   Such an item has no immediate incoming Peer to exclude.  An undefined
   area or an area without a Send-To is PermanentFailure.
+
+  Before New for a Peer-File or FileRequest, the Service creates
+  exactly one delivery copy committed directly to the submitted
+  Destination.  It MUST NOT apply a NetMail Route method, an ancestor,
+  or any next hop other than that Destination, because the item carries
+  no Destination a receiving node could route on and would be taken as
+  that node's own.  Its mode is the one selected by Next-Hop or, absent
+  that line, Active when the Destination has a usable endpoint at
+  commitment and Passive otherwise.  A Down Destination, or an explicit
+  Active mode with no usable endpoint, is PermanentFailure.
 
   Before New for Forward, the Service applies TSP‑0002 distribution
   pruning using the inbound item's immediate Peer and existing SeenBy.
@@ -879,6 +1016,42 @@ Contents
     End
     End
 
+  A gateway hands one peer an ARCmail bundle which belongs to no area
+  and to no message.  Its Destination is the peer, and its delivery is
+  held for that peer to collect:
+
+    TITH-IPC 1
+    Submit-Items
+    Job Peer-File
+    Application "bso"
+    Idempotency-Key "0068002400.su0-1755561600"
+    Origin "fidonet#1:123/45"
+    Destination "fidonet#1:234/56"
+    Next-Hop Passive
+    File
+    Source-Path "/var/spool/bink/outbound/0068002400.su0"
+    Ingestion Copy
+    Source-Disposition Delete
+    Wire-Filename "0068002400.su0"
+    End
+    End
+    End
+
+  A gateway converts one FTS‑0006.002 REQ action into one request for a
+  file newer than the copy it already holds:
+
+    TITH-IPC 1
+    Submit-Items
+    Job FileRequest
+    Application "bso"
+    Idempotency-Key "req-fidonet#1:234/56-nodediff.zip"
+    Origin "fidonet#1:123/45"
+    Destination "fidonet#1:234/56"
+    Filename "nodediff.zip"
+    Newer-Than 1755561600
+    End
+    End
+
   A native tosser forwards a claimed EchoMail or distribution File
   without reconstructing its signed contents:
 
@@ -919,6 +1092,24 @@ Contents
   distinct native semantic Kind after conversion so the legacy NetMail
   carriage fact does not accidentally select TITH Destination routing
   instead of the area's explicit links.
+
+  Peer-File is a separate Kind from File rather than a File Job with
+  Area replaced, for the same reason NetMail and EchoMail are separate
+  Kinds although both own a Message: the two are routed, authorized,
+  and rerouted by different rules, and the Kind is what selects them.
+  Neither new Kind may be rerouted at all.  An item with no Destination
+  value has exactly one place it can go, and pointing it somewhere else
+  would silently deliver it to the wrong node instead of failing.
+
+  A FileRequest reply does not have to arrive during the exchange which
+  carried the request.  TTS‑0005 section 6 permits an accepted
+  FileRequest to return zero Files, and section 3 type 70 lets a peer
+  collect held standalone Files later with PollFiles.  A receiver whose
+  request processing is asynchronous therefore accepts the request,
+  submits each answering file as a Peer-File Job addressed to the
+  requester, and lets the ordinary delivery or poll path carry them.
+  Without a Job for that reply, the only conforming answer would have
+  been to refuse every request a node could not serve synchronously.
 
 
 A. References
@@ -986,5 +1177,9 @@ B. History
 
    Rev.5, 2026‑08‑18: Restricted Job Forward to Origin-Valid and
    SignedOrigin-Valid inbound items.
+
+   Rev.6, 2026‑08‑19: Added the Peer-File and FileRequest Kinds so a
+   peer‐addressed standalone File and a FileRequest can be originated,
+   and defined their single directly committed delivery copy.
 
 **********************************************************************

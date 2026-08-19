@@ -426,14 +426,14 @@ fn payload_responses(
 
 /// The spool kinds a Poll value asks for.
 ///
-/// `PollFileRequests` has no spool kind because a `FileRequest` cannot yet be
-/// submitted; TTS-0005 section 3 accepts an empty snapshot with no returned
-/// values, which is exactly what an empty kind list produces.
+/// TSP-0002 section 8: `PollFiles` returns both held distribution Files and
+/// held peer-addressed Files, because TTS-0005 section 3 type 70 asks for held
+/// standalone Files without distinguishing them.
 fn poll_kinds(kind: ItemKind) -> Option<&'static [JobKind]> {
 	match kind {
 		ItemKind::PollMessages => Some(&[JobKind::NetMail, JobKind::EchoMail]),
-		ItemKind::PollFiles => Some(&[JobKind::File]),
-		ItemKind::PollFileRequests => Some(&[]),
+		ItemKind::PollFiles => Some(&[JobKind::File, JobKind::PeerFile]),
+		ItemKind::PollFileRequests => Some(&[JobKind::FileRequest]),
 		_ => None,
 	}
 }

@@ -90,6 +90,78 @@ pub fn as_attachment(reference: &Reference) -> Attachment {
 	}
 }
 
+/// One action from an FTS-0006.002 request list.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Request {
+	pub filename: String,
+	/// A plus time, which asks for the file only if it is newer than this.
+	pub newer_than: Option<u64>,
+	/// The exact original line, so an action with no TITH representation can be
+	/// written back byte for byte.
+	pub line: String,
+	/// True when the line has no exact TITH representation and must be retained.
+	///
+	/// TSP-0003 section 8: a minus time asks for files at or older than a
+	/// timestamp, and TTS-0005 has no request for that.
+	pub unsupported: bool,
+}
+
+/// Parses a request list, per TSP-0003 section 8.
+///
+/// "Import accepts CR, LF, or CRLF line endings. Each nonempty line is split
+/// into Filename, an optional `!password`, and an optional signed decimal update
+/// time in that order." The password may be checked by legacy link policy but is
+/// never carried into TITH, so it is dropped here rather than returned.
+#[must_use]
+pub fn parse_request(contents: &str) -> Vec<Request> {
+	contents
+		.split(['\r', '\n'])
+		.filter_map(|raw| {
+			let line = raw.trim();
+			if line.is_empty() {
+				return None;
+			}
+			let mut fields = line.split_whitespace();
+			let filename = fields.next()?;
+			let mut newer_than = None;
+			let mut unsupported = false;
+			for field in fields {
+				if field.starts_with('!') {
+					// A legacy transaction password. It is not transmitted, stored as
+					// a TITH credential, or treated as native authority.
+					continue;
+				}
+				match field.strip_prefix('+') {
+					Some(value) => newer_than = value.parse().ok(),
+					// A minus time has no exact TITH representation, and neither does
+					// anything else this grammar does not define.
+					None => unsupported = true,
+				}
+			}
+			// The filename restrictions are the ones section 8 states for canonical
+			// output; a path component would also fail TTS-0005 type 96.
+			if filename.contains(['/', '\\', '\0']) || filename.starts_with(['+', '-', '!']) {
+				unsupported = true;
+			}
+			Some(Request {
+				filename: filename.to_owned(),
+				newer_than,
+				line: line.to_owned(),
+				unsupported,
+			})
+		})
+		.collect()
+}
+
+/// Rewrites a request list without the submitted actions.
+///
+/// The same rule the reference files use: the file is deleted when nothing is
+/// left, and an action which was not submitted is written back exactly as it
+/// arrived.
+pub fn rewrite_request(path: &Path, keep: &[String]) -> io::Result<()> {
+	rewrite_reference(path, keep)
+}
+
 /// A held `.bsy` lock. Dropping it removes the file.
 #[derive(Debug)]
 pub struct BusyLock {
@@ -238,6 +310,27 @@ mod tests {
 		);
 		// The original text is preserved so an unconsumed line round-trips.
 		assert_eq!(references[0].line, "#bundle.su0");
+	}
+
+	#[test]
+	fn reads_every_request_action_form() {
+		let requests = parse_request(
+			"nodediff.zip\r\nfiles.zip +1755400000\rsecret.zip !password\nold.zip -1755400000\n\n",
+		);
+		let names: Vec<_> = requests.iter().map(|item| item.filename.as_str()).collect();
+		assert_eq!(
+			names,
+			["nodediff.zip", "files.zip", "secret.zip", "old.zip"]
+		);
+		assert_eq!(requests[1].newer_than, Some(1_755_400_000));
+		// A password is legacy link policy only and never reaches TITH.
+		assert_eq!(requests[2].newer_than, None);
+		assert!(!requests[2].unsupported);
+		// TSP-0003 section 8: a minus time has no exact TITH representation.
+		assert!(requests[3].unsupported);
+		assert_eq!(requests[3].line, "old.zip -1755400000");
+		// A Filename may not carry a path component.
+		assert!(parse_request("sub/dir.zip\n")[0].unsupported);
 	}
 
 	#[test]

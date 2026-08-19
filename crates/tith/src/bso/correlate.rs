@@ -23,8 +23,8 @@ pub enum Resolution {
 	Attached,
 	/// Accompanied by a TIC, so it is an area distribution `File`.
 	Tic { area: String },
-	/// Nothing claimed it. TSP-0006 has no Job for a peer-addressed standalone
-	/// `File` (issue 17), so it is reported and left in the flow file.
+	/// Nothing claimed it, so it is a peer-addressed standalone `File` in its own
+	/// right and is submitted as a TSP-0006 `Job Peer-File`.
 	Unclaimed,
 }
 
@@ -43,7 +43,7 @@ pub struct Correlation {
 	pub messages: Vec<CorrelatedMessage>,
 	/// Entries that are area distributions, with the area their TIC names.
 	pub distributions: Vec<(Reference, String)>,
-	/// Entries nothing claimed, left in the flow file.
+	/// Entries nothing claimed. Each is a peer-addressed standalone `File`.
 	pub unclaimed: Vec<Reference>,
 }
 
@@ -266,7 +266,7 @@ mod tests {
 	}
 
 	#[test]
-	fn an_arcmail_bundle_is_left_unclaimed() {
+	fn an_arcmail_bundle_is_a_peer_addressed_file() {
 		let directory = temp_dir("arcmail");
 		let references = parse_reference("#0068002400.su0\n");
 		let correlation = correlate(Vec::new(), &references, &directory, AttachStyle::Flags);

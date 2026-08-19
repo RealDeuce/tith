@@ -766,6 +766,8 @@ fn outbound_query_result(job: &OutboundJob, item_aware: bool, paths: bool) -> Ve
 					JobKind::NetMail => "NetMail",
 					JobKind::EchoMail => "EchoMail",
 					JobKind::File => "File",
+					JobKind::PeerFile => "Peer-File",
+					JobKind::FileRequest => "FileRequest",
 				}),
 			],
 		});

@@ -388,30 +388,51 @@ impl Outbound {
 		let destination = self
 			.next_hop(&group[0].delivery)
 			.ok_or("next hop has no resolvable public key")?;
-		let mut items = Vec::with_capacity(group.len());
-		for (index, claim) in group.iter().enumerate() {
-			let mut values = parse_sequence(&claim.item)?;
-			if values.len() != 1 {
+		let mut values = Vec::with_capacity(group.len());
+		for claim in group {
+			let mut parsed = parse_sequence(&claim.item)?;
+			if parsed.len() != 1 {
 				return Err("spooled item is not a single TLV value".into());
 			}
+			values.push(parsed.remove(0));
+		}
+		// TTS-0005 section 2 RECOMMENDS the first payload SignedTLV hold every
+		// FileRequest, so the peer can validate it and start returning files while
+		// the rest is still arriving. Splitting reorders the requests, so the
+		// original group position travels with each one and the outcomes are
+		// scattered back at the end.
+		let (mut ordered, mut rest): (Vec<_>, Vec<_>) = values
+			.into_iter()
+			.enumerate()
+			.partition(|(_, value)| value.type_code == types::FILE_REQUEST);
+		let split = !ordered.is_empty() && !rest.is_empty();
+		ordered.append(&mut rest);
+
+		let mut items = Vec::with_capacity(ordered.len());
+		for (position, (_, value)) in ordered.iter().enumerate() {
 			// Every request in a Bundle needs its own RequestIdentifier, and these
 			// were numbered when they were spooled, independently of each other.
-			let identifier = u64::try_from(index).map_err(|_| "group is too large")? + 1;
-			items.push(set_request_identifier(&values.remove(0), identifier)?);
+			let identifier = u64::try_from(position).map_err(|_| "group is too large")? + 1;
+			items.push(set_request_identifier(value, identifier)?);
 		}
-		let encoded = build_bundle(
-			&local.identity,
-			&local.secret,
-			&destination,
-			now,
-			vec![items],
-		)?;
+		let payloads = if split {
+			let requests = ordered
+				.iter()
+				.filter(|(_, v)| v.type_code == types::FILE_REQUEST)
+				.count();
+			let remainder = items.split_off(requests);
+			vec![items, remainder]
+		} else {
+			vec![items]
+		};
+		let encoded = build_bundle(&local.identity, &local.secret, &destination, now, payloads)?;
 		let bundle = Bundle::parse(&encoded, self)?;
 		let tracker = ResponseTracker::for_bundle(&bundle, self)?;
 		let mut session = ClientSession::new(tracker);
 		let mut stream = self.connect(&destination)?;
 		let exchange = self.converse(&mut stream, &encoded, &mut session, local, &destination)?;
-		Ok(Self::outcomes(group, &exchange.responses, next_attempt))
+		let sent: Vec<usize> = ordered.into_iter().map(|(index, _)| index).collect();
+		Ok(Self::outcomes(&sent, &exchange.responses, next_attempt))
 	}
 
 	fn connect(&self, destination: &Identity) -> Result<TcpStream, Box<dyn Error>> {
@@ -553,24 +574,29 @@ impl Outbound {
 	}
 
 	/// Applies TSP-0002 section 6 to each response.
+	/// One outcome per claim, in the caller's group order.
+	///
+	/// `sent[position]` is the group index of the value sent at that position, so
+	/// a Bundle whose requests were reordered still reports each copy's own
+	/// response. A copy with no response is Deferred: TSP-0002 section 9 requires
+	/// an unacknowledged request be retried to the same next hop.
 	fn outcomes(
-		group: &[DeliveryClaim],
+		sent: &[usize],
 		responses: &[CompletedResponse],
 		next_attempt: u64,
 	) -> Vec<DeliveryOutcome> {
-		group
-			.iter()
-			.enumerate()
-			.map(|(index, _)| {
-				responses.get(index).map_or_else(
-					|| DeliveryOutcome::Deferred {
-						retry_at: next_attempt,
-						result: "no response was received".to_owned(),
-					},
-					|response| outcome_for(response, next_attempt),
-				)
+		let mut outcomes: Vec<DeliveryOutcome> = (0..sent.len())
+			.map(|_| DeliveryOutcome::Deferred {
+				retry_at: next_attempt,
+				result: "no response was received".to_owned(),
 			})
-			.collect()
+			.collect();
+		for (position, &index) in sent.iter().enumerate() {
+			if let Some(response) = responses.get(position) {
+				outcomes[index] = outcome_for(response, next_attempt);
+			}
+		}
+		outcomes
 	}
 }
 

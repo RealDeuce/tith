@@ -5,21 +5,16 @@
 //! files to send, each prefixed by what to do with it afterwards. The mailer is
 //! responsible for erasing the SRIF.
 //!
-//! # What this cannot finish
-//!
-//! A `ResponseList` names files to send back to the requesting peer. Those are
-//! peer-addressed standalone Files, and TSP-0006 has no Job which can originate
-//! one — see issue 17, and issue 16 for the `FileRequest` side. Everything up
-//! to the submission is implemented and exercised; [`Response::submit`] is the
-//! one step which cannot be written yet, and it fails loudly rather than
-//! quietly delivering nothing.
+//! A `ResponseList` names files to send back to the requesting peer. Each one is
+//! a peer-addressed standalone File, submitted as a TSP-0006 `Job Peer-File`
+//! addressed to that peer. This module runs the processor and reads its answer;
+//! building and sending the submission belongs to the IPC client, so nothing
+//! here depends on the native protocol layer.
 
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-
-use crate::policy::Refusal;
 
 /// What the mailer should do with a file after sending it.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -40,6 +35,27 @@ impl Afterward {
 			b'-' => Self::EraseAlways,
 			_ => return None,
 		})
+	}
+
+	/// The TSP-0006 `Source-Disposition` this marker authorizes.
+	///
+	/// `=` is exactly Delete: TSP-0005 section 5 performs it only after every
+	/// delivery copy is Delivered. `+` is Keep. `-` asks for erasure whatever
+	/// happens, which section 5 has no expression for, so it maps to Keep and
+	/// the adapter performs its own cleanup instead of overstating the native
+	/// obligation.
+	#[must_use]
+	pub const fn disposition(self) -> &'static str {
+		match self {
+			Self::EraseIfSent => "Delete",
+			Self::Keep | Self::EraseAlways => "Keep",
+		}
+	}
+
+	/// Whether the adapter still owes a local removal after submission.
+	#[must_use]
+	pub const fn needs_local_cleanup(self) -> bool {
+		matches!(self, Self::EraseAlways)
 	}
 }
 
@@ -185,22 +201,6 @@ pub fn parse_response_list(contents: &str) -> Vec<Offered> {
 		.collect()
 }
 
-impl Response {
-	/// Submits the offered files back to the requesting peer.
-	///
-	/// # Errors
-	///
-	/// Always. A `FileRequest` reply is a set of peer-addressed standalone
-	/// Files, and TSP-0006's only File Job is "A standalone distribution File
-	/// item Job" which mandates `Area` and has no `Next-Hop` or `Destination`.
-	/// There is therefore no conforming way to originate the reply. This refuses
-	/// loudly, naming the issue, rather than acknowledging an item whose reply
-	/// was silently dropped.
-	pub fn submit(&self) -> Result<std::convert::Infallible, Refusal> {
-		Err(Refusal::FileRequestUnsubmittable)
-	}
-}
-
 #[cfg(test)]
 mod tests {
 	use super::*;
@@ -278,20 +278,16 @@ mod tests {
 	}
 
 	#[test]
-	fn submitting_a_reply_fails_loudly_and_names_the_blocking_issue() {
-		// This is the one step which cannot be implemented. When TSP-0006 gains a
-		// Job for a peer-addressed standalone File this test must be replaced by
-		// one which asserts the reply is actually submitted.
-		let response = Response {
-			offered: vec![Offered {
-				path: PathBuf::from("/files/a.zip"),
-				afterward: Afterward::EraseIfSent,
-			}],
-		};
-		let refusal = response.submit().unwrap_err();
-		assert_eq!(refusal, Refusal::FileRequestUnsubmittable);
-		let message = refusal.to_string();
-		assert!(message.contains("issue 16"), "{message}");
-		assert!(message.contains("TSP-0006"), "{message}");
+	fn each_marker_maps_to_the_disposition_it_actually_authorizes() {
+		// TSP-0006 Delete fires only after every delivery copy is Delivered, which
+		// is exactly what "=" asks for. "-" wants erasure whatever happens, and
+		// there is no native disposition for that, so it stays Keep and the
+		// adapter owes the removal itself rather than overstating the obligation.
+		assert_eq!(Afterward::EraseIfSent.disposition(), "Delete");
+		assert!(!Afterward::EraseIfSent.needs_local_cleanup());
+		assert_eq!(Afterward::Keep.disposition(), "Keep");
+		assert!(!Afterward::Keep.needs_local_cleanup());
+		assert_eq!(Afterward::EraseAlways.disposition(), "Keep");
+		assert!(Afterward::EraseAlways.needs_local_cleanup());
 	}
 }

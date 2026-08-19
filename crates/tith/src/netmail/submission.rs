@@ -89,6 +89,10 @@ pub struct Submission {
 	/// True when the key was generated because the message had no MSGID, so an
 	/// interrupted run may submit this message more than once.
 	pub key_is_generated: bool,
+	/// The operation this document uses. TSP-0006 section 8 requires a result to
+	/// name the operation in its request, so the caller checks against this
+	/// rather than assuming `Submit`.
+	pub operation: &'static str,
 }
 
 /// Converts one stored message into a complete single-Job Submit request.
@@ -205,6 +209,7 @@ pub fn build(message: &StoredMessage, context: &Context<'_>) -> Result<Submissio
 		request: document.encode(),
 		idempotency_key,
 		key_is_generated,
+		operation: "Submit",
 	})
 }
 
@@ -234,10 +239,16 @@ pub fn build_packed(
 	};
 
 	// TSP-0006 gives EchoMail its own Job kind, keyed on the Area that
-	// TSP-0003 section 7 read from the AREA line.
+	// TSP-0003 section 7 read from the AREA line. A Job kind exists only under
+	// Submit-Items; the original Submit operation accepts the bare `Job` line
+	// and nothing else, so the operation is chosen with the kind.
 	let echo = message.area.as_deref();
 	let mut lines = vec![
-		line(vec![unquoted("Submit")]),
+		line(vec![unquoted(if echo.is_some() {
+			"Submit-Items"
+		} else {
+			"Submit"
+		})]),
 		match echo {
 			Some(_) => line(vec![unquoted("Job"), unquoted("EchoMail")]),
 			None => line(vec![unquoted("Job")]),
@@ -296,7 +307,143 @@ pub fn build_packed(
 		.encode(),
 		idempotency_key,
 		key_is_generated,
+		operation: if echo.is_some() {
+			"Submit-Items"
+		} else {
+			"Submit"
+		},
 	})
+}
+
+/// Converts unclaimed reference entries into one `Job Peer-File` batch.
+///
+/// TSP-0003 section 9: a reference entry which no packed Message claims and
+/// which has no accompanying TIC belongs to no area and to no message. It maps
+/// to one peer-addressed standalone File whose Destination is the address its
+/// placement selected, and whose section 3.1 directive supplies the
+/// `Source-Disposition` rather than authorizing an immediate removal.
+///
+/// `Next-Hop` is omitted, so each copy is Active when the peer has a usable
+/// endpoint and Passive otherwise — except under the Hold flavour, whose whole
+/// meaning is "wait for their poll".
+pub fn build_peer_files(
+	entries: &[tith_message_legacy::Attachment],
+	destination: &str,
+	hold: bool,
+	context: &Context<'_>,
+) -> Result<Submission, BuildError> {
+	let mut lines = vec![line(vec![unquoted("Submit-Items")])];
+	let mut key = String::new();
+	for entry in entries {
+		let path = context.directory.join(&entry.name);
+		if !path.is_file() {
+			return Err(BuildError::MissingAttachment {
+				file: entry.name.clone(),
+			});
+		}
+		if let Some(feature) = entry.disposition.required_feature()
+			&& !context.features.contains(feature)
+		{
+			return Err(BuildError::MissingFeature {
+				feature,
+				file: entry.name.clone(),
+			});
+		}
+		// A reference entry may carry a full path; the wire name never does.
+		let wire_filename = basename(&entry.name);
+		key = format!("peer-file:{destination}:{wire_filename}");
+		lines.extend([
+			line(vec![unquoted("Job"), unquoted("Peer-File")]),
+			line(vec![unquoted("Application"), quoted(context.application)]),
+			line(vec![unquoted("Idempotency-Key"), quoted(&key)]),
+			line(vec![unquoted("Origin"), quoted(context.origin)]),
+			line(vec![unquoted("Destination"), quoted(destination)]),
+		]);
+		if hold {
+			lines.push(line(vec![unquoted("Next-Hop"), unquoted("Passive")]));
+		}
+		lines.extend([
+			line(vec![unquoted("File")]),
+			line(vec![
+				unquoted("Source-Path"),
+				quoted(&path.to_string_lossy()),
+			]),
+			line(vec![unquoted("Ingestion"), unquoted("Copy")]),
+		]);
+		if entry.disposition != Disposition::Keep {
+			lines.push(line(vec![
+				unquoted("Source-Disposition"),
+				unquoted(entry.disposition.ipc_value()),
+			]));
+		}
+		lines.extend([
+			line(vec![unquoted("Wire-Filename"), quoted(wire_filename)]),
+			line(vec![unquoted("End")]),
+			line(vec![unquoted("End")]),
+		]);
+	}
+	Ok(Submission {
+		request: Document {
+			kind: EnvelopeKind::Request,
+			lines,
+		}
+		.encode(),
+		idempotency_key: key,
+		key_is_generated: false,
+		operation: "Submit-Items",
+	})
+}
+
+/// Converts request-list actions into one `Job FileRequest` batch.
+///
+/// TSP-0003 section 8: every successfully parsed action becomes one
+/// `FileRequest`, so an unsupported action is not in `actions` and is left in
+/// the file for the operator.
+#[must_use]
+pub fn build_file_requests(
+	actions: &[tith_bso::Request],
+	destination: &str,
+	hold: bool,
+	context: &Context<'_>,
+) -> Submission {
+	let mut lines = vec![line(vec![unquoted("Submit-Items")])];
+	let mut key = String::new();
+	for action in actions {
+		key = format!("file-request:{destination}:{}", action.filename);
+		lines.extend([
+			line(vec![unquoted("Job"), unquoted("FileRequest")]),
+			line(vec![unquoted("Application"), quoted(context.application)]),
+			line(vec![unquoted("Idempotency-Key"), quoted(&key)]),
+			line(vec![unquoted("Origin"), quoted(context.origin)]),
+			line(vec![unquoted("Destination"), quoted(destination)]),
+			line(vec![unquoted("Filename"), quoted(&action.filename)]),
+		]);
+		if let Some(newer_than) = action.newer_than {
+			lines.push(line(vec![
+				unquoted("Newer-Than"),
+				unquoted(&newer_than.to_string()),
+			]));
+		}
+		if hold {
+			lines.push(line(vec![unquoted("Next-Hop"), unquoted("Passive")]));
+		}
+		lines.push(line(vec![unquoted("End")]));
+	}
+	Submission {
+		request: Document {
+			kind: EnvelopeKind::Request,
+			lines,
+		}
+		.encode(),
+		idempotency_key: key,
+		key_is_generated: false,
+		operation: "Submit-Items",
+	}
+}
+
+/// The final component of a legacy pathname.
+fn basename(name: &str) -> &str {
+	name.rsplit(['/', '\\']).next().unwrap_or(name)
 }
 
 /// Emits one Attachment block per file, gating each disposition on the

@@ -106,14 +106,19 @@ impl Acceptance<'_> {
 			ItemKind::File if item.area.is_some() && !self.area_allowed(item, true, peer) => {
 				Some("file area is not authorized for this peer")
 			}
-			ItemKind::FileRequest
-			| ItemKind::PollMessages
-			| ItemKind::PollFiles
-			| ItemKind::PollFileRequests => Some("request type is not implemented"),
+			// Poll values are answered by the exchange before dispatch; reaching
+			// here means the caller did not recognise one.
+			ItemKind::PollMessages | ItemKind::PollFiles | ItemKind::PollFileRequests => {
+				Some("request type is not implemented")
+			}
 			ItemKind::Accepted | ItemKind::Rejected => {
 				return Err("a request position contains a response value".into());
 			}
-			ItemKind::NetMail | ItemKind::EchoMail | ItemKind::File => None,
+			// A FileRequest becomes an ordinary inbound item. TSP-0011 section 5.1:
+			// its authenticated enclosing SignedTLV is its complete and intended
+			// authentication, and a receiver unwilling to serve one refuses it
+			// before transport acceptance rather than after.
+			ItemKind::NetMail | ItemKind::EchoMail | ItemKind::File | ItemKind::FileRequest => None,
 		};
 		if let Some(description) = rejection {
 			let permanent = matches!(item.kind, ItemKind::EchoMail)
@@ -691,6 +696,20 @@ mod tests {
 		let (response, jobs) = dispatch(&world, &configuration(ALLOW), &netmail(&world, true, &[]));
 		assert_eq!(rejection(&response), RejectionReason::Permanent);
 		assert!(jobs.is_empty());
+	}
+
+	#[test]
+	fn an_inbound_file_request_is_stored_for_a_consumer() {
+		// TSP-0011 section 2: a FileRequest is an ordinary inbound item whose
+		// ItemAuthentication is Transport, because its authenticated enclosing
+		// SignedTLV is its complete and intended authentication. It is never
+		// relayed: it carries no Destination a receiver could route on.
+		let world = world("filerequest", "");
+		let request = tith_wire::item::build_file_request("nodediff.zip", None, 1).unwrap();
+		let (response, jobs) = dispatch(&world, &configuration(ALLOW), &request);
+		assert_eq!(response.type_code, types::ACCEPTED);
+		assert!(jobs.is_empty(), "a FileRequest is never spooled onward");
+		assert!(stored_inbound(&world), "it is stored for its consumer");
 	}
 
 	#[test]

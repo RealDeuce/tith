@@ -9,7 +9,7 @@ use std::collections::BTreeMap;
 use tith_ledger::{Ledger, LedgerError, Object, Record, State};
 use tith_message_legacy::{Packet, PacketOptions, endpoint};
 use tith_wire::bundle::KeyResolver;
-use tith_wire::item::{ItemAuthentication, read_message, read_standalone_file};
+use tith_wire::item::{ItemAuthentication, read_file_request, read_message, read_standalone_file};
 use tith_wire::{OwnedTlv, types};
 
 use crate::config::Configuration;
@@ -36,6 +36,14 @@ pub enum Outcome {
 	/// Nothing is published. The payload is taken into administrative ownership
 	/// and the item acknowledged.
 	Orphan { reason: String },
+	/// A `FileRequest`. Nothing is published; the caller runs the FSC-0086.001
+	/// processor and submits each answering file as a TSP-0006 `Job Peer-File`
+	/// addressed back to the requesting peer.
+	ServeRequest {
+		filename: String,
+		/// The TTS-0005 condition: answer only if the file is newer than this.
+		newer_than: Option<u64>,
+	},
 	/// The item cannot be converted. `disposition` says whether that is
 	/// terminal.
 	Refuse {
@@ -132,16 +140,39 @@ pub fn plan(
 	match item.type_code {
 		types::MESSAGE => plan_message(claim, &item, configuration, &context, ledger, resolver),
 		types::FILE => plan_file(claim, &item, configuration, &context, ledger),
-		types::FILE_REQUEST => Ok(Some(Outcome::Refuse {
-			refusal: Refusal::FileRequestUnsubmittable,
-			disposition: configuration
-				.refusals
-				.disposition(&Refusal::FileRequestUnsubmittable),
-		})),
+		types::FILE_REQUEST => plan_file_request(&item, configuration),
 		other => Err(InboundError::Payload(format!(
 			"item type {other} is not deliverable to a tosser"
 		))),
 	}
+}
+
+/// A `FileRequest` is served by the configured FSC-0086.001 processor.
+///
+/// TSP-0011 section 5.1 says a receiver unwilling to serve one refuses it with
+/// TTS-0005 Rejected before transport acceptance, and that once it is an inbound
+/// item the ordinary consumer outcomes apply. A node with no processor is that
+/// second case: it will never serve this request, so it is refused rather than
+/// deferred forever.
+fn plan_file_request(
+	item: &OwnedTlv,
+	configuration: &Configuration,
+) -> Result<Option<Outcome>, InboundError> {
+	let read = read_file_request(item).map_err(|error| InboundError::Payload(error.to_string()))?;
+	if configuration.request_processor.is_none() {
+		let refusal = Refusal::Unconvertible(
+			"no Request-Processor is configured to serve a FileRequest".to_owned(),
+		);
+		let disposition = configuration.refusals.disposition(&refusal);
+		return Ok(Some(Outcome::Refuse {
+			refusal,
+			disposition,
+		}));
+	}
+	Ok(Some(Outcome::ServeRequest {
+		filename: read.filename,
+		newer_than: read.timestamp,
+	}))
 }
 
 fn plan_message(
@@ -261,6 +292,22 @@ fn plan_file(
 
 	let identity = ledger.next_identity("object")?;
 	let name = transfer_name(&read.data.filename, truncate(identity));
+
+	// A peer-addressed File belongs to no area, so it has no TIC and owes no
+	// onward copy. It is published on its own for the local sysop; an ARCmail
+	// bundle handed to this node is the ordinary case.
+	if read.data.area.is_none() {
+		return Ok(Some(Outcome::Publish {
+			objects: vec![Publication {
+				name,
+				contents: read.data.contents.clone(),
+			}],
+			note: "peer-addressed File".to_owned(),
+			distribution: None,
+			forwardable: false,
+		}));
+	}
+
 	let tic = match to_tic(
 		&read,
 		context,
@@ -297,7 +344,7 @@ fn plan_file(
 		note: "TIC distribution".to_owned(),
 		distribution: Some(
 			context
-				.area_tag(&read.data.area)
+				.area_tag(read.data.area.as_deref().expect("area checked above"))
 				.map_err(|error| InboundError::Payload(error.to_string()))?
 				.to_owned(),
 		),
@@ -356,6 +403,22 @@ pub fn commit(
 				state: State::Retired,
 				objects: Vec::new(),
 				note: format!("orphan: {reason}"),
+				claim_token: claim.claim_token.clone(),
+				distribution: String::new(),
+				forward_job: String::new(),
+			})?;
+			return Ok(Ok(()));
+		}
+		// The record is durable before the processor runs, so a redelivery is
+		// recognised rather than served twice. Submission itself is idempotent by
+		// its key, which is derived from InboundID.
+		Outcome::ServeRequest { filename, .. } => {
+			ledger.stage(&Record {
+				inbound_id: claim.inbound_id.clone(),
+				payload_hash: claim.payload_hash,
+				state: State::Published,
+				objects: Vec::new(),
+				note: format!("file request for {filename}"),
 				claim_token: claim.claim_token.clone(),
 				distribution: String::new(),
 				forward_job: String::new(),
@@ -667,10 +730,9 @@ End
 		);
 	}
 
-	#[test]
-	fn a_file_request_is_refused_with_the_blocking_issue() {
-		let fixture = fixture("request");
-		let request = OwnedTlv::new(types::FILE_REQUEST, {
+	/// One encoded `FileRequest` for `wanted.zip`.
+	fn file_request() -> Vec<u8> {
+		OwnedTlv::new(types::FILE_REQUEST, {
 			let mut value = OwnedTlv::new(types::FILENAME, b"wanted.zip".to_vec())
 				.unwrap()
 				.encode();
@@ -681,12 +743,65 @@ End
 			value
 		})
 		.unwrap()
-		.encode();
+		.encode()
+	}
+
+	#[test]
+	fn a_file_request_is_served_when_a_processor_is_configured() {
+		let mut fixture = fixture("request");
+		fixture.configuration.request_processor =
+			Some(std::path::PathBuf::from("/usr/local/bin/frq"));
 		let claim = claimed(ItemAuthentication::Transport);
 		let resolver = |_: &Address| None;
 		let outcome = plan(
 			&claim,
-			&request,
+			&file_request(),
+			&fixture.configuration,
+			&fixture.ledger,
+			&resolver,
+		)
+		.unwrap()
+		.unwrap();
+		let Outcome::ServeRequest {
+			filename,
+			newer_than,
+		} = &outcome
+		else {
+			panic!("expected a request to serve, got {outcome:?}");
+		};
+		assert_eq!(filename, "wanted.zip");
+		assert_eq!(*newer_than, None);
+		// Nothing is published: the answer is submitted, not laid down for a
+		// tosser. The ledger record still lands, so a redelivery is recognised.
+		commit(&claim, &outcome, &fixture.configuration, &fixture.ledger)
+			.unwrap()
+			.unwrap();
+		assert_eq!(std::fs::read_dir(&fixture.inbound).unwrap().count(), 0);
+		assert!(
+			plan(
+				&claim,
+				&file_request(),
+				&fixture.configuration,
+				&fixture.ledger,
+				&resolver
+			)
+			.unwrap()
+			.is_none(),
+			"a redelivered request must not be served twice"
+		);
+	}
+
+	#[test]
+	fn a_file_request_is_refused_when_no_processor_can_serve_it() {
+		// TSP-0011 section 5.1: a receiver unwilling to serve one refuses it
+		// before transport acceptance, and once it is an inbound item the ordinary
+		// consumer outcomes apply. With no processor this node never will.
+		let fixture = fixture("norequest");
+		let claim = claimed(ItemAuthentication::Transport);
+		let resolver = |_: &Address| None;
+		let outcome = plan(
+			&claim,
+			&file_request(),
 			&fixture.configuration,
 			&fixture.ledger,
 			&resolver,
@@ -700,15 +815,8 @@ End
 		else {
 			panic!("expected a refusal, got {outcome:?}");
 		};
-		assert_eq!(*refusal, Refusal::FileRequestUnsubmittable);
-		// The default is to defer, because this becomes possible the moment the
-		// blocking issue is resolved.
-		assert_eq!(*disposition, Disposition::Defer);
-		let reported = commit(&claim, &outcome, &fixture.configuration, &fixture.ledger)
-			.unwrap()
-			.unwrap_err();
-		assert!(reported.contains("issue 16"), "{reported}");
-		assert_eq!(std::fs::read_dir(&fixture.inbound).unwrap().count(), 0);
+		assert!(refusal.to_string().contains("Request-Processor"));
+		assert_eq!(*disposition, Disposition::Reject);
 	}
 
 	#[test]

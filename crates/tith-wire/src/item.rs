@@ -130,7 +130,12 @@ pub struct StandaloneFileData {
 	pub filename: String,
 	pub timestamp: Option<u64>,
 	pub contents: Vec<u8>,
-	pub area: String,
+	/// The distribution area, or `None` for a peer-addressed File.
+	///
+	/// TTS-0005 section 3 type 65 marks Area, Via, and `SeenBy` `F`, "for a file
+	/// that is part of a distribution network". A File which is not one carries
+	/// none of the three, and the enclosing Bundle Destination addresses it.
+	pub area: Option<String>,
 	pub short_description: Option<String>,
 	pub long_description_lines: Vec<String>,
 	pub tear_line: Option<String>,
@@ -256,7 +261,10 @@ pub fn build_originated_file(
 		)?);
 	}
 	signed.push(OwnedTlv::new(types::CONTENTS, data.contents)?);
-	signed.push(area_value(&data.area)?);
+	let distribution = data.area.is_some();
+	if let Some(area) = &data.area {
+		signed.push(area_value(area)?);
+	}
 	push_provenance(&mut signed, provenance)?;
 	if let Some(value) = data.short_description {
 		signed.push(OwnedTlv::new(types::SHORT_DESCRIPTION, value.into_bytes())?);
@@ -285,16 +293,52 @@ pub fn build_originated_file(
 		types::REQUEST_IDENTIFIER,
 		crate::integer::encode_u64(request_identifier),
 	)?);
-	signed.push(via_value(effective_signer, via_timestamp, software)?);
-	// TTS-0005 section 3 type 65 marks File SeenBy "F+", so unlike a Message it
-	// repeats. Each value is still its own Trimmed Collection.
-	for value in seen_by {
-		signed.push(OwnedTlv::new(
-			types::SEEN_BY,
-			value.to_string().into_bytes(),
-		)?);
+	// Via and SeenBy are `F` values like Area, so a peer-addressed File carries
+	// neither. `validate_standalone_file` rejects one that does.
+	if distribution {
+		signed.push(via_value(effective_signer, via_timestamp, software)?);
+		// TTS-0005 section 3 type 65 marks File SeenBy "F+", so unlike a Message it
+		// repeats. Each value is still its own Trimmed Collection.
+		for value in seen_by {
+			signed.push(OwnedTlv::new(
+				types::SEEN_BY,
+				value.to_string().into_bytes(),
+			)?);
+		}
 	}
 	OwnedTlv::new(types::FILE, concatenate(&signed)).map_err(Into::into)
+}
+
+/// Builds one `FileRequest`.
+///
+/// TTS-0005 section 3 type 66: a mandatory Filename, an optional Timestamp
+/// making the request conditional on the named file being newer than it, and a
+/// mandatory `RequestIdentifier`. There is no Origin, `SignedOrigin`, or Signature;
+/// the enclosing payload `SignedTLV` is the whole of its authentication.
+///
+/// # Errors
+///
+/// Returns [`BundleError`] when a value cannot be encoded.
+pub fn build_file_request(
+	filename: &str,
+	newer_than: Option<u64>,
+	request_identifier: u64,
+) -> Result<OwnedTlv, BundleError> {
+	let mut children = vec![OwnedTlv::new(
+		types::FILENAME,
+		filename.as_bytes().to_vec(),
+	)?];
+	if let Some(timestamp) = newer_than {
+		children.push(OwnedTlv::new(
+			types::TIMESTAMP,
+			crate::integer::encode_u64(timestamp),
+		)?);
+	}
+	children.push(OwnedTlv::new(
+		types::REQUEST_IDENTIFIER,
+		crate::integer::encode_u64(request_identifier),
+	)?);
+	OwnedTlv::new(types::FILE_REQUEST, concatenate(&children)).map_err(Into::into)
 }
 
 /// Rebuilds the unsigned routing suffix of an authenticated distribution item.
@@ -1468,11 +1512,11 @@ pub fn read_standalone_file(value: &OwnedTlv) -> Result<ReadFile, BundleError> {
 		.1
 		.value
 		.clone();
+	// Absent for a peer-addressed File, which carries no Area, Via, or SeenBy.
 	let area = cursor
 		.optional(types::AREA)
 		.map(|(_, value)| validate_area(value))
-		.transpose()?
-		.ok_or(BundleError::Missing("distribution File Area"))?;
+		.transpose()?;
 	let (_, origin_value) = cursor.take(types::ORIGIN, "standalone File Origin")?;
 	let origin = parse_address(origin_value)?;
 	let origin_key = conditional_public_key(&mut cursor, &origin)?
@@ -2043,7 +2087,7 @@ mod tests {
 				filename: "test.zip".to_owned(),
 				timestamp: None,
 				contents: b"file".to_vec(),
-				area: "FILES".to_owned(),
+				area: Some("FILES".to_owned()),
 				short_description: None,
 				long_description_lines: Vec::new(),
 				tear_line: None,
@@ -2224,7 +2268,7 @@ mod tests {
 			filename: "goodies.zip".to_owned(),
 			timestamp: Some(1_755_400_000),
 			contents: b"payload".to_vec(),
-			area: "SYNCDATA".to_owned(),
+			area: Some("SYNCDATA".to_owned()),
 			short_description: Some("A file".to_owned()),
 			long_description_lines: vec!["First".to_owned(), "Second".to_owned()],
 			tear_line: Some("TITH 0.1".to_owned()),
@@ -2254,6 +2298,95 @@ mod tests {
 		assert_eq!(read.vias.len(), 1);
 		let signature = read.signing.signature.expect("signed");
 		assert!(verify_tlv(&read.signing.signed_region, &signature, &signer_keys.public).unwrap());
+	}
+
+	#[test]
+	fn a_peer_addressed_file_carries_no_area_via_or_seen_by() {
+		// TTS-0005 section 3 type 65 marks all three "F", for a file that is part
+		// of a distribution network. A File which is not one carries none of them,
+		// and the Bundle Destination addresses it instead.
+		let signer_keys = SigningKeyPair::from_seed(&[86; 32]).unwrap();
+		let origin: Address = "fidonet#1:104/36".parse().unwrap();
+		let data = StandaloneFileData {
+			filename: "0068002400.su0".to_owned(),
+			timestamp: Some(1_755_400_000),
+			contents: b"arcmail".to_vec(),
+			area: None,
+			short_description: None,
+			long_description_lines: Vec::new(),
+			tear_line: None,
+			magic_word: None,
+			replaces: None,
+		};
+		let file = build_originated_file(
+			data.clone(),
+			&ItemProvenance {
+				origin: origin.clone(),
+				signer: Some(Identity {
+					address: origin.clone(),
+					public_key: signer_keys.public,
+				}),
+			},
+			&signer_keys.secret,
+			4,
+			1_755_500_001,
+			"tith 0.1",
+			// Offered and ignored: a File with no Area has nowhere to put them.
+			std::slice::from_ref(&origin),
+		)
+		.unwrap();
+
+		let children = parse_sequence(&file.value).unwrap();
+		for absent in [types::AREA, types::VIA, types::SEEN_BY] {
+			assert!(
+				!children.iter().any(|child| child.type_code == absent),
+				"type {absent} must not occur in a peer-addressed File"
+			);
+		}
+		let resolver = |address: &Address| (address == &origin).then_some(signer_keys.public);
+		let validated = validate_item(&file, &resolver).unwrap().expect("an item");
+		assert_eq!(validated.kind, ItemKind::File);
+		assert_eq!(validated.area, None);
+		assert_eq!(validated.request_identifier, 4);
+		assert_eq!(
+			validated.authentication,
+			Some(ItemAuthentication::OriginValid)
+		);
+		let read = read_standalone_file(&file).unwrap();
+		assert_eq!(read.data, data);
+		assert!(read.vias.is_empty());
+		assert!(read.seen_by.is_empty());
+	}
+
+	#[test]
+	fn building_a_file_request_inverts_reading_one() {
+		for newer_than in [None, Some(1_755_400_000)] {
+			let request = build_file_request("nodediff.zip", newer_than, 7).unwrap();
+			assert_eq!(request.type_code, types::FILE_REQUEST);
+			let validated = validate_item(&request, &|_: &Address| None)
+				.unwrap()
+				.expect("an item");
+			assert_eq!(validated.kind, ItemKind::FileRequest);
+			assert_eq!(validated.request_identifier, 7);
+			// A FileRequest has no end-to-end signature by design, so its state is
+			// Transport rather than a reduced authentication.
+			assert_eq!(
+				validated.authentication,
+				Some(ItemAuthentication::Transport)
+			);
+			assert!(validated.duplicate_identity.is_none());
+			let read = read_file_request(&request).unwrap();
+			assert_eq!(read.filename, "nodediff.zip");
+			assert_eq!(read.timestamp, newer_than);
+			assert_eq!(read.request_identifier, 7);
+		}
+		// Renumbering for a new exchange works the same way it does for an item.
+		let renumbered =
+			set_request_identifier(&build_file_request("a.zip", None, 1).unwrap(), 3).unwrap();
+		assert_eq!(
+			read_file_request(&renumbered).unwrap().request_identifier,
+			3
+		);
 	}
 
 	#[test]
