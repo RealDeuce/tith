@@ -899,15 +899,9 @@ fn append_delivery(lines: &mut Vec<Line>, copy: &tith_store::DeliveryRecord) {
 			fields: vec![unquoted("Class"), quoted(&copy.class)],
 		},
 	]);
-	for (kind, policy) in [
-		"Unroutable",
-		"Loop",
-		"Relay-Denied",
-		"Rejected",
-		"Authentication",
-	]
-	.into_iter()
-	.zip(copy.policies)
+	for (kind, policy) in ["Relay-Denied", "Rejected", "Authentication"]
+		.into_iter()
+		.zip(copy.policies)
 	{
 		lines.push(Line {
 			fields: vec![

@@ -9,7 +9,7 @@ use std::error::Error;
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD_NO_PAD;
-use tith_config::{ConfigurationSet, IdentityRef, RelayRule};
+use tith_config::{ConfigurationSet, IdentityRef, RelayAction, RelayRule};
 use tith_crypto::{TlvHash, hash_tlv, random_bytes};
 use tith_nodelist::Nodelist;
 use tith_router::{RouteFailure, failure_policies, route_netmail, routes_for, selector_matches};
@@ -250,7 +250,7 @@ impl Acceptance<'_> {
 		// The Origin selector and the failure Origin both mean the effective
 		// signer, which is what the signed-item identity already carries.
 		let rule = self.relay_rule(routes, peer, &signed.signer, destination);
-		if !rule.is_some_and(|rule| rule.allow) {
+		if !rule.is_some_and(|rule| matches!(rule.action, RelayAction::Allow { .. })) {
 			return Err(Refusal::permanent(
 				"no relay rule authorizes this peer, signer, and destination",
 			));
@@ -291,7 +291,10 @@ impl Acceptance<'_> {
 			&signed.signer,
 			&commitment.next_hop,
 			commitment.route_rule,
-			rule.and_then(|rule| rule.on_failure),
+			rule.and_then(|rule| match rule.action {
+				RelayAction::Allow { on_failure } => on_failure,
+				RelayAction::Deny => None,
+			}),
 			(self.nodelist, self),
 		));
 		let identity = relay_identity(signed).map_err(|error| {

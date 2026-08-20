@@ -3,10 +3,10 @@ TITH                                              THIS ISN'T THAT HARD
 **********************************************************************
 
 Publication:  TSP‑0005
-Revision:     4
+Revision:     5
 Title:        Durable Outbound Jobs
 Author(s):    Stephen Hurd
-Date:         2026‑08‑19
+Date:         2026‑08‑20
 ══════════════════════════════════════════════════════════════════════
 
 Status of this document
@@ -155,8 +155,8 @@ Contents
   itself takes it as its own.  Such a copy never uses a NetMail Route
   method and is never relayed.
 
-  The permanent kinds are Unroutable, Loop, Relay-Denied, Rejected,
-  and Authentication as defined by TSP‑0002.  Their policies are
+  The permanent response kinds are Relay-Denied, Rejected, and
+  Authentication as defined by TSP‑0002.  Their policies are
   resolved and stored separately for every delivery copy when it is
   created.  An explicit complete override may assign the same
   disposition and notification to every kind of a NetMail copy.
@@ -227,9 +227,12 @@ Contents
   recorded as its result, and MUST NOT be retried.
 
   Rejected means a complete remote response permanently rejected that
-  copy's item.  TTS‑0005 reasons 1 and 2 produce Rejected.  Failed means
-  a permanent local Unroutable, Loop, or other TSP‑0002 failure.  These
-  remain distinct from Deferred.
+  copy's item.  TTS‑0005 reasons 1 and 2 produce Rejected; TSP‑0002
+  selects Relay-Denied, Rejected, or Authentication as the policy kind.
+  Failed means a permanent local error occurred after commitment.  It
+  is retained and reported for administrative handling rather than
+  passed through a remote‐response policy.  Both states remain
+  distinct from Deferred.
 
   Cancelled means the Application cancelled that copy before delivery
   was confirmed.  Cancellation never applies Delete or Truncate.
@@ -283,12 +286,13 @@ Contents
   it identifies another object.  Failed means a permanent local error
   prevents cleanup.  Pending cleanup survives restart and is retried.
 
-  Rejected and Failed apply each copy's recorded TSP‑0002 failure
-  policy.  Discard may retire a failed copy after its terminal state
+  Rejected applies the copy's recorded TSP‑0002 policy for its failure
+  kind.  Discard may retire the rejected copy after its terminal state
   and failure record are durable, but shared immutable contents remain
   while another copy needs them.  Dead-Letter retains the applicable
-  failure and contents for administrative handling.  Neither policy
-  applies Source Delete or Truncate.
+  failure and contents for administrative handling.  Failed always
+  retains its failure and contents for administrative handling.
+  Neither case applies Source Delete or Truncate.
 
   JobID, Application, terminal state, idempotency association, routing
   record, result, and cleanup statuses remain queryable after private
@@ -333,11 +337,14 @@ Contents
   usable endpoint and satisfaction of caller restrictions when
   committed; Passive does not require an endpoint.
 
+  If routing, authorization, or loop detection fails, Reroute fails
+  without replacing the existing delivery copy or any of its policies.
+
   Failure-Policy absent or Route resolves current TSP‑0002 policies.
-  An explicit policy applies to every permanent kind and requires
-  authorization.  Reroute atomically commits the resulting exact next
-  hop, mode, and policies before changing the Job to Queued.  It
-  preserves JobID, Application, local AKA, ultimate Destination,
+  An explicit policy applies to all three permanent response kinds and
+  requires authorization.  Reroute atomically commits the resulting
+  exact next hop, mode, and policies before changing the Job to Queued.
+  It preserves JobID, Application, local AKA, ultimate Destination,
   Class, item Signature, Sources, WireFilenames, and cleanup
   obligations.
 
@@ -394,8 +401,6 @@ Contents
     Destination "<destination-identity>"
     Next-Hop Active|Passive "<next-hop-identity>"
     Class "<configuration-name>"
-    Failure-Policy Unroutable <disposition> Notify <notification>
-    Failure-Policy Loop <disposition> Notify <notification>
     Failure-Policy Relay-Denied <disposition> Notify <notification>
     Failure-Policy Rejected <disposition> Notify <notification>
     Failure-Policy Authentication <disposition> Notify <notification>
@@ -438,8 +443,6 @@ Contents
     [Delivery <one-based-index> <job-state>
     Next-Hop Active|Passive "<next-hop-identity>"
     Class "<configuration-name>"
-    Failure-Policy Unroutable <disposition> Notify <notification>
-    Failure-Policy Loop <disposition> Notify <notification>
     Failure-Policy Relay-Denied <disposition> Notify <notification>
     Failure-Policy Rejected <disposition> Notify <notification>
     Failure-Policy Authentication <disposition> Notify <notification>
@@ -678,5 +681,9 @@ B. History
    Rev.4, 2026‑08‑19: Added the Peer-File and FileRequest Kinds with
    one directly committed delivery copy each, and completed a
    conditional FileRequest answered with Rejected reason 3.
+
+   Rev.5, 2026‑08‑20: Removed pre‐commit routing results from durable
+   copy policy and distinguished remote rejection policy kinds from
+   the Rejected Job state.
 
 **********************************************************************

@@ -426,13 +426,15 @@ that identity is unlisted. Copies for different local AKAs are never combined.
 Endpoints come from the next hop's configured `Endpoint` lines in file order,
 falling back to the usable TITH endpoints in its nodelist entry.
 
-Responses are applied per TSP-0002 section 6. Rejected reason 1 fails as
-Rejected and reason 2 as Authentication; reason 3 completes a conditional
-request and is not a failure; reason 4 retries no earlier than its Timestamp, or
-at the next activation of the schedule when it carries none. A request with no
-complete response stays eligible and does not invoke permanent failure policy,
-which is also what happens to every copy in a connection that fails outright.
-Copies left claimed by a killed daemon are returned to the queue at startup.
+Responses are applied per TSP-0002 section 6. Rejected reason 1 from an
+intermediate next hop fails as Relay-Denied, while the same response from the
+ultimate Destination fails as Rejected. Reason 2 fails as Authentication;
+reason 3 completes a conditional request and is not a failure; reason 4 retries
+no earlier than its Timestamp, or at the next activation of the schedule when
+it carries none. A request with no complete response stays eligible and does
+not invoke permanent failure policy, which is also what happens to every copy
+in a connection that fails outright. Copies left claimed by a killed daemon
+are returned to the queue at startup.
 
 ### Poll
 

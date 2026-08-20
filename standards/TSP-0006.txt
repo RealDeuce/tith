@@ -3,7 +3,7 @@ TITH                                              THIS ISN'T THAT HARD
 **********************************************************************
 
 Publication:  TSP‑0006
-Revision:     8
+Revision:     9
 Title:        Outbound Job Submission
 Author(s):    Stephen Hurd
 Date:         2026‑08‑20
@@ -481,7 +481,8 @@ Contents
 
   Failure-Policy occurs for NetMail, Peer-File, and FileRequest.
   Absent or Route uses policies resolved by TSP‑0002.  Otherwise it
-  supplies one complete override for all permanent failure kinds.
+  supplies one complete override for the three permanent response
+  kinds in TSP‑0002.
   Disposition is Dead-Letter or Discard; notification is None, Sender,
   Origin-Sysop, or Both.  An override requires authorization and is
   distinct from Source-Disposition.  A FileRequest has no Origin and no
@@ -859,6 +860,9 @@ Contents
   If validation, ingestion, routing, authorization, durability, or a
   Move transfer fails for any new Job, no new Job in the Batch is
   committed.  Every new Job's Source remains owned by the Application.
+  In particular, Unroutable and Loop are pre‐commit results: they
+  create no JobID and invoke no delivery‐copy disposition or
+  notification.
   Recovery completes or rolls back the transaction before a query or
   resubmission can observe a new idempotency mapping.
 
@@ -1262,5 +1266,9 @@ B. History
    to carry a canonically reconstructed TSP‑0003 Signature and current
    unsigned suffix, and defined explicit and unambiguous default
    selection of its one Local-Identity.
+
+   Rev.9, 2026‑08‑20: Made routing and loop failures caller‐owned
+   pre‐commit results and limited delivery policy to permanent remote
+   responses.
 
 **********************************************************************

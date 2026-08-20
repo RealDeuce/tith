@@ -25,14 +25,15 @@ use tith_exchange::{
 use tith_nodelist::Nodelist;
 use tith_router::selector_matches;
 use tith_store::{
-	DeliveryClaim, DeliveryOutcome, DeliveryRecord, InboundStore, OutboundStore, StoreError,
+	DeliveryClaim, DeliveryOutcome, DeliveryRecord, InboundStore, OutboundStore,
+	PermanentFailureKind, StoreError,
 };
 use tith_wire::bundle::{
 	Bundle, BundleError, Identity, KeyResolver, build_bundle, build_public_key_probe,
 };
 use tith_wire::integer::encode_u64;
 use tith_wire::item::{
-	ItemKind, Rejection, RejectionReason, set_request_identifier, validate_payload,
+	ItemKind, Rejection, RejectionReason, set_request_identifier, validate_item, validate_payload,
 };
 use tith_wire::tlv::{OwnedTlv, TlvReader, parse_sequence};
 use tith_wire::types;
@@ -104,7 +105,7 @@ impl PassSummary {
 		match state {
 			DeliveryOutcome::Delivered(_) => self.delivered += 1,
 			DeliveryOutcome::Deferred { .. } => self.retained += 1,
-			DeliveryOutcome::Rejected(_) | DeliveryOutcome::Failed(_) => self.failed += 1,
+			DeliveryOutcome::Rejected { .. } | DeliveryOutcome::Failed(_) => self.failed += 1,
 		}
 	}
 }
@@ -503,7 +504,9 @@ impl Outbound {
 			if parsed.len() != 1 {
 				return Err("spooled item is not a single TLV value".into());
 			}
-			values.push(parsed.remove(0));
+			let value = parsed.remove(0);
+			let relayed = is_relay_delivery(&value, &destination, self)?;
+			values.push((value, relayed));
 		}
 		// TTS-0005 section 2 RECOMMENDS the first payload SignedTLV hold every
 		// FileRequest, so the peer can validate it and start returning files while
@@ -513,12 +516,12 @@ impl Outbound {
 		let (mut ordered, mut rest): (Vec<_>, Vec<_>) = values
 			.into_iter()
 			.enumerate()
-			.partition(|(_, value)| value.type_code == types::FILE_REQUEST);
+			.partition(|(_, (value, _))| value.type_code == types::FILE_REQUEST);
 		let split = !ordered.is_empty() && !rest.is_empty();
 		ordered.append(&mut rest);
 
 		let mut items = Vec::with_capacity(ordered.len());
-		for (position, (_, value)) in ordered.iter().enumerate() {
+		for (position, (_, (value, _))) in ordered.iter().enumerate() {
 			// Every request in a Bundle needs its own RequestIdentifier, and these
 			// were numbered when they were spooled, independently of each other.
 			let identifier = u64::try_from(position).map_err(|_| "group is too large")? + 1;
@@ -527,7 +530,7 @@ impl Outbound {
 		let payloads = if split {
 			let requests = ordered
 				.iter()
-				.filter(|(_, v)| v.type_code == types::FILE_REQUEST)
+				.filter(|(_, (value, _))| value.type_code == types::FILE_REQUEST)
 				.count();
 			let remainder = items.split_off(requests);
 			vec![items, remainder]
@@ -569,7 +572,10 @@ impl Outbound {
 			}
 			Err(error) => return Err(error),
 		};
-		let sent: Vec<usize> = ordered.into_iter().map(|(index, _)| index).collect();
+		let sent: Vec<(usize, bool)> = ordered
+			.into_iter()
+			.map(|(index, (_, relayed))| (index, relayed))
+			.collect();
 		Ok(Self::outcomes(&sent, &exchange.responses, next_attempt))
 	}
 
@@ -727,7 +733,7 @@ impl Outbound {
 	/// response. A copy with no response is Deferred: TSP-0002 section 9 requires
 	/// an unacknowledged request be retried to the same next hop.
 	fn outcomes(
-		sent: &[usize],
+		sent: &[(usize, bool)],
 		responses: &[CompletedResponse],
 		next_attempt: u64,
 	) -> Vec<DeliveryOutcome> {
@@ -737,9 +743,9 @@ impl Outbound {
 				result: "no response was received".to_owned(),
 			})
 			.collect();
-		for (position, &index) in sent.iter().enumerate() {
+		for (position, &(index, relayed)) in sent.iter().enumerate() {
 			if let Some(response) = responses.get(position) {
-				outcomes[index] = outcome_for(response, next_attempt);
+				outcomes[index] = outcome_for(response, next_attempt, relayed);
 			}
 		}
 		outcomes
@@ -761,15 +767,17 @@ fn is_signature_failure(error: &(dyn Error + 'static)) -> bool {
 
 /// The TSP-0002 section 6 rule for one completed response.
 ///
-/// Reason 1 fails as Rejected and reason 2 as Authentication, which are
-/// different failure kinds and so select different stored policies. Reason 3
+/// Reason 1 fails as Relay-Denied for an intermediate next hop and Rejected for
+/// the ultimate Destination. Reason 2 fails as Authentication. Reason 3
 /// completes a conditional request and is not a failure at all. Reason 4
 /// retains the item for retry no earlier than its Timestamp, or for the next
 /// applicable schedule when it carries none.
-fn outcome_for(response: &CompletedResponse, next_attempt: u64) -> DeliveryOutcome {
+fn outcome_for(response: &CompletedResponse, next_attempt: u64, relayed: bool) -> DeliveryOutcome {
 	match response.response {
 		ResponseKind::Accepted => DeliveryOutcome::Delivered("accepted".to_owned()),
-		ResponseKind::Rejected => rejection_outcome(response.rejection.as_ref(), next_attempt),
+		ResponseKind::Rejected => {
+			rejection_outcome(response.rejection.as_ref(), next_attempt, relayed)
+		}
 	}
 }
 
@@ -777,7 +785,11 @@ fn outcome_for(response: &CompletedResponse, next_attempt: u64) -> DeliveryOutco
 ///
 /// A Rejected which carries no readable reason cannot be acted on as a
 /// permanent failure, so the copy is retried rather than discarded.
-pub fn rejection_outcome(rejection: Option<&Rejection>, next_attempt: u64) -> DeliveryOutcome {
+pub fn rejection_outcome(
+	rejection: Option<&Rejection>,
+	next_attempt: u64,
+	relayed: bool,
+) -> DeliveryOutcome {
 	let Some(rejection) = rejection else {
 		return DeliveryOutcome::Deferred {
 			retry_at: next_attempt,
@@ -786,16 +798,35 @@ pub fn rejection_outcome(rejection: Option<&Rejection>, next_attempt: u64) -> De
 	};
 	let description = rejection.description.clone();
 	match rejection.reason {
-		RejectionReason::Permanent => DeliveryOutcome::Rejected(description),
-		RejectionReason::Authentication => {
-			DeliveryOutcome::Failed(format!("authentication: {description}"))
-		}
+		RejectionReason::Permanent => DeliveryOutcome::Rejected {
+			kind: if relayed {
+				PermanentFailureKind::RelayDenied
+			} else {
+				PermanentFailureKind::Rejected
+			},
+			result: description,
+		},
+		RejectionReason::Authentication => DeliveryOutcome::Rejected {
+			kind: PermanentFailureKind::Authentication,
+			result: description,
+		},
 		RejectionReason::Condition => DeliveryOutcome::Delivered(description),
 		RejectionReason::Temporary => DeliveryOutcome::Deferred {
 			retry_at: rejection.retry_after.unwrap_or(next_attempt),
 			result: description,
 		},
 	}
+}
+
+/// Whether this delivery asks its next hop to relay a `NetMail` Message.
+pub(crate) fn is_relay_delivery(
+	value: &OwnedTlv,
+	next_hop: &Identity,
+	resolver: &impl KeyResolver,
+) -> Result<bool, BundleError> {
+	Ok(validate_item(value, resolver)?
+		.and_then(|item| item.destination)
+		.is_some_and(|destination| destination != *next_hop))
 }
 
 struct StreamIo(TcpStream);
@@ -819,5 +850,108 @@ impl io::Write for StreamIo {
 impl ExchangeIo for StreamIo {
 	fn shutdown_write(&mut self) -> io::Result<()> {
 		self.0.shutdown(Shutdown::Write)
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+	use tith_crypto::SigningKeyPair;
+	use tith_wire::address::Address;
+	use tith_wire::item::{ItemProvenance, MessageData, build_originated_message};
+
+	fn rejection(reason: RejectionReason) -> Rejection {
+		Rejection {
+			reason,
+			retry_after: None,
+			description: "refused".to_owned(),
+		}
+	}
+
+	#[test]
+	fn permanent_rejection_uses_the_next_hop_role() {
+		assert_eq!(
+			rejection_outcome(Some(&rejection(RejectionReason::Permanent)), 10, true),
+			DeliveryOutcome::Rejected {
+				kind: PermanentFailureKind::RelayDenied,
+				result: "refused".to_owned(),
+			}
+		);
+		assert_eq!(
+			rejection_outcome(Some(&rejection(RejectionReason::Permanent)), 10, false),
+			DeliveryOutcome::Rejected {
+				kind: PermanentFailureKind::Rejected,
+				result: "refused".to_owned(),
+			}
+		);
+	}
+
+	#[test]
+	fn authentication_is_a_remote_rejection_policy() {
+		assert_eq!(
+			rejection_outcome(Some(&rejection(RejectionReason::Authentication)), 10, true,),
+			DeliveryOutcome::Rejected {
+				kind: PermanentFailureKind::Authentication,
+				result: "refused".to_owned(),
+			}
+		);
+	}
+
+	#[test]
+	fn an_unlisted_next_hop_is_compared_by_address_and_key() {
+		let origin_keys = SigningKeyPair::from_seed(&[71; 32]).unwrap();
+		let destination_keys = SigningKeyPair::from_seed(&[72; 32]).unwrap();
+		let other_keys = SigningKeyPair::from_seed(&[73; 32]).unwrap();
+		let unlisted = Address::unlisted("p2p".to_owned()).unwrap();
+		let origin = Identity {
+			address: unlisted.clone(),
+			public_key: origin_keys.public,
+		};
+		let destination = Identity {
+			address: unlisted,
+			public_key: destination_keys.public,
+		};
+		let message = build_originated_message(
+			&MessageData {
+				destination: Some(destination.clone()),
+				timestamp: 1,
+				to_user: "You".to_owned(),
+				from_user: "Me".to_owned(),
+				subject: String::new(),
+				text: "Body\n".to_owned(),
+				area: None,
+				attachments: Vec::new(),
+				legacy_attributes: None,
+				timestamp_offset: None,
+				tear_line: None,
+				origin_line: None,
+				message_id: None,
+				reply_to: None,
+				additional_kludge_lines: Vec::new(),
+			},
+			&ItemProvenance {
+				origin: origin.address.clone(),
+				signer: Some(origin),
+			},
+			&origin_keys.secret,
+			1,
+			1,
+			"test",
+			&[],
+		)
+		.unwrap();
+		let resolver = Nodelist::default();
+		assert!(!is_relay_delivery(&message, &destination, &resolver).unwrap());
+		assert!(
+			is_relay_delivery(
+				&message,
+				&Identity {
+					address: destination.address,
+					public_key: other_keys.public,
+				},
+				&resolver,
+			)
+			.unwrap()
+		);
 	}
 }

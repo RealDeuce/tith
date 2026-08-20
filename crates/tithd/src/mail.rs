@@ -260,6 +260,7 @@ fn run_activation(driver: &Outbound, schedule: &tith_config::Schedule, next_atte
 struct PollHold {
 	signed_tlv_hash: TlvHash,
 	request_identifier: u64,
+	relayed: bool,
 	claim: DeliveryClaim,
 }
 
@@ -480,12 +481,18 @@ fn payload_responses(
 						holds.push(PollHold {
 							signed_tlv_hash: TlvHash::from_bytes([0; 32]),
 							request_identifier: returned_identifier,
+							relayed: false,
 							claim,
 						});
-						responses.push(set_request_identifier(
-							&single_value(&holds.last().expect("hold was pushed").claim.item)?,
-							returned_identifier,
-						)?);
+						let returned =
+							single_value(&holds.last().expect("hold was pushed").claim.item)?;
+						let relayed = crate::deliver::is_relay_delivery(
+							&returned,
+							&request.bundle.origin,
+							mailer,
+						)?;
+						holds.last_mut().expect("hold was pushed").relayed = relayed;
+						responses.push(set_request_identifier(&returned, returned_identifier)?);
 					}
 					responses.push(accepted(item.request_identifier, response_to)?);
 				} else {
@@ -666,7 +673,7 @@ fn resolve_hold(
 	}
 	let outcome = match item.kind {
 		ItemKind::Accepted => DeliveryOutcome::Delivered("accepted by poll".to_owned()),
-		_ => crate::deliver::rejection_outcome(item.rejection.as_ref(), now()),
+		_ => crate::deliver::rejection_outcome(item.rejection.as_ref(), now(), hold.relayed),
 	};
 	outbound.finish_delivery(
 		&hold.claim.job_id,
@@ -1241,6 +1248,39 @@ mod tests {
 		})
 	}
 
+	/// Accepts the stale-key exchange followed by its probe and retry.
+	///
+	/// The Client stops reading as soon as the stale key fails to authenticate
+	/// the Reply Header. Windows may consequently report the Server's pending
+	/// write as an aborted connection; that is an expected form of the Client's
+	/// active close, but every later transaction still has to complete.
+	fn accept_stale_key_retry(
+		listener: TcpListener,
+		mailer: &Arc<Mailer>,
+	) -> std::thread::JoinHandle<()> {
+		let mailer = Arc::clone(mailer);
+		std::thread::spawn(move || {
+			for connection in 0..3 {
+				let (stream, _) = listener.accept().unwrap();
+				let result = transaction(stream, &mailer);
+				if connection == 0
+					&& result.as_ref().is_err_and(|error| {
+						error.downcast_ref::<std::io::Error>().is_some_and(|error| {
+							matches!(
+								error.kind(),
+								std::io::ErrorKind::ConnectionAborted
+									| std::io::ErrorKind::ConnectionReset
+									| std::io::ErrorKind::BrokenPipe
+							)
+						})
+					}) {
+					continue;
+				}
+				result.unwrap();
+			}
+		})
+	}
+
 	fn driver(node: &Node) -> Outbound {
 		Outbound::new(
 			Arc::clone(&node.mailer.store),
@@ -1404,7 +1444,7 @@ mod tests {
 			.unwrap()
 			.retired_secrets
 			.push(Arc::new(retired.secret));
-		let server = accept(listener, &receiver.mailer, 3);
+		let server = accept_stale_key_retry(listener, &receiver.mailer);
 
 		let sender = node(
 			"rotate-sender",
@@ -1612,6 +1652,78 @@ mod tests {
 		);
 	}
 
+	#[test]
+	fn a_denied_relay_leaves_responsibility_with_the_sender() {
+		let sender_keys = SigningKeyPair::from_seed(&[64; 32]).unwrap();
+		let hub_keys = SigningKeyPair::from_seed(&[65; 32]).unwrap();
+		let far_keys = SigningKeyPair::from_seed(&[66; 32]).unwrap();
+		let hub_listener = TcpListener::bind("127.0.0.1:0").unwrap();
+		let hub_port = hub_listener.local_addr().unwrap().port();
+		let line = |keyword: &str, number: u16, key: &SigningKeyPair, port: u16| {
+			format!(
+				"{keyword}\t{number}\tNode\tLocation\tSysop\t\tCM\t\tIIH:127.0.0.1:{port}:{}\t\t\n",
+				STANDARD_NO_PAD.encode(key.public.as_bytes())
+			)
+		};
+		let list = Arc::new(
+			Nodelist::parse(
+				"fidonet",
+				&[
+					line("Zone", 1, &sender_keys, 1),
+					line("", 2, &hub_keys, hub_port),
+					line("", 3, &far_keys, 1),
+				]
+				.concat(),
+			)
+			.unwrap(),
+		);
+
+		let hub = node(
+			"relay-deny-hub",
+			"fidonet#1/2",
+			hub_keys,
+			"Peer sender\nAddress fidonet#1\nEnd\n",
+			"Routes fidonet#1/2\nEnd\n",
+			&list,
+		);
+		let hub_server = accept(hub_listener, &hub.mailer, 1);
+		let sender = node(
+			"relay-deny-sender",
+			"fidonet#1",
+			sender_keys,
+			&format!("Peer hub\nAddress fidonet#1/2\nEndpoint 127.0.0.1 {hub_port}\nEnd\n"),
+			"Routes fidonet#1\nEnd\n",
+			&list,
+		);
+		let job = submit(&sender, "fidonet#1/3", "Active \"@hub\"", "denied-relay");
+		let summary = driver(&sender)
+			.run_pass(
+				&schedule(&sender.mailer.local_ref, Vec::new()),
+				now(),
+				now() + 3600,
+			)
+			.unwrap();
+		hub_server.join().unwrap();
+
+		assert_eq!(summary.failed, 1);
+		assert_eq!(job_state(&sender, &job), tith_store::JobState::Rejected);
+		let record = sender.mailer.store.outbound().unwrap().query(&job).unwrap();
+		assert_eq!(
+			record.deliveries[0].last_failure,
+			Some(tith_store::PermanentFailureKind::RelayDenied)
+		);
+		assert!(stored_item(&hub, "none").is_none());
+		assert!(
+			hub.mailer
+				.store
+				.outbound()
+				.unwrap()
+				.events("tithd-relay")
+				.unwrap()
+				.is_empty()
+		);
+	}
+
 	/// Two Polls in one request payload must not reuse returned-value identifiers.
 	#[test]
 	fn returned_values_share_one_request_identifier_sequence_per_signed_tlv() {
@@ -1744,6 +1856,7 @@ mod tests {
 			.map(|(index, claim)| PollHold {
 				signed_tlv_hash: response_to,
 				request_identifier: u64::try_from(index + 1).unwrap(),
+				relayed: false,
 				claim,
 			})
 			.collect::<Vec<_>>();

@@ -3,7 +3,7 @@ TITH                                              THIS ISN'T THAT HARD
 **********************************************************************
 
 Publication:  TSP‑0002
-Revision:     8
+Revision:     9
 Title:        Routing and Distribution Configuration
 Author(s):    Stephen Hurd
 Date:         2026‑08‑20
@@ -285,6 +285,11 @@ Contents
   match fails as Loop.  The router MUST NOT conceal the loop by trying
   a later method.
 
+  Unroutable and Loop are routing results detected before a delivery
+  copy is committed.  A local submission or Reroute which encounters
+  either fails under TSP‑0006; the caller retains responsibility, and
+  no delivery‐copy disposition or notification applies.
+
 
 6. Relay and Failure Handling
 ─────────────────────────────
@@ -311,7 +316,7 @@ Contents
     Allow-Relay From <selector> Origin <selector>
         Destination <selector> [<failure-override>]
     Deny-Relay From <selector> Origin <selector>
-        Destination <selector> [<failure-override>]
+        Destination <selector>
 
   Each displayed rule is one physical line; the indentation above is
   only typographic wrapping.  From selects the authenticated immediate
@@ -322,7 +327,8 @@ Contents
   Allow-Relay and Deny-Relay lines are examined together in file
   order.  The first rule whose three selectors match decides whether
   the Message may be relayed.  If no rule matches, relay is denied.
-  A denial fails as Relay-Denied.
+  A denial fails as Relay-Denied.  Because it creates no delivery
+  copy, Deny-Relay has no failure override.
 
   Every Routes block MAY contain one Failure-Default line:
 
@@ -345,8 +351,8 @@ Contents
     Failure <kind> Origin <selector> Destination <selector>
         <disposition> Notify <notification>
 
-  Each Failure is one physical line.  Kind is one of Any, Unroutable,
-  Loop, Relay-Denied, Rejected, or Authentication.  An All Destination
+  Each Failure is one physical line.  Kind is one of Any,
+  Relay-Denied, Rejected, or Authentication.  An All Destination
   selector also matches an EchoMail Message or distribution File which
   has an Area instead of a Destination.  Another Destination selector
   does not match an item without a Destination.  A peer‐addressed
@@ -365,8 +371,8 @@ Contents
   the same effective signer as a relay rule.  Any matches every
   failure kind.
 
-  A Route, Allow-Relay, or Deny-Relay line may end with this complete
-  failure override:
+  A Route or Allow-Relay line may end with this complete failure
+  override:
 
     On-Failure <disposition> Notify <notification>
 
@@ -374,26 +380,40 @@ Contents
 
     1. The failure override on the Route which supplied the method
        list.
-    2. The failure override on the relay rule which applied.
+    2. The failure override on the Allow-Relay rule which authorized
+       creation of this copy.
     3. The first matching Failure line.
     4. Failure-Default.
     5. Dead-Letter with notification None.
 
   For a delivery copy which is successfully created, the policy for
-  each permanent failure kind is resolved and stored with that copy at
-  creation.  A routing failure which prevents creation of a copy and a
-  relay denial are resolved when detected.
+  Relay-Denied, Rejected, and Authentication is resolved and stored
+  with that copy at creation.  Unroutable and Loop prevent copy
+  creation and are not delivery‐copy failure kinds.
+
+  A receiving node MUST NOT answer Accepted for a relayed Message
+  until its outbound delivery copy is durable, or until it recognizes
+  a duplicate of a Message for which it previously accepted that
+  responsibility.  Authentication failure, relay denial, Unroutable,
+  and Loop detected before that commitment are answered with Rejected.
+  The receiving node logs the failure but applies no disposition or
+  notification: the sending node still owns its committed copy.  A
+  temporary error which prevents durable commitment MUST NOT be
+  reported as a permanent rejection; absence of a complete response
+  leaves the sending copy eligible for retry.
 
   Every failure MUST be logged locally regardless of disposition or
   notification.
 
-  Rejected reason 1 from TTS‑0005 fails as Rejected.  Reason 2 fails
-  as Authentication.  Reason 3 completes a conditional request and is
-  not a failure.  Reason 4 retains the item for retry no earlier than
-  its Timestamp, or for the next applicable schedule when no Timestamp
-  is present.  A request for which no complete response was received
-  remains eligible for retry and does not invoke permanent failure
-  policy.
+  Rejected reason 1 from an intermediate next hop fails as
+  Relay-Denied; reason 1 from the ultimate Destination fails as
+  Rejected.  Exact identity comparison includes the PublicKey of an
+  unlisted address.  Reason 2 fails as Authentication.  Reason 3
+  completes a conditional request and is not a failure.  Reason 4
+  retains the item for retry no earlier than its Timestamp, or for the
+  next applicable schedule when no Timestamp is present.  A request
+  for which no complete response was received remains eligible for
+  retry and does not invoke permanent failure policy.
 
 
 7. EchoMail and File Distribution
@@ -691,11 +711,11 @@ Contents
     End
 
   Failure policy can preserve most failures while returning and
-  discarding detected loops:
+  discarding relay denials:
 
     Routes fidonet#1:123/45
     Failure-Default Dead-Letter Notify Origin-Sysop
-    Failure Loop Origin All Destination All Discard Notify Both
+    Failure Relay-Denied Origin All Destination All Discard Notify Both
     End
 
   EchoMail and file distribution links are explicit and unrelated to
@@ -804,5 +824,9 @@ B. History
 
    Rev.8, 2026‑08‑20: Added explicit trusted‑contact TOFU and resolved
    listed keys through durable pins and continuity proofs.
+
+   Rev.9, 2026‑08‑20: Assigned pre‐commit failures to the caller,
+   restricted delivery‐copy policy to three remote response kinds,
+   and made relay acceptance the durable responsibility boundary.
 
 **********************************************************************

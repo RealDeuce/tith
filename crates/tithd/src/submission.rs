@@ -1316,9 +1316,9 @@ fn file_identity(_: &std::fs::Metadata) -> Vec<u8> {
 }
 
 fn convert_policies(
-	configured: [tith_config::FailurePolicy; 5],
+	configured: [tith_config::FailurePolicy; 3],
 	override_policy: Option<FailureOverride>,
-) -> [FailurePolicy; 5] {
+) -> [FailurePolicy; 3] {
 	if let Some(FailureOverride::Policy {
 		disposition,
 		notification,
@@ -1336,13 +1336,13 @@ fn convert_policies(
 				IpcNotification::Both => FailureNotification::Both,
 			},
 		};
-		return [selected; 5];
+		return [selected; 3];
 	}
 	configured_policies(configured)
 }
 
 /// Maps configured failure policies onto their durable form.
-pub fn configured_policies(configured: [tith_config::FailurePolicy; 5]) -> [FailurePolicy; 5] {
+pub fn configured_policies(configured: [tith_config::FailurePolicy; 3]) -> [FailurePolicy; 3] {
 	configured.map(|default| FailurePolicy {
 		disposition: match default.disposition {
 			tith_config::Disposition::DeadLetter => FailureDisposition::DeadLetter,

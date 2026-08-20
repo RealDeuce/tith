@@ -108,8 +108,6 @@ pub struct FailurePolicy {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum FailureKind {
 	Any,
-	Unroutable,
-	Loop,
 	RelayDenied,
 	Rejected,
 	Authentication,
@@ -123,12 +121,17 @@ pub struct RouteRule {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub enum RelayAction {
+	Allow { on_failure: Option<FailurePolicy> },
+	Deny,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RelayRule {
-	pub allow: bool,
+	pub action: RelayAction,
 	pub from: Selector,
 	pub origin: Selector,
 	pub destination: Selector,
-	pub on_failure: Option<FailurePolicy>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -654,12 +657,18 @@ fn parse_routes(input: &str) -> Result<Vec<Routes>, ConfigError> {
 					} else {
 						return Err(err(file, line.number, "invalid relay tail"));
 					};
+					let action = if f[0] == "Allow-Relay" {
+						RelayAction::Allow { on_failure }
+					} else if on_failure.is_none() {
+						RelayAction::Deny
+					} else {
+						return Err(err(file, line.number, "Deny-Relay cannot carry On-Failure"));
+					};
 					let rule = RelayRule {
-						allow: f[0] == "Allow-Relay",
+						action,
 						from,
 						origin,
 						destination,
-						on_failure,
 					};
 					if relay.contains(&rule) {
 						return Err(err(file, line.number, "duplicate relay rule"));
@@ -672,8 +681,6 @@ fn parse_routes(input: &str) -> Result<Vec<Routes>, ConfigError> {
 				Some("Failure") => {
 					let kind = match f.get(1).copied() {
 						Some("Any") => FailureKind::Any,
-						Some("Unroutable") => FailureKind::Unroutable,
-						Some("Loop") => FailureKind::Loop,
 						Some("Relay-Denied") => FailureKind::RelayDenied,
 						Some("Rejected") => FailureKind::Rejected,
 						Some("Authentication") => FailureKind::Authentication,
@@ -1138,5 +1145,24 @@ mod tests {
 			)
 			.is_err()
 		);
+	}
+
+	#[test]
+	fn relay_denials_cannot_carry_failure_policy() {
+		let denied = "Routes fidonet#1\nDeny-Relay From All Origin All Destination All On-Failure Discard Notify Both\nEnd\n";
+		assert!(ConfigurationSet::parse("", denied, "", "").is_err());
+
+		let allowed = "Routes fidonet#1\nAllow-Relay From All Origin All Destination All On-Failure Discard Notify Both\nEnd\n";
+		assert!(ConfigurationSet::parse("", allowed, "", "").is_ok());
+	}
+
+	#[test]
+	fn precommit_routing_failures_are_not_delivery_policy_kinds() {
+		for kind in ["Unroutable", "Loop"] {
+			let routes = format!(
+				"Routes fidonet#1\nFailure {kind} Origin All Destination All Dead-Letter Notify None\nEnd\n"
+			);
+			assert!(ConfigurationSet::parse("", &routes, "", "").is_err());
+		}
 	}
 }

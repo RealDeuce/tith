@@ -142,6 +142,10 @@ pub enum StoreError {
 	Crypto(CryptoError),
 	InvalidPayload,
 	CorruptRecord,
+	UnsupportedRecordVersion {
+		record: &'static str,
+		version: u8,
+	},
 	NotFound,
 	Stale(InboundState),
 	JobStale(JobState),

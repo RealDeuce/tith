@@ -92,6 +92,16 @@ pub struct FailurePolicy {
 	pub notification: FailureNotification,
 }
 
+/// The permanent remote response kinds for which a committed copy stores
+/// policy. The discriminants are the policy-array indexes.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(u8)]
+pub enum PermanentFailureKind {
+	RelayDenied,
+	Rejected,
+	Authentication,
+}
+
 impl Default for FailurePolicy {
 	fn default() -> Self {
 		Self {
@@ -115,7 +125,7 @@ pub struct NewDelivery {
 	pub mode: DeliveryMode,
 	pub class: String,
 	pub retry_at: Option<u64>,
-	pub policies: [FailurePolicy; 5],
+	pub policies: [FailurePolicy; 3],
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -128,10 +138,11 @@ pub struct DeliveryRecord {
 	pub mode: DeliveryMode,
 	pub class: String,
 	pub retry_at: Option<u64>,
-	pub policies: [FailurePolicy; 5],
+	pub policies: [FailurePolicy; 3],
 	pub state: JobState,
 	pub attempts: u64,
 	pub last_result: String,
+	pub last_failure: Option<PermanentFailureKind>,
 	pub worker_token: Option<String>,
 }
 
@@ -252,8 +263,14 @@ pub struct DeliveryClaim {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum DeliveryOutcome {
 	Delivered(String),
-	Deferred { retry_at: u64, result: String },
-	Rejected(String),
+	Deferred {
+		retry_at: u64,
+		result: String,
+	},
+	Rejected {
+		kind: PermanentFailureKind,
+		result: String,
+	},
 	Failed(String),
 }
 
@@ -580,6 +597,7 @@ impl OutboundStore {
 				) {
 					copy.state = JobState::Cancelled;
 					copy.retry_at = None;
+					copy.last_failure = None;
 					"Cancelled".clone_into(&mut copy.last_result);
 					changed = true;
 				}
@@ -607,6 +625,7 @@ impl OutboundStore {
 				) {
 					copy.state = JobState::Queued;
 					copy.retry_at = None;
+					copy.last_failure = None;
 					"Retry requested".clone_into(&mut copy.last_result);
 					changed = true;
 				}
@@ -644,6 +663,7 @@ impl OutboundStore {
 			copy.retry_at = None;
 			copy.policies = delivery.policies;
 			copy.state = JobState::Queued;
+			copy.last_failure = None;
 			"Rerouted".clone_into(&mut copy.last_result);
 			ControlOutcome::Completed(JobState::Queued)
 		})
@@ -899,9 +919,15 @@ impl OutboundStore {
 			DeliveryOutcome::Deferred { retry_at, result } => {
 				(JobState::Deferred, Some(retry_at), result)
 			}
-			DeliveryOutcome::Rejected(result) => (JobState::Rejected, None, result),
+			DeliveryOutcome::Rejected { kind, result } => {
+				copy.last_failure = Some(kind);
+				(JobState::Rejected, None, result)
+			}
 			DeliveryOutcome::Failed(result) => (JobState::Failed, None, result),
 		};
+		if !matches!(state, JobState::Rejected) {
+			copy.last_failure = None;
+		}
 		copy.state = state;
 		copy.retry_at = retry_at;
 		copy.last_result.clone_from(&result);
@@ -1011,6 +1037,7 @@ fn make_job(job_id: String, value: NewOutboundJob) -> OutboundJob {
 			},
 			attempts: 0,
 			last_result: String::new(),
+			last_failure: None,
 			worker_token: None,
 		})
 		.collect();
@@ -1177,7 +1204,7 @@ fn decode_event(mut input: &[u8]) -> Result<(String, bool, OutboundEvent), Store
 }
 
 fn encode_job(value: &OutboundJob) -> Vec<u8> {
-	let mut output = vec![1];
+	let mut output = vec![2];
 	for text in [&value.job_id, &value.application, &value.idempotency_key] {
 		put_string(&mut output, text);
 	}
@@ -1226,6 +1253,13 @@ fn encode_job(value: &OutboundJob) -> Vec<u8> {
 		output.push(copy.state as u8);
 		put_u64(&mut output, copy.attempts);
 		put_string(&mut output, &copy.last_result);
+		match copy.last_failure {
+			Some(kind) => {
+				output.push(1);
+				output.push(kind as u8);
+			}
+			None => output.push(0),
+		}
 		put_optional_string(&mut output, copy.worker_token.as_deref());
 	}
 	put_u64(&mut output, value.sources.len() as u64);
@@ -1243,8 +1277,12 @@ fn encode_job(value: &OutboundJob) -> Vec<u8> {
 }
 
 fn decode_job(mut input: &[u8]) -> Result<OutboundJob, StoreError> {
-	if take_byte(&mut input)? != 1 {
-		return Err(StoreError::CorruptRecord);
+	let version = take_byte(&mut input)?;
+	if version != 2 {
+		return Err(StoreError::UnsupportedRecordVersion {
+			record: "outbound job",
+			version,
+		});
 	}
 	let job_id = take_string(&mut input)?;
 	let application = take_string(&mut input)?;
@@ -1281,7 +1319,7 @@ fn decode_job(mut input: &[u8]) -> Result<OutboundJob, StoreError> {
 		};
 		let class = take_string(&mut input)?;
 		let retry_at = take_optional_u64(&mut input)?;
-		let mut policies = [FailurePolicy::default(); 5];
+		let mut policies = [FailurePolicy::default(); 3];
 		for policy in &mut policies {
 			policy.disposition = match take_byte(&mut input)? {
 				0 => FailureDisposition::DeadLetter,
@@ -1296,6 +1334,19 @@ fn decode_job(mut input: &[u8]) -> Result<OutboundJob, StoreError> {
 				_ => return Err(StoreError::CorruptRecord),
 			};
 		}
+		let state = decode_job_state(take_byte(&mut input)?)?;
+		let attempts = take_u64(&mut input)?;
+		let last_result = take_string(&mut input)?;
+		let last_failure = match take_byte(&mut input)? {
+			0 => None,
+			1 => Some(match take_byte(&mut input)? {
+				0 => PermanentFailureKind::RelayDenied,
+				1 => PermanentFailureKind::Rejected,
+				2 => PermanentFailureKind::Authentication,
+				_ => return Err(StoreError::CorruptRecord),
+			}),
+			_ => return Err(StoreError::CorruptRecord),
+		};
 		deliveries.push(DeliveryRecord {
 			index,
 			local_identity,
@@ -1305,9 +1356,10 @@ fn decode_job(mut input: &[u8]) -> Result<OutboundJob, StoreError> {
 			class,
 			retry_at,
 			policies,
-			state: decode_job_state(take_byte(&mut input)?)?,
-			attempts: take_u64(&mut input)?,
-			last_result: take_string(&mut input)?,
+			state,
+			attempts,
+			last_result,
+			last_failure,
 			worker_token: take_optional_string(&mut input)?,
 		});
 	}
@@ -1461,13 +1513,34 @@ mod tests {
 				mode: DeliveryMode::Active,
 				class: "normal".to_owned(),
 				retry_at: None,
-				policies: [FailurePolicy::default(); 5],
+				policies: [FailurePolicy::default(); 3],
 			}],
 			sources: Vec::new(),
 			created: 10,
 			forward_inbound: None,
 			forward_claim_token: None,
 		}
+	}
+
+	#[test]
+	fn outbound_records_use_only_the_current_private_format() {
+		let payload = OwnedTlv::new(types::MESSAGE, Vec::new()).unwrap().encode();
+		let job = make_job(
+			"J-current".to_owned(),
+			new_job(identity("format", &payload), payload),
+		);
+		let current = encode_job(&job);
+		assert_eq!(current[0], 2);
+
+		let mut obsolete = current;
+		obsolete[0] = 1;
+		assert!(matches!(
+			decode_job(&obsolete),
+			Err(StoreError::UnsupportedRecordVersion {
+				record: "outbound job",
+				version: 1
+			})
+		));
 	}
 
 	#[test]
@@ -1653,7 +1726,7 @@ mod tests {
 				mode: DeliveryMode::Passive,
 				class: "normal".to_owned(),
 				retry_at: Some(u64::MAX),
-				policies: [FailurePolicy::default(); 5],
+				policies: [FailurePolicy::default(); 3],
 			}],
 			sources: Vec::new(),
 			created,
