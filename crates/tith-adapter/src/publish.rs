@@ -10,7 +10,9 @@
 //! "A legacy tosser MUST NOT be able to observe a packet whose required
 //! companion is still temporary or incomplete."
 
-use std::fs::{self, File, OpenOptions};
+#[cfg(unix)]
+use std::fs::File;
+use std::fs::{self, OpenOptions};
 use std::io::{self, Write as _};
 use std::path::{Path, PathBuf};
 
@@ -60,20 +62,26 @@ fn stage(directory: &Path, name: &str, contents: &[u8]) -> io::Result<PathBuf> {
 	Ok(path)
 }
 
-/// Makes a directory entry durable, so a crash cannot lose the rename.
+/// Makes a directory entry durable, so a crash cannot lose the publication.
+///
+/// A directory cannot be opened for writing; opening it read-only is enough for
+/// fsync on the platforms which have one.
+#[cfg(unix)]
 fn sync_directory(directory: &Path) -> io::Result<()> {
-	// A directory cannot be opened for writing; opening it read-only is enough
-	// for fsync on the platforms which need it, and Windows has no equivalent.
-	match File::open(directory) {
-		Ok(file) => match file.sync_all() {
-			Ok(()) => Ok(()),
-			// Windows refuses fsync on a directory handle; the rename is already
-			// ordered there.
-			Err(error) if error.kind() == io::ErrorKind::PermissionDenied => Ok(()),
-			Err(error) => Err(error),
-		},
-		Err(error) => Err(error),
-	}
+	File::open(directory)?.sync_all()
+}
+
+/// Windows has no directory fsync, and cannot even open a directory as a file
+/// without `FILE_FLAG_BACKUP_SEMANTICS`, so this is a documented no-op rather
+/// than an error to catch. The object's own `sync_all` and the ordering NTFS
+/// gives its metadata are what durability rests on there.
+///
+/// `tithd::filesystem` and `tith_submit::filesystem` say the same thing the
+/// same way.
+#[cfg(not(unix))]
+#[expect(clippy::unnecessary_wraps, reason = "one signature for both platforms")]
+fn sync_directory(_: &Path) -> io::Result<()> {
+	Ok(())
 }
 
 /// Publishes an object under an unused final name.
