@@ -352,6 +352,7 @@ fn payload_responses(
 			&& first.value.as_slice() == request.header_hash.as_bytes()
 	});
 	let mut responses = Vec::new();
+	let mut returned_identifier = 0u64;
 	let request_values = if payload
 		.data
 		.first()
@@ -382,19 +383,21 @@ fn payload_responses(
 					// TTS-0005 section 3: every value in the snapshot is returned in
 					// the same `SignedTLV` as the Accepted, which is the one these
 					// responses are about to be built into.
-					for (offset, claim) in claims.into_iter().enumerate() {
-						let identifier = u64::try_from(offset)? + 1;
+					for claim in claims {
+						returned_identifier = returned_identifier
+							.checked_add(1)
+							.ok_or("too many values returned in one SignedTLV")?;
 						// Register the claim before parsing or encoding its item. Any
 						// later error reaches `transaction`'s common release path; the
 						// real response hash is filled in after this SignedTLV is sent.
 						holds.push(PollHold {
 							signed_tlv_hash: TlvHash::from_bytes([0; 32]),
-							request_identifier: identifier,
+							request_identifier: returned_identifier,
 							claim,
 						});
 						responses.push(set_request_identifier(
 							&single_value(&holds.last().expect("hold was pushed").claim.item)?,
-							identifier,
+							returned_identifier,
 						)?);
 					}
 					responses.push(accepted(item.request_identifier, response_to)?);
@@ -1353,6 +1356,99 @@ mod tests {
 			validated.authentication,
 			Some(tith_store::ItemAuthentication::OriginValid)
 		);
+	}
+
+	/// Two Polls in one request payload must not reuse returned-value identifiers.
+	#[test]
+	fn returned_values_share_one_request_identifier_sequence_per_signed_tlv() {
+		let (mailer, peer_keys, peer, local, database) = setup();
+		let message_job = submit(
+			&Node {
+				mailer: Arc::clone(&mailer),
+				database: database.with_extension("unused"),
+			},
+			&peer.address.to_string(),
+			"Passive \"@remote\"",
+			"held-message",
+		);
+		assert_eq!(
+			mailer
+				.store
+				.outbound()
+				.unwrap()
+				.query(&message_job)
+				.unwrap()
+				.state,
+			tith_store::JobState::Queued
+		);
+
+		let file = standalone_file(&local, &mailer.local_secret, 99);
+		let encoded = file.encode();
+		let identity = tith_store::SubmissionIdentity {
+			application: "test".to_owned(),
+			idempotency_key: "held-file".to_owned(),
+			digest: hash_tlv(&encoded).unwrap(),
+		};
+		let file_job = tith_store::NewOutboundJob {
+			identity: identity.clone(),
+			kind: JobKind::PeerFile,
+			target: tith_store::JobTarget::Destination(peer.address.to_string()),
+			local_identity: local.address.to_string(),
+			item: encoded,
+			deliveries: vec![tith_store::NewDelivery {
+				local_identity: local.address.to_string(),
+				next_hop: peer.address.to_string(),
+				next_hop_key: None,
+				mode: tith_store::DeliveryMode::Passive,
+				class: "Normal".to_owned(),
+				retry_at: None,
+				policies: std::array::from_fn(|_| tith_store::FailurePolicy::default()),
+			}],
+			sources: Vec::new(),
+			created: now(),
+			forward_inbound: None,
+			forward_claim_token: None,
+		};
+		let outbound = mailer.store.outbound().unwrap();
+		assert!(matches!(
+			outbound
+				.commit_batch(&[identity], |_, _| Ok(vec![file_job]))
+				.unwrap(),
+			tith_store::BatchCommit::Committed(_)
+		));
+
+		let poll_messages = container(
+			types::POLL_MESSAGES,
+			&[OwnedTlv::new(types::REQUEST_IDENTIFIER, encode_u64(10)).unwrap()],
+		);
+		let poll_files = container(
+			types::POLL_FILES,
+			&[OwnedTlv::new(types::REQUEST_IDENTIFIER, encode_u64(11)).unwrap()],
+		);
+		let request = build_bundle(
+			&peer,
+			&peer_keys.secret,
+			&local,
+			1,
+			vec![vec![poll_messages, poll_files]],
+		)
+		.unwrap();
+		let (response, _) = exchange(&request, &mailer);
+		let reply = Bundle::parse(&response, mailer.as_ref()).unwrap();
+		let identifiers: Vec<_> = validate_payload(&reply.payloads[0], mailer.as_ref())
+			.unwrap()
+			.into_iter()
+			.filter(|item| {
+				matches!(
+					item.kind,
+					ItemKind::NetMail | ItemKind::EchoMail | ItemKind::File
+				)
+			})
+			.map(|item| item.request_identifier)
+			.collect();
+		assert_eq!(identifiers, vec![1, 2]);
+		drop(mailer);
+		fs::remove_file(database).unwrap();
 	}
 
 	/// The Passive half: a held copy only moves when the peer asks for it.
