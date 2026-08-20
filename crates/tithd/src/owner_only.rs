@@ -168,9 +168,14 @@ pub(crate) fn permits_only_owner(sddl: &str) -> bool {
 		Some(position) => dacl.split_at(position),
 		None => (dacl, ""),
 	};
-	// "P" is protected, so nothing is inherited from the containing directory.
-	// "AI" would mean inherited entries are present after all.
-	if !flags.contains('P') || flags.contains("AI") {
+	// "P" is protected, which is what makes the containing directory's entries
+	// not apply. "AI" may sit beside it: that is SE_DACL_AUTO_INHERITED, which
+	// records that the auto-inheritance algorithm produced this DACL, and
+	// SetNamedSecurityInfoW sets it where CreateFileW with an explicit
+	// descriptor does not. It says nothing about who can reach the object. An
+	// entry which really was inherited carries "ID" in its own flags, and the
+	// per-entry check below rejects any flags at all.
+	if !flags.contains('P') {
 		return false;
 	}
 	let mut remaining = aces;
@@ -325,14 +330,23 @@ mod tests {
 		assert!(permits_only_owner("D:P(A;;FA;;;OW)"));
 		// What `seal` writes: the owner reads and deletes but cannot write.
 		assert!(permits_only_owner("D:P(A;;FA;;;SY)(A;;FRSD;;;OW)"));
+		// What SetNamedSecurityInfoW actually stores: protected, and flagged as
+		// having come from the auto-inheritance algorithm. Windows reported this
+		// spelling for a restricted directory and for a sealed file.
+		assert!(permits_only_owner("D:PAI(A;;FA;;;SY)(A;;FA;;;OW)"));
+		assert!(permits_only_owner("D:PAI(A;;FA;;;SY)(A;;FRSD;;;OW)"));
 
 		// Any other trustee can reach the object, whoever it is.
 		assert!(!permits_only_owner("D:P(A;;FA;;;SY)(A;;FA;;;WD)"));
 		assert!(!permits_only_owner("D:P(A;;FA;;;BA)"));
 		assert!(!permits_only_owner("D:P(A;;FR;;;S-1-5-21-1-2-3-1001)"));
-		// An unprotected DACL inherits whatever the directory grants.
+		// An unprotected DACL inherits whatever the directory grants, with or
+		// without the auto-inheritance flag beside it.
 		assert!(!permits_only_owner("D:(A;;FA;;;OW)"));
 		assert!(!permits_only_owner("D:AI(A;;FA;;;OW)"));
+		// An entry which really was inherited says so in its own flags.
+		assert!(!permits_only_owner("D:PAI(A;ID;FA;;;OW)"));
+		assert!(!permits_only_owner("D:PAI(A;;FA;;;OW)(A;ID;FA;;;BA)"));
 		// A deny entry is not an allow entry, and neither is a malformed one.
 		assert!(!permits_only_owner("D:P(D;;FA;;;WD)(A;;FA;;;OW)"));
 		assert!(!permits_only_owner("D:P(A;OICI;FA;;;OW)"));
