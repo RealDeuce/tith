@@ -365,7 +365,11 @@ impl Nodelist {
 					let zone = hierarchy
 						.zone
 						.ok_or_else(|| fail(line_number, NodelistErrorKind::InvalidHierarchy))?;
-					let net = hierarchy.host.as_ref().map_or(zone, Address::net);
+					let net = hierarchy
+						.host
+						.as_ref()
+						.or(hierarchy.region.as_ref())
+						.map_or(zone, Address::net);
 					if hierarchy.host.is_none()
 						&& hierarchy.region.is_none()
 						&& !matches!(keyword, Keyword::Hub)
@@ -535,6 +539,23 @@ mod tests {
 			list.public_key(&address),
 			Some(PublicKey::from_bytes([9; 32]))
 		);
+	}
+
+	#[test]
+	fn addresses_region_independent_nodes_in_the_regions_logical_net() {
+		let input = [
+			line("Zone", 1, ""),
+			line("Region", 10, ""),
+			line("", 21, ""),
+		]
+		.concat();
+		let list = Nodelist::parse("fidonet", &input).unwrap();
+		let address: Address = "fidonet#1:10/21".parse().unwrap();
+		let entry = list
+			.get(&address)
+			.expect("Region Independent Node uses the Region's logical net");
+		assert_eq!(entry.branch.region.as_ref().unwrap().net(), 10);
+		assert!(list.get(&"fidonet#1/21".parse().unwrap()).is_none());
 	}
 
 	#[test]
