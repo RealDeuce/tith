@@ -483,7 +483,7 @@ fn apply(path: &Path, sddl: &str) -> io::Result<()> {
 /// been readable is already a key which may have been read.
 pub fn owner_only_dacl(path: &Path) -> io::Result<()> {
 	let stored = dacl(path)?;
-	if crate::secret::permits_only_owner(&stored) {
+	if crate::owner_only::permits_only_owner(&stored) {
 		return Ok(());
 	}
 	Err(io::Error::new(
