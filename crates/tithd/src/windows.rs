@@ -356,7 +356,7 @@ fn write_all(pipe: HANDLE, mut input: &[u8]) -> io::Result<()> {
 	Ok(())
 }
 
-/// A protected DACL granting full access only to LocalSystem and the object
+/// A protected DACL granting full access only to `LocalSystem` and the object
 /// owner, and nothing else. This is the Windows spelling of POSIX mode 0600;
 /// `create_pipe` builds the same descriptor for the service pipe.
 ///
