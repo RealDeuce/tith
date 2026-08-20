@@ -286,6 +286,11 @@ case, and processes them in numeric order.
 tith netmail scan --files /var/run/tith-files --origin fidonet#1:2/3 /var/spool/netmail
 ```
 
+The legacy `DateTime` is local time. A `TZUTC` or `TZUTCINFO` control supplies
+its offset from UTC; otherwise `--source-offset SECONDS` must give the trusted
+offset for this source, in seconds east of UTC. A message without either is
+left in place because its native timestamp would be ambiguous.
+
 Two legacy conventions state what happens to an attached file after it is sent,
 and they cannot be told apart from the bytes, so the convention is selected
 rather than guessed:
@@ -460,6 +465,9 @@ their reference file carries.
 tith bso scan --files /var/run/tith-files --origin fidonet#1:104/36 \
     --outbound /sbbs/fido/outbound
 ```
+
+Packet message timestamps use `TZUTC`, `TZUTCINFO`, or the same trusted
+`--source-offset SECONDS` fallback described for `tith netmail scan`.
 
 It searches the outbound root, every `<root>.<zzz>` zone directory, and each
 `*.pnt` subdirectory beneath them, accepting upper and lower case throughout.

@@ -366,7 +366,10 @@ fn timezone(offset: i64) -> Result<String, ConvertError> {
 	Ok(format!("{sign}{hours:02}{remainder:02}"))
 }
 
-fn parse_timezone(value: &str) -> Option<i64> {
+/// Parses the TSP-0003 `TZUTC`/`TZUTCINFO` offset syntax into seconds east of
+/// UTC.
+#[must_use]
+pub fn parse_timezone(value: &str) -> Option<i64> {
 	let (sign, digits) = match value.strip_prefix('-') {
 		Some(rest) => (-1, rest),
 		None => (1, value),

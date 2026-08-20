@@ -20,7 +20,7 @@ use tith_submit::{Binding, check_capabilities, validate};
 use crate::netmail::submission::{self, Context};
 use correlate::{Correlation, correlate};
 
-const USAGE: &str = "usage: tith bso scan (--files ROOT | --tcp ADDRESS CLIENT-PUBLIC CLIENT-SECRET-FILE SERVER-PUBLIC | --unix SOCKET | --named-pipe PIPE SERVICE-SID) --origin LOCAL-IDENTITY --outbound ROOT [--zone N] [--domain NAME] [--domain-root NAME=PATH]... [--application NAME] [--binkley] [--dry-run] [--bsy-timeout SECONDS] [--include-hold]";
+const USAGE: &str = "usage: tith bso scan (--files ROOT | --tcp ADDRESS CLIENT-PUBLIC CLIENT-SECRET-FILE SERVER-PUBLIC | --unix SOCKET | --named-pipe PIPE SERVICE-SID) --origin LOCAL-IDENTITY --outbound ROOT [--zone N] [--domain NAME] [--domain-root NAME=PATH]... [--source-offset SECONDS] [--application NAME] [--binkley] [--dry-run] [--bsy-timeout SECONDS] [--include-hold]";
 
 /// FTS-5005 section 5.1 recommends ignoring a bsy older than twice the maximum
 /// session time. Ten minutes is the same default the netmail scanner uses for
@@ -73,6 +73,7 @@ struct Options {
 	outbound: Outbound,
 	root: PathBuf,
 	domain: Option<String>,
+	configured_offset: Option<i64>,
 }
 
 fn options(arguments: &mut impl Iterator<Item = String>) -> Result<Options, Box<dyn Error>> {
@@ -85,6 +86,7 @@ fn options(arguments: &mut impl Iterator<Item = String>) -> Result<Options, Box<
 	let mut root = None;
 	let mut zone = 1_u16;
 	let mut domain = None;
+	let mut configured_offset = None;
 	let mut domain_roots = Vec::new();
 	while let Some(argument) = arguments.next() {
 		match argument.as_str() {
@@ -92,6 +94,7 @@ fn options(arguments: &mut impl Iterator<Item = String>) -> Result<Options, Box<
 			"--outbound" => root = Some(PathBuf::from(arguments.next().ok_or(USAGE)?)),
 			"--zone" => zone = arguments.next().ok_or(USAGE)?.parse()?,
 			"--domain" => domain = Some(arguments.next().ok_or(USAGE)?),
+			"--source-offset" => configured_offset = Some(arguments.next().ok_or(USAGE)?.parse()?),
 			"--domain-root" => {
 				let value = arguments.next().ok_or(USAGE)?;
 				let (name, path) = value.split_once('=').ok_or(USAGE)?;
@@ -127,6 +130,7 @@ fn options(arguments: &mut impl Iterator<Item = String>) -> Result<Options, Box<
 		outbound,
 		root,
 		domain,
+		configured_offset,
 	})
 }
 
@@ -516,6 +520,7 @@ fn unclaimed_entries(
 			origin: &options.origin,
 			legacy_origin: options.legacy_origin.clone(),
 			domain: options.domain.as_deref(),
+			configured_offset: options.configured_offset,
 			style: options.style,
 			features,
 			directory,
@@ -592,6 +597,7 @@ fn request_list(
 			origin: &options.origin,
 			legacy_origin: options.legacy_origin.clone(),
 			domain: options.domain.as_deref(),
+			configured_offset: options.configured_offset,
 			style: options.style,
 			features: &features,
 			directory: file.path.parent().unwrap_or(Path::new(".")),
@@ -631,6 +637,7 @@ fn submit_message(
 			origin: &options.origin,
 			legacy_origin: options.legacy_origin.clone(),
 			domain: options.domain.as_deref(),
+			configured_offset: options.configured_offset,
 			style: options.style,
 			features,
 			directory,
@@ -787,6 +794,7 @@ mod tests {
 			outbound: Outbound::new(root, 1),
 			root: root.to_path_buf(),
 			domain: None,
+			configured_offset: Some(0),
 		}
 	}
 
