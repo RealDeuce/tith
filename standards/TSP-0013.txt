@@ -3,7 +3,7 @@ TITH                                              THIS ISN'T THAT HARD
 **********************************************************************
 
 Publication:  TSP‑0013
-Revision:     5
+Revision:     6
 Title:        Legacy Mailer and Tosser IPC Adapters
 Author(s):    Stephen Hurd
 Date:         2026‑08‑20
@@ -92,6 +92,7 @@ Contents
     • the exact signed Message region, Signature, and generated
       TITHSIGN and TITHSIG controls;
     • stable generated legacy names and object digests;
+    • every applicable distribution obligation and its Forward Job;
     • staging, publication, and tosser ownership state; and
     • the claim token and acknowledgement recovery state when current.
 
@@ -205,19 +206,25 @@ Contents
   processed the objects yet.  It MUST recover and re‐present them
   without depending on the mailer's retained payload.
 
-  For EchoMail or file distribution, the ledger also records every
-  applicable routing or distribution obligation.  Acknowledging the
-  native item transfers those obligations to the adapter; it does not
-  say that the legacy toss completed.  The adapter retains its private
-  source until the legacy tosser has durably created every required
-  outbound copy or the adapter has committed the equivalent native
-  copies with TSP‑0006 Job Forward while the claim remains current.
+  For an Origin-Valid or SignedOrigin-Valid EchoMail or file
+  distribution item, the ledger also records its applicable
+  distribution obligation.  Before acknowledging the item, the adapter
+  MUST commit the native copies with TSP‑0006 Job Forward while the
+  claim remains current and record the resulting Job.  The Forward Job
+  preserves the exact signed bytes and Signature.  The published legacy
+  object is terminal local delivery; the adapter and legacy tosser MUST
+  NOT use it to create onward copies.
+
+  An Unsigned, Origin-Invalid, or SignedOrigin-Invalid item has no
+  onward distribution obligation.  Its Deliver-Warn or Orphan outcome
+  is final-delivery or administrative work, and neither the adapter nor
+  the legacy tosser creates an onward copy from it.
 
   An adapter MAY retain the native claim until the legacy tosser
-  completes instead, but it must renew the claim, preserve InboundID
-  idempotency, and prevent another worker from publishing the same
-  objects.  Legacy file disappearance by itself is not a sufficient
-  durable acknowledgement record.
+  completes terminal local delivery, but it must renew the claim,
+  preserve InboundID idempotency, and prevent another worker from
+  publishing the same objects.  Legacy file disappearance by itself is
+  not a sufficient durable acknowledgement record.
 
   A temporary conversion or publication failure uses Defer-Inbound or
   Release-Inbound.  A permanent conversion refusal uses Reject-Inbound
@@ -412,7 +419,7 @@ A. References
 
   [TSP‑0006] "Outbound Job Submission", TITH, 2026‑08‑20.
 
-  [TSP‑0011] "Durable Inbound Delivery Items", TITH, 2026‑08‑18.
+  [TSP‑0011] "Durable Inbound Delivery Items", TITH, 2026‑08‑20.
 
   [TSP‑0012] "Tosser Consumption IPC", TITH, 2026‑08‑18.
 
@@ -442,5 +449,10 @@ B. History
    selected Local-Identity; mapped only packet‐persistent attributes
    into signed data; and placed TITHSIG reconstruction through the
    TSP‑0006 retained Message Job.
+
+   Rev.6, 2026‑08‑20: Required native Job Forward for every eligible
+   inbound distribution obligation, made legacy publication terminal
+   local delivery, and prohibited onward copies of unsigned or invalid
+   items.
 
 **********************************************************************

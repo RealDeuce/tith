@@ -362,11 +362,13 @@ fn plan_message(
 			notice,
 		)));
 	}
-	let distribution = converted_area.clone();
+	let distribution = converted_area
+		.clone()
+		.filter(|_| is_forwardable(claim.authentication));
 	Ok(Some(Outcome::Publish {
 		objects,
 		note,
-		forwardable: distribution.is_some() && is_forwardable(claim.authentication),
+		forwardable: distribution.is_some(),
 		distribution,
 	}))
 }
@@ -496,16 +498,22 @@ fn plan_file(
 	if let Some(notice) = notice {
 		objects.push(notice);
 	}
-	Ok(Some(Outcome::Publish {
-		objects,
-		note: "TIC distribution".to_owned(),
-		distribution: Some(
+	let forwardable = is_forwardable(claim.authentication);
+	let distribution = if forwardable {
+		Some(
 			context
 				.area_tag(read.data.area.as_deref().expect("area checked above"))
 				.map_err(|error| InboundError::Payload(error.to_string()))?
 				.to_owned(),
-		),
-		forwardable: is_forwardable(claim.authentication),
+		)
+	} else {
+		None
+	};
+	Ok(Some(Outcome::Publish {
+		objects,
+		note: "TIC distribution".to_owned(),
+		distribution,
+		forwardable,
 	}))
 }
 
@@ -1502,9 +1510,22 @@ End
 		else {
 			panic!("expected a publication, got {outcome:?}");
 		};
-		// The obligation is still recorded; it simply cannot be discharged
-		// natively, which is what makes the legacy copy terminal.
-		assert_eq!(distribution.as_deref(), Some("SYNCHRONET"));
+		assert_eq!(
+			distribution, &None,
+			"final-delivery work must not record an onward obligation"
+		);
 		assert!(!*forwardable);
+		commit(&claim, &outcome, &configuration, &fixture.ledger)
+			.unwrap()
+			.unwrap();
+		assert!(
+			fixture
+				.ledger
+				.get("I1")
+				.unwrap()
+				.unwrap()
+				.distribution
+				.is_empty()
+		);
 	}
 }

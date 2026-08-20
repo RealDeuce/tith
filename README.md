@@ -580,7 +580,6 @@ Orphan-Notice NetMail Sysop
 Policy
     Unsigned              Deliver-Warn
     SignedOrigin-Invalid  Orphan
-    Distribution          Native
     Blocked-On-Standard   Defer
 End
 ```
@@ -675,26 +674,23 @@ a batch is held under its claim until the whole batch is published.
 
 ### Distribution
 
-An `EchoMail` or file distribution item arrives owing onward copies. TSP-0013
-section 4 offers two ways to discharge that, and `Distribution` selects one:
+An `Origin-Valid` or `SignedOrigin-Valid` `EchoMail` or file distribution item
+arrives owing onward copies. The adapter always commits a TSP-0006 `Job Forward`
+while the claim is still current. A Forward Job "MUST NOT decode and re-encode,
+alter, or re-sign any covered byte", so the item's Signature and authentication
+state survive the fan-out exactly.
 
-- **`Native`**, the default. The adapter commits a TSP-0006 `Job Forward` while
-  the claim is still current, and the legacy object it publishes beside it is
-  for local reading only. A Forward Job "MUST NOT decode and re-encode, alter,
-  or re-sign any covered byte", so the item's Signature and authentication state
-  survive the fan-out exactly. **Configure the tosser's areas as local-only**;
-  the adapter cannot stop it forwarding as well, and doing both duplicates.
-- **`Legacy`**. The tosser creates the outbound copies. TSP-0013 permits this,
-  but a message re-entering TITH from a legacy area carries no TITHSIG, so it
-  is re-imported as `SignedOrigin-Valid` whatever it was before. An item known
-  to have been modified in transit is relabelled as gateway-attested. See
-  [#22](https://github.com/RealDeuce/tith/issues/22).
+The legacy object published beside it is terminal local delivery. **Configure
+the tosser's areas as local-only**; allowing the tosser to forward would create
+duplicate copies through a legacy round trip. If TITHSIG is stripped during
+that round trip, later import cannot distinguish the message from originally
+unsigned legacy input and creates a new gateway attestation instead of
+preserving the earlier authentication state.
 
 TSP-0006 section 6 refuses a Forward Job for an Unsigned, `Origin-Invalid`, or
 `SignedOrigin-Invalid` item — those are final-delivery work with no native
-onward copy. Under `Native` this is what makes the legacy copy of such an item
-genuinely terminal, and its Deliver-Warn diagnostic adequate marking rather
-than a laundering vector.
+onward copy. Their legacy delivery is terminal too, and the Deliver-Warn
+diagnostic is adequate marking rather than a laundering vector.
 
 ### File requests
 

@@ -28,7 +28,6 @@
 //!     `SignedOrigin`-Invalid  Orphan
 //!     Origin-Invalid        Orphan
 //!     Unconvertible         Reject
-//!     Distribution          Native
 //! End
 //! ```
 
@@ -38,7 +37,7 @@ use std::path::PathBuf;
 use tith_config::{ConfigError, fields, lines};
 use tith_wire::Address;
 
-use crate::policy::{Action, Disposition, Distribution, Policy, Refusals};
+use crate::policy::{Action, Disposition, Policy, Refusals};
 
 /// Whether an orphan produces a terminal local administrative `NetMail`.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -285,13 +284,6 @@ fn parse_policy(
 				policy.signed_origin_invalid = action(line.number, value)?;
 			}
 			["Origin-Invalid", value] => policy.origin_invalid = action(line.number, value)?,
-			["Distribution", value] => {
-				policy.distribution = match *value {
-					"Native" => Distribution::Native,
-					"Legacy" => Distribution::Legacy,
-					_ => return Err(fail(line.number, "expected Native or Legacy")),
-				};
-			}
 			["Reply-Origin", value] => {
 				policy.reply_origin = match *value {
 					"Enabled" => true,
@@ -359,7 +351,6 @@ End
 			Action::DeliverWarn
 		);
 		assert!(!configuration.policy.reply_origin);
-		assert_eq!(configuration.policy.distribution, Distribution::Native);
 		assert_eq!(configuration.refusals.unconvertible, Disposition::Reject);
 		assert_eq!(
 			configuration.orphan_notice,
@@ -379,6 +370,18 @@ End
 			Configuration::parse(&addressed).unwrap().orphan_notice,
 			OrphanNotice::NetMail("Security Sysop".to_owned())
 		);
+	}
+
+	#[test]
+	fn distribution_is_not_a_configurable_legacy_compatibility_mode() {
+		for value in ["Native", "Legacy"] {
+			let input = SAMPLE.replace(
+				"\tUnconvertible        Reject",
+				&format!("\tDistribution         {value}"),
+			);
+			let error = Configuration::parse(&input).unwrap_err();
+			assert_eq!(error.message, "unknown Policy directive");
+		}
 	}
 
 	#[test]

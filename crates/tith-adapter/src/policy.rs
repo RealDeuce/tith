@@ -29,8 +29,6 @@ pub struct Policy {
 	/// Reply-Origin is explicit local policy, disabled by default, because a
 	/// forged Origin makes an automatic reply a backscatter amplifier.
 	pub reply_origin: bool,
-	/// How an `EchoMail` or file distribution obligation is discharged.
-	pub distribution: Distribution,
 }
 
 impl Default for Policy {
@@ -41,10 +39,6 @@ impl Default for Policy {
 			signed_origin_invalid: Action::Orphan,
 			origin_invalid: Action::Orphan,
 			reply_origin: false,
-			// Native by default: it preserves the authentication state exactly,
-			// and it makes the legacy copy genuinely terminal, which is what
-			// TSP-0003 section 10.1's "local compatibility presentation" assumes.
-			distribution: Distribution::Native,
 		}
 	}
 }
@@ -80,26 +74,6 @@ pub const fn diagnostic(authentication: ItemAuthentication) -> Option<&'static s
 		}
 		ItemAuthentication::OriginValid | ItemAuthentication::Transport => return None,
 	})
-}
-
-/// Which TSP-0013 section 4 branch discharges a distribution obligation.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum Distribution {
-	/// The adapter commits the equivalent native copies with a TSP-0006
-	/// `Job Forward` while the claim is current, and the legacy object it
-	/// publishes is for local reading only.
-	///
-	/// A Forward Job preserves the exact signed children and Signature, so the
-	/// item's authentication state survives the fan-out unchanged. The legacy
-	/// side must be configured not to forward these areas onward.
-	Native,
-	/// The legacy tosser creates every required outbound copy.
-	///
-	/// TSP-0013 section 4 permits this, but an item re-entering TITH from a
-	/// legacy area carries no TITHSIG and is re-imported as
-	/// `SignedOrigin-Valid` whatever it was before, so an item known to be
-	/// modified in transit can be relabelled as gateway-attested.
-	Legacy,
 }
 
 /// Why an item could not be converted, and what the adapter is allowed to do.
@@ -180,7 +154,6 @@ mod tests {
 			Action::Deliver
 		);
 		assert!(!policy.reply_origin, "Reply-Origin is disabled by default");
-		assert_eq!(policy.distribution, Distribution::Native);
 	}
 
 	#[test]

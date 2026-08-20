@@ -767,7 +767,7 @@ Contents
 A. References
 ─────────────
 
-  [TSP‑0011] "Durable Inbound Delivery Items", TITH, 2026‑08‑18.
+  [TSP‑0011] "Durable Inbound Delivery Items", TITH, 2026‑08‑20.
 
   [TSP‑0013] "Legacy Mailer and Tosser IPC Adapters", TITH,
   2026‑08‑20.

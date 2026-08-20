@@ -354,11 +354,10 @@ pub enum Forwarded {
 
 /// Commits the native distribution copies for a claimed inbound item.
 ///
-/// TSP-0013 section 4 lets an adapter satisfy an `EchoMail` or file
-/// distribution obligation either by relying on the legacy tosser or by
-/// committing "the equivalent native copies with TSP-0006 Job Forward while the
-/// claim remains current". This is that second branch, which is why the caller
-/// must not have acknowledged yet.
+/// TSP-0013 section 4 requires an adapter to satisfy an `EchoMail` or file
+/// distribution obligation by committing the equivalent native copies with
+/// TSP-0006 Job Forward while the claim remains current, which is why the
+/// caller must not have acknowledged yet.
 ///
 /// A Forward Job preserves the exact signed children and Signature of its
 /// inbound item, so the item's authentication state survives the fan-out

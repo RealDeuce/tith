@@ -446,7 +446,7 @@ A. References
 
   [TSP‑0010] "Windows Named‐Pipe IPC Binding", TITH, 2026‑08‑17.
 
-  [TSP‑0011] "Durable Inbound Delivery Items", TITH, 2026‑08‑18.
+  [TSP‑0011] "Durable Inbound Delivery Items", TITH, 2026‑08‑20.
 
   [TTS‑0003] "Common TLV Types", TITH, 2026‑08‑18.
 

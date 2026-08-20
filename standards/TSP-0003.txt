@@ -1375,6 +1375,16 @@ Contents
   produce a clearly marked local compatibility presentation under
   TSP‑0011 and TSP‑0013.
 
+  When legacy software removes TITHSIG and later presents the Message
+  for import, that input is indistinguishable from a Message which was
+  unsigned before it reached the legacy boundary.  Ordinary import
+  therefore creates a new gateway‐signed item under section 2; it
+  cannot restore, infer, or carry forward the earlier authentication
+  state.  In particular, a new SignedOrigin-Valid gateway attestation
+  is not evidence that an earlier Origin or SignedOrigin Signature was
+  valid.  TSP‑0013 consequently makes an inbound legacy presentation
+  terminal local delivery rather than an input to onward distribution.
+
   Delivering an Unsigned or SignedOrigin-Valid item with a NOTICE tells
   the reader that Origin did not authenticate the text.  Delivering an
   Origin-Invalid or SignedOrigin-Invalid item with an ERROR tells the
@@ -1491,7 +1501,7 @@ A. References
   [TSP‑0013] "Legacy Mailer and Tosser IPC Adapters", TITH,
   2026‑08‑20.
 
-  [TSP‑0011] "Durable Inbound Delivery Items", TITH, 2026‑08‑18.
+  [TSP‑0011] "Durable Inbound Delivery Items", TITH, 2026‑08‑20.
 
   [TTS‑0004] "Node Addresses", TITH, 2026‑08‑17.
 

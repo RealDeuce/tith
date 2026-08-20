@@ -3,10 +3,10 @@ TITH                                              THIS ISN'T THAT HARD
 **********************************************************************
 
 Publication:  TSP‑0011
-Revision:     3
+Revision:     4
 Title:        Durable Inbound Delivery Items
 Author(s):    Stephen Hurd
-Date:         2026‑08‑18
+Date:         2026‑08‑20
 ══════════════════════════════════════════════════════════════════════
 
 Status of this document
@@ -238,26 +238,30 @@ Contents
   adapter it includes the ledger and published legacy objects required
   by TSP‑0013.
 
-  A native consumer which performs EchoMail or file distribution uses
-  TSP‑0006 Submit-Items Job Forward before acknowledging.  That
-  operation uses the inbound record's receiving local identity, exact
-  immediate peer, and retained payload to create every applicable
-  TSP‑0002 Send-To delivery copy without applying a TITH NetMail Route.
-  The consumer obtains or recovers its complete committed result.  A
-  later outbound failure is owned by that Job and does not reopen the
-  inbound item.
+  Before acknowledging an Origin-Valid or SignedOrigin-Valid EchoMail
+  or standalone distribution File, a consumer MUST use TSP‑0006
+  Submit-Items Job Forward.  That operation uses the inbound record's
+  receiving local identity, exact immediate peer, and retained payload
+  to create every applicable TSP‑0002 Send-To delivery copy without
+  applying a TITH NetMail Route.  The consumer obtains or recovers its
+  complete committed result.  A later outbound failure is owned by
+  that Job and does not reopen the inbound item.
 
   The consumer assigns and durably records the Forward Job's
   idempotency identity before requesting it.  If that local record is
   lost, TSP‑0012 Forward-Job exposes the durable association without
   creating another Job.
 
-  A TSP‑0013 legacy adapter MAY instead acknowledge after it has taken
-  durable ownership of an exact recoverable conversion source and every
-  unperformed distribution obligation.  The adapter then retains that
-  source and obligation until the legacy toss has durably created its
-  required copies.  Publishing a disposable inbound packet without
-  such retained state is not sufficient.
+  A TSP‑0013 legacy adapter follows the same rule.  Its published
+  legacy object is terminal local delivery and MUST NOT be used to
+  create onward copies.  A legacy round trip would remove the native
+  authentication evidence and replace it with a new gateway
+  attestation, so it is not an alternate distribution mechanism.
+
+  Only an Origin-Valid or SignedOrigin-Valid item has a distribution
+  obligation.  An Unsigned, Origin-Invalid, or SignedOrigin-Invalid
+  item is final-delivery or administrative work and MUST NOT produce
+  an onward copy.
 
   Acknowledge changes Claimed to Consumed.  The state transition and
   local result are durable before success is returned.  Once Consumed,
@@ -497,5 +501,10 @@ B. History
    Rev.3, 2026‑08‑18: Added unsigned and signer‐specific item
    authentication states and configurable warning, reply, and orphan
    policy for final delivery.
+
+   Rev.4, 2026‑08‑20: Required every consumer, including a legacy
+   adapter, to discharge eligible distribution through Job Forward;
+   made legacy publication terminal local delivery and prohibited
+   onward copies of unsigned or invalid items.
 
 **********************************************************************

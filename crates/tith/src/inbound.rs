@@ -12,7 +12,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use tith_adapter::config::Configuration;
 use tith_adapter::inbound::{Claimed, Outcome, commit, plan};
-use tith_adapter::policy::{Disposition, Distribution};
+use tith_adapter::policy::Disposition;
 use tith_adapter::publish::clear_staging;
 use tith_adapter::srif::{Offered, Processor, Session};
 use tith_ledger::{Ledger, State};
@@ -380,7 +380,7 @@ fn handle(
 			// A distribution obligation is discharged before the claim is
 			// resolved, because TSP-0013 section 4 requires the native copies be
 			// committed "while the claim remains current".
-			if !distribute(binding, claim, &outcome, configuration, ledger, application)? {
+			if !distribute(binding, claim, &outcome, ledger, application)? {
 				return Ok(false);
 			}
 			if !serve(binding, claim, &outcome, configuration, ledger, application)? {
@@ -402,12 +402,10 @@ fn handle(
 
 /// Commits the native distribution copies for an item which owes them.
 ///
-/// TSP-0013 section 4 offers two branches. The native one commits a TSP-0006
-/// `Job Forward`, which "MUST NOT decode and re-encode, alter, or re-sign any
-/// covered byte", so the item's authentication state survives the fan-out
-/// exactly and the legacy object published beside it is for local reading only.
-/// The legacy branch instead leaves the fan-out to the tosser, whose copies
-/// carry no TITHSIG and re-import as `SignedOrigin-Valid` whatever they were.
+/// TSP-0013 section 4 requires a TSP-0006 `Job Forward`, which "MUST NOT decode
+/// and re-encode, alter, or re-sign any covered byte", so the item's
+/// authentication state survives the fan-out exactly and the legacy object
+/// published beside it is terminal local delivery.
 ///
 /// An item TSP-0006 section 6 will not forward -- Unsigned or either Invalid
 /// state -- has no native onward copy by definition and is final-delivery work,
@@ -416,7 +414,6 @@ fn distribute(
 	binding: &ConfiguredBinding,
 	claim: &Claimed,
 	outcome: &Outcome,
-	configuration: &Configuration,
 	ledger: &Ledger,
 	application: &str,
 ) -> Result<bool, Box<dyn Error>> {
@@ -431,7 +428,7 @@ fn distribute(
 	let Some(area) = distribution else {
 		return Ok(true);
 	};
-	if configuration.policy.distribution == Distribution::Legacy || !forwardable {
+	if !forwardable {
 		return Ok(true);
 	}
 	// The key is derived from InboundID so a redelivery resolves to the same Job
