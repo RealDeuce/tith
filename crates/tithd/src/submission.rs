@@ -1452,24 +1452,25 @@ mod tests {
 		// A peer with an endpoint gets an Active copy; one without gets Passive,
 		// which is the rule TSP-0006 section 6 states for an absent Next-Hop. An
 		// explicit Passive overrides the reachable peer.
+		// A path is data, so it is quoted by the writer rather than by hand. A
+		// Windows path is full of reverse solidus, which the quoted-string
+		// grammar would otherwise read as escape sequences.
+		let source = tith_ipc::quote(&source.to_string_lossy());
 		let request = SubmissionRequest::parse(
 			format!(
 				"TITH-IPC 1\nSubmit-Items\n\
 				 Job Peer-File\nApplication \"bso\"\nIdempotency-Key \"arc\"\nOrigin \"@local\"\n\
-				 Destination \"@reachable\"\nFile\nSource-Path \"{}\"\n\
+				 Destination \"@reachable\"\nFile\nSource-Path {source}\n\
 				 Wire-Filename \"bundle.su0\"\nEnd\nEnd\n\
 				 Job Peer-File\nApplication \"bso\"\nIdempotency-Key \"held\"\nOrigin \"@local\"\n\
-				 Destination \"@unreachable\"\nFile\nSource-Path \"{}\"\n\
+				 Destination \"@unreachable\"\nFile\nSource-Path {source}\n\
 				 Wire-Filename \"bundle.su0\"\nEnd\nEnd\n\
 				 Job Peer-File\nApplication \"bso\"\nIdempotency-Key \"forced\"\nOrigin \"@local\"\n\
-				 Destination \"@reachable\"\nNext-Hop Passive\nFile\nSource-Path \"{}\"\n\
+				 Destination \"@reachable\"\nNext-Hop Passive\nFile\nSource-Path {source}\n\
 				 Wire-Filename \"bundle.su0\"\nEnd\nEnd\n\
 				 Job FileRequest\nApplication \"bso\"\nIdempotency-Key \"req\"\nOrigin \"@local\"\n\
 				 Destination \"@reachable\"\nFilename \"nodediff.zip\"\nNewer-Than 1755400000\nEnd\n\
-				 End\n",
-				source.display(),
-				source.display(),
-				source.display()
+				 End\n"
 			)
 			.as_bytes(),
 		)
