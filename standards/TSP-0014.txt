@@ -556,7 +556,7 @@ A. References
 
   [TSP‑0015] "Public Key Trust and Continuity", TITH, 2026‑08‑20.
 
-  [TTS‑0002] "Type Length Value Encoding", TITH, 2026‑08‑17.
+  [TTS‑0002] "Type Length Value Encoding", TITH, 2026‑08‑16.
 
   [TTS‑0003] "Common TLV Types", TITH, 2026‑08‑18.
 
@@ -566,7 +566,7 @@ A. References
 
   [TTS‑0006] "Bundle Exchange Protocol", TITH, 2026‑08‑20.
 
-  [TTS‑5000] "The Distribution Nodelist", TITH, 2026‑08‑18.
+  [TTS‑5000] "The Distribution Nodelist", TITH, 2026‑08‑19.
 
 
 B. History

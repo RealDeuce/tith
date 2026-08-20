@@ -1503,6 +1503,8 @@ A. References
 
   [TSP‑0011] "Durable Inbound Delivery Items", TITH, 2026‑08‑20.
 
+  [TTS‑0002] "Type Length Value Encoding", TITH, 2026‑08‑16.
+
   [TTS‑0004] "Node Addresses", TITH, 2026‑08‑17.
 
   [TTS‑0005] "Bundle Format", TITH, 2026‑08‑20.

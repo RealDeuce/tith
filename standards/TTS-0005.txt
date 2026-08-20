@@ -31,7 +31,7 @@ Contents
 
   1.  Introduction
   2.  Encoding
-  3.  Bundle Types
+  3.  Types
   4.  Ancillary Types
   5.  Error Handling
   6.  Reply Bundles
@@ -738,8 +738,8 @@ A. References
 
   [TSP‑0015] "Public Key Trust and Continuity", TITH, 2026‑08‑20.
 
-  [FTA‑1006.002] "Keywords to indicate requirement levels" FTSC,
-  2000‑01‑17.
+  [FTA‑1006.002] "Key words to indicate requirement levels" FTSC,
+  1998‑01‑17.
 
   [FTS‑0001.016] "A Basic FidoNet(r) Technical Standard", Randy Bush,
   Pacific Systems Group, 1995‑09‑30.
@@ -761,7 +761,7 @@ A. References
 
   [TTS‑0007] "Signed Integer Encoding", TITH, 2026‑08‑16.
 
-  [TTS‑5000] "The Distribution Nodelist", TITH, 2026‑08‑18.
+  [TTS‑5000] "The Distribution Nodelist", TITH, 2026‑08‑19.
 
 
 B. History

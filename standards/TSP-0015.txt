@@ -132,7 +132,7 @@ Contents
 
   The Client MUST verify the complete reply using the exact requested
   predecessor.  It MUST also verify the reversed Bundle identities,
-  RequestIdentifier, ResponseTo hash, and dedicated reply grammar.  It
+  RequestIdentifier, TLVHash, and dedicated reply grammar.  It
   MAY atomically advance the pin only after every check succeeds.
 
   A response signed by any other key is not continuity evidence.  A
@@ -178,7 +178,7 @@ A. References
 
   [TTS‑0005] "Bundle Format", TITH, 2026‑08‑20.
 
-  [TTS‑5000] "The Distribution Nodelist", TITH, 2026‑08‑18.
+  [TTS‑5000] "The Distribution Nodelist", TITH, 2026‑08‑19.
 
 
 B. History

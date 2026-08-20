@@ -1197,6 +1197,9 @@ A. References
   [FTS‑0004.001] Version 3.31, "EchoMail Specification", FTSC,
   1987‑12‑12.
 
+  [FTS‑0006.002] Revision 2, "YOOHOO and YOOHOO/2U2", FTSC,
+  1991‑11‑30.
+
   [FTS‑5005.003] Revision 3, "Advanced BinkleyTerm Style Outbound flow and
   control files", FTSC, 2016‑10‑31.
 
@@ -1208,12 +1211,17 @@ A. References
   [Libhydrogen] Version 1,
   https://github.com/jedisct1/libhydrogen/wiki
 
+  [RFC‑4648] "The Base16, Base32, and Base64 Data Encodings",
+  S. Josefsson, 2006‑10.
+
   [TSP‑0002] "Routing and Distribution Configuration", TITH,
   2026‑08‑20.
 
+  [TSP‑0003] "Legacy Data Formats and TITH", TITH, 2026‑08‑20.
+
   [TSP‑0004] "Local IPC Format", TITH, 2026‑08‑17.
 
-  [TSP‑0005] "Durable Outbound Jobs", TITH, 2026‑08‑18.
+  [TSP‑0005] "Durable Outbound Jobs", TITH, 2026‑08‑20.
 
   [TSP‑0007] "Unix‐Domain Socket IPC Binding", TITH, 2026‑08‑17.
 

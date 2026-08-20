@@ -3,7 +3,7 @@ TITH                                              THIS ISN'T THAT HARD
 **********************************************************************
 
 Publication:  TRD‑0001
-Revision:     1
+Revision:     2
 Title:        FidoNet Technology Network Basics
 Author(s):    Stephen Hurd
 Date:         2026‑08‑16
@@ -40,8 +40,9 @@ Contents
   10. Points
   11. Addresses
   12. Domains
-  13. Echomail
-  14. File Distribution Networks
+  13. AKAs
+  14. Echomail
+  15. File Distribution Networks
 
   A. References
   B. History
@@ -269,7 +270,7 @@ Contents
                       and this format is commonly supported by
                       software.  It is good pratice to avoid using it
                       though.
-  3D Address: 1:103/1 — This fully specifies a Zone, Net, and Domain,
+  3D Address: 1:103/1 — This fully specifies a Zone, Net, and Node,
                         and is the most common form of address seen.
                         This may be called a 4D address because the
                         Point is zero.
@@ -299,7 +300,7 @@ Contents
   address followed by a number sign, ie: fidonet#1:103/1.
 
 
-12. AKAs
+13. AKAs
 ────────
 
   It is common, especially for Administrative Nodes, to have the same
@@ -308,7 +309,7 @@ Contents
   chosen as the main address, and the rest of the nodes are AKAs.
 
 
-13. Echomail
+14. Echomail
 ────────────
 
   Echomail is a special use of FidoNet messages to implement a
@@ -330,7 +331,7 @@ Contents
   "loop".
 
 
-14. File Distribution Networks
+15. File Distribution Networks
 ──────────────────────────────
 
   File Distribution Networks act much like Echomail, but using the
@@ -350,10 +351,10 @@ A. References
        Pacific Systems Group. September 30, 1995.
 
   [FTS‑0004.001]
-       EchoMail Specification. 12 March, 2013.
+       EchoMail Specification version 3.31. 12 December, 1987.
 
   [FTS‑0006.002]
-       YOOHOO and YOOHOO/2U2. Vince Perriello. 30 November, 2991
+       YOOHOO and YOOHOO/2U2. Vince Perriello. 30 November, 1991.
 
   [FTS‑4000.001]
        CONTROL PARAGRAPHS. FTSC. 1 October 2000.
@@ -382,5 +383,8 @@ B. History
 ──────────
 
    Rev.1, 2025‑11‑17: Initial Release.
+
+   Rev.2, 2026‑08‑16: Normalized typography and corrected the
+   contents, address description, and reference metadata.
 
 **********************************************************************

@@ -767,6 +767,8 @@ Contents
 A. References
 ─────────────
 
+  [TSP‑0006] "Outbound Job Submission", TITH, 2026‑08‑20.
+
   [TSP‑0011] "Durable Inbound Delivery Items", TITH, 2026‑08‑20.
 
   [TSP‑0013] "Legacy Mailer and Tosser IPC Adapters", TITH,
@@ -782,13 +784,13 @@ A. References
 
   [TTS‑0006] "Bundle Exchange Protocol", TITH, 2026‑08‑20.
 
-  [TTS‑5000] "The Distribution Nodelist", TITH, 2026‑08‑18.
+  [TTS‑5000] "The Distribution Nodelist", TITH, 2026‑08‑19.
 
   [FSC‑0003.001] "FidoNet Route Files Explained", Ben Barker,
   1986‑03‑23.
 
   [FTS‑5001.006] "Nodelist flags and userflags", FTSC Members,
-  Administrator and Honoured Guests, 2017‑08‑27.
+  Administrator and Honoured Guests, 2017‑08‑13.
 
   [Policy] "FidoNet Policy Document", version 4.07, 1989‑06‑09.
 

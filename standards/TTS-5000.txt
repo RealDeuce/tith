@@ -525,8 +525,9 @@ Contents
 A. References
 ─────────────
 
-  [FTS‑0005.003] "The distribution nodelist", Ben Baker, Rick Moore.
-  February 1989. Obsoleted by this document.
+  [FTS‑0005.003] "The Distribution Nodelist", Ben Baker, Rick Moore,
+  David Nugent.
+  1996‑02‑07. Obsoleted by this document.
 
   [FTS‑5000.005] "The Distribution Nodelist", FTSC Members,
   Administrator and Honoured Guests.  January 2014. Obsoleted by this
@@ -537,8 +538,8 @@ A. References
 
   [FTS‑5002.002] "Pointlist Formats", Michiel van der Vlist.  March 2010.
 
-  [FTA‑1006.002] "Keywords to indicate requirement levels"
-  FTSC, 2000‑01‑17.
+  [FTA‑1006.002] "Key words to indicate requirement levels"
+  FTSC, 1998‑01‑17.
 
   [TTS‑0003] "Common TLV Types", TITH, 2026‑08‑18.
 

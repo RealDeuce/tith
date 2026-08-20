@@ -468,9 +468,11 @@ A. References
   [TSP‑0002] "Routing and Distribution Configuration", TITH,
   2026‑08‑20.
 
+  [TSP‑0003] "Legacy Data Formats and TITH", TITH, 2026‑08‑20.
+
   [TSP‑0004] "Local IPC Format", TITH, 2026‑08‑17.
 
-  [TSP‑0005] "Durable Outbound Jobs", TITH, 2026‑08‑18.
+  [TSP‑0005] "Durable Outbound Jobs", TITH, 2026‑08‑20.
 
   [TSP‑0006] "Outbound Job Submission", TITH, 2026‑08‑20.
 
