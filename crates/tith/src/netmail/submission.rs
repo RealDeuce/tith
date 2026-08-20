@@ -109,7 +109,8 @@ pub struct Context<'a> {
 	pub features: &'a BTreeSet<String>,
 	/// Directory the attachments are resolved against.
 	pub directory: &'a Path,
-	/// Used when the message has no MSGID and therefore no stable key.
+	/// Preassigned source-generation identity. A Message uses it when it has no
+	/// MSGID; a BSO batch derives every per-action key from it.
 	pub fallback_key: &'a str,
 }
 
@@ -364,7 +365,7 @@ pub fn build_peer_files(
 ) -> Result<Submission, BuildError> {
 	let mut lines = vec![line(vec![unquoted("Submit-Items")])];
 	let mut key = String::new();
-	for entry in entries {
+	for (index, entry) in entries.iter().enumerate() {
 		let path = context.directory.join(&entry.name);
 		if !path.is_file() {
 			return Err(BuildError::MissingAttachment {
@@ -381,7 +382,7 @@ pub fn build_peer_files(
 		}
 		// A reference entry may carry a full path; the wire name never does.
 		let wire_filename = basename(&entry.name);
-		key = format!("peer-file:{destination}:{wire_filename}");
+		key = format!("{}:peer-file:{}", context.fallback_key, index + 1);
 		lines.extend([
 			line(vec![unquoted("Job"), unquoted("Peer-File")]),
 			line(vec![unquoted("Application"), quoted(context.application)]),
@@ -438,8 +439,8 @@ pub fn build_file_requests(
 ) -> Submission {
 	let mut lines = vec![line(vec![unquoted("Submit-Items")])];
 	let mut key = String::new();
-	for action in actions {
-		key = format!("file-request:{destination}:{}", action.filename);
+	for (index, action) in actions.iter().enumerate() {
+		key = format!("{}:file-request:{}", context.fallback_key, index + 1);
 		lines.extend([
 			line(vec![unquoted("Job"), unquoted("FileRequest")]),
 			line(vec![unquoted("Application"), quoted(context.application)]),
@@ -759,6 +760,71 @@ mod tests {
 			panic!("packet conversion did not create a Message")
 		};
 		assert_eq!(packed_job.destination_or_area, "fidonet#3:300/30.7");
+		fs::remove_dir_all(directory).unwrap();
+	}
+
+	#[test]
+	fn bso_actions_have_distinct_stable_keys_within_their_source_generation() {
+		let directory = temp_dir("bso-keys");
+		fs::create_dir_all(directory.join("one")).unwrap();
+		fs::create_dir_all(directory.join("two")).unwrap();
+		fs::write(directory.join("one/archive.zip"), b"one").unwrap();
+		fs::write(directory.join("two/archive.zip"), b"two").unwrap();
+		let context = Context {
+			application: "bso",
+			origin: "fidonet#1:2/3",
+			legacy_origin: Some("1:2/3".to_owned()),
+			domain: Some("fidonet"),
+			style: AttachStyle::Flags,
+			features: &features(&[]),
+			directory: &directory,
+			fallback_key: "bso-source-generation-7",
+		};
+		let attachments = [
+			tith_message_legacy::Attachment {
+				name: "one/archive.zip".to_owned(),
+				disposition: Disposition::Keep,
+			},
+			tith_message_legacy::Attachment {
+				name: "two/archive.zip".to_owned(),
+				disposition: Disposition::Keep,
+			},
+		];
+		let peer = build_peer_files(&attachments, "fidonet#1:2/4", false, &context).unwrap();
+		let peer_again = build_peer_files(&attachments, "fidonet#1:2/4", false, &context).unwrap();
+		let keys = |submission: &Submission| {
+			SubmissionRequest::parse(&submission.request)
+				.unwrap()
+				.jobs
+				.into_iter()
+				.map(|job| job.idempotency_key)
+				.collect::<Vec<_>>()
+		};
+		let peer_keys = keys(&peer);
+		assert_eq!(peer_keys.len(), 2);
+		assert_ne!(peer_keys[0], peer_keys[1]);
+		assert_eq!(keys(&peer_again), peer_keys);
+
+		let requests = [
+			tith_bso::Request {
+				filename: "nodelist.zip".to_owned(),
+				newer_than: None,
+				line: "nodelist.zip".to_owned(),
+				unsupported: false,
+			},
+			tith_bso::Request {
+				filename: "nodelist.zip".to_owned(),
+				newer_than: Some(123),
+				line: "nodelist.zip +123".to_owned(),
+				unsupported: false,
+			},
+		];
+		let request = build_file_requests(&requests, "fidonet#1:2/4", false, &context);
+		let request_again = build_file_requests(&requests, "fidonet#1:2/4", false, &context);
+		let request_keys = keys(&request);
+		assert_eq!(request_keys.len(), 2);
+		assert_ne!(request_keys[0], request_keys[1]);
+		assert_eq!(keys(&request_again), request_keys);
 		fs::remove_dir_all(directory).unwrap();
 	}
 }

@@ -5,8 +5,9 @@ mod correlate;
 use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use std::fs;
+use std::io;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, UNIX_EPOCH};
 
 use tith_bso::{
 	BusyLock, Flavour, FlowFile, FlowKind, NodeAddress, Outbound, classify_extension, held,
@@ -25,6 +26,34 @@ const USAGE: &str = "usage: tith bso scan (--files ROOT | --tcp ADDRESS CLIENT-P
 /// session time. Ten minutes is the same default the netmail scanner uses for
 /// its own claims.
 const DEFAULT_BSY_TIMEOUT: Duration = Duration::from_mins(10);
+
+/// Stable identity for one generation of a BSO control file.
+///
+/// The action ordinal is appended by the submission builder. A retry before
+/// the file is rewritten sees the same metadata and therefore the same keys.
+/// A changed generation normally gets a new identity; if a coarse filesystem
+/// timestamp aliases two generations, TSP-0006's `JobDigest` comparison reports
+/// Conflict rather than silently selecting different work.
+fn generation_key(path: &Path, destination: &str) -> io::Result<String> {
+	let metadata = fs::metadata(path)?;
+	if !metadata.is_file() {
+		return Err(io::Error::other("BSO control object is not a regular file"));
+	}
+	let modified = metadata
+		.modified()?
+		.duration_since(UNIX_EPOCH)
+		.map_err(io::Error::other)?;
+	let name = path
+		.file_name()
+		.and_then(|name| name.to_str())
+		.ok_or_else(|| io::Error::other("BSO control object has no UTF-8 file name"))?;
+	Ok(format!(
+		"bso:{destination}:{name}:{}:{:09}:{}",
+		modified.as_secs(),
+		modified.subsec_nanos(),
+		metadata.len()
+	))
+}
 
 pub fn run(arguments: &mut impl Iterator<Item = String>) -> Result<i32, Box<dyn Error>> {
 	match arguments.next().as_deref() {
@@ -470,7 +499,7 @@ fn unclaimed_entries(
 		.map(tith_bso::as_attachment)
 		.collect();
 	let directory = file.path.parent().unwrap_or(Path::new("."));
-	let fallback = match crate::netmail::generated_key() {
+	let fallback = match generation_key(&file.path, &destination) {
 		Ok(key) => key,
 		Err(error) => {
 			outcome.failures += 1;
@@ -553,7 +582,7 @@ fn request_list(
 
 	let owned: Vec<_> = submit.iter().map(|action| (*action).clone()).collect();
 	let features = BTreeSet::new();
-	let fallback = crate::netmail::generated_key()?;
+	let fallback = generation_key(&file.path, &destination)?;
 	let built = submission::build_file_requests(
 		&owned,
 		&destination,
@@ -763,6 +792,24 @@ mod tests {
 
 	fn features() -> BTreeSet<String> {
 		BTreeSet::from(["Submit.Delete".to_owned(), "Submit.Truncate".to_owned()])
+	}
+
+	#[test]
+	fn a_bso_source_generation_key_is_stable_until_the_control_file_changes() {
+		let root = temp_dir("generation-key");
+		let path = root.join("00680024.req");
+		fs::write(&path, "one.zip\n").expect("write");
+		let first = generation_key(&path, "fidonet#1:104/36").expect("key");
+		assert_eq!(
+			generation_key(&path, "fidonet#1:104/36").expect("key"),
+			first
+		);
+		fs::write(&path, "one.zip\ntwo.zip\n").expect("rewrite");
+		assert_ne!(
+			generation_key(&path, "fidonet#1:104/36").expect("key"),
+			first
+		);
+		fs::remove_dir_all(root).expect("cleanup");
 	}
 
 	#[test]
