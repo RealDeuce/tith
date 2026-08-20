@@ -10,6 +10,7 @@
 //! Ledger  /var/db/tith/adapter.redb
 //! Domain  fidonet
 //! Product tith 0.1
+//! Orphan-Notice NetMail Sysop
 //!
 //! Link uplink
 //!     Peer     fidonet#1:104/1
@@ -39,6 +40,13 @@ use tith_wire::Address;
 
 use crate::policy::{Action, Disposition, Distribution, Policy, Refusals};
 
+/// Whether an orphan produces a terminal local administrative `NetMail`.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum OrphanNotice {
+	Disabled,
+	NetMail(String),
+}
+
 /// One configured legacy link.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Link {
@@ -62,6 +70,8 @@ pub struct Configuration {
 	pub area_tags: BTreeMap<String, String>,
 	pub policy: Policy,
 	pub refusals: Refusals,
+	/// Optional local notification after the exact item is safely quarantined.
+	pub orphan_notice: OrphanNotice,
 	/// The FSC-0086 request processor, when one is configured.
 	pub request_processor: Option<PathBuf>,
 }
@@ -112,6 +122,7 @@ impl Configuration {
 		let mut policy = Policy::default();
 		let mut refusals = Refusals::default();
 		let mut request_processor = None;
+		let mut orphan_notice = OrphanNotice::NetMail("Sysop".to_owned());
 
 		let mut index = 0;
 		while index < parsed.len() {
@@ -125,6 +136,17 @@ impl Configuration {
 				["Product", name, number] => {
 					product = Some((*name).to_owned());
 					version = Some((*number).to_owned());
+				}
+				["Orphan-Notice", "Disabled"] => orphan_notice = OrphanNotice::Disabled,
+				["Orphan-Notice", "NetMail", user @ ..] => {
+					let user = user.join(" ");
+					if user.is_empty() || user.len() > 35 || user.contains('\0') {
+						return Err(fail(
+							line.number,
+							"Orphan-Notice NetMail user must be 1 through 35 bytes",
+						));
+					}
+					orphan_notice = OrphanNotice::NetMail(user);
 				}
 				["Request-Processor", path] => request_processor = Some(PathBuf::from(path)),
 				["Link", name] => {
@@ -167,6 +189,7 @@ impl Configuration {
 			area_tags,
 			policy,
 			refusals,
+			orphan_notice,
 			request_processor,
 		})
 	}
@@ -338,6 +361,24 @@ End
 		assert!(!configuration.policy.reply_origin);
 		assert_eq!(configuration.policy.distribution, Distribution::Native);
 		assert_eq!(configuration.refusals.unconvertible, Disposition::Reject);
+		assert_eq!(
+			configuration.orphan_notice,
+			OrphanNotice::NetMail("Sysop".to_owned())
+		);
+	}
+
+	#[test]
+	fn an_orphan_notice_can_be_disabled_or_addressed_to_another_user() {
+		let disabled = format!("{SAMPLE}Orphan-Notice Disabled\n");
+		assert_eq!(
+			Configuration::parse(&disabled).unwrap().orphan_notice,
+			OrphanNotice::Disabled
+		);
+		let addressed = format!("{SAMPLE}Orphan-Notice NetMail Security Sysop\n");
+		assert_eq!(
+			Configuration::parse(&addressed).unwrap().orphan_notice,
+			OrphanNotice::NetMail("Security Sysop".to_owned())
+		);
 	}
 
 	#[test]

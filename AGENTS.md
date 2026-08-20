@@ -289,6 +289,14 @@ lengths and outstanding-response accounting cannot resolve.
   state which transfers responsibility are durable. It must not append to an
   already published packet: TSP-0013 section 5 forbids replacing a published
   object, and a tosser reads and deletes packets without any lock.
+  An Orphan retains the exact native TLV and its generated recovery objects in
+  the ledger and publishes none of those objects. `tith inbound orphan list`
+  and `export` make that quarantine deliberately recoverable without releasing
+  it. A configurable private local NetMail notice defaults to `Sysop`; its name
+  and bytes are durable before publication so a crash retries the same object.
+  A Deliver-Warn standalone File likewise gets an adjacent local NetMail with
+  the exact diagnostic because TIC has no reliable warning field, while the
+  File Contents remain byte-exact.
   An `EchoMail` or file distribution item owes onward copies. The default is to
   discharge that natively with a TSP-0006 `Job Forward` while the claim is
   current, because that preserves the exact signed bytes and leaves the legacy

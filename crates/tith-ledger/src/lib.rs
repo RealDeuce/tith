@@ -132,6 +132,10 @@ pub struct Orphan {
 	pub reason: String,
 	pub payload: Vec<u8>,
 	pub objects: Vec<QuarantineObject>,
+	/// The adjacent local administrative notice, when configured.
+	pub notice: Option<QuarantineObject>,
+	/// True once the notice has been durably published under its final name.
+	pub notice_published: bool,
 }
 
 /// The complete inbound conversion record.
@@ -209,6 +213,7 @@ impl Ledger {
 		authentication: &str,
 		payload: &[u8],
 		objects: &[QuarantineObject],
+		notice: Option<&QuarantineObject>,
 	) -> Result<(), LedgerError> {
 		let orphan = Orphan {
 			inbound_id: record.inbound_id.clone(),
@@ -216,12 +221,16 @@ impl Ledger {
 			reason: record.note.clone(),
 			payload: payload.to_vec(),
 			objects: objects.to_vec(),
+			notice: notice.cloned(),
+			notice_published: false,
 		};
 		let transaction = self.database.begin_write()?;
 		{
 			let quarantine = transaction.open_table(QUARANTINE)?;
 			if let Some(value) = quarantine.get(record.inbound_id.as_str())? {
-				if decode_orphan(value.value())? == orphan {
+				let mut existing = decode_orphan(value.value())?;
+				existing.notice_published = false;
+				if existing == orphan {
 					return Ok(());
 				}
 				return Err(LedgerError::QuarantineExists(record.inbound_id.clone()));
@@ -235,6 +244,25 @@ impl Ledger {
 				record.inbound_id.as_str(),
 				encode_orphan(&orphan).as_slice(),
 			)?;
+		}
+		transaction.commit()?;
+		Ok(())
+	}
+
+	/// Records that an orphan's configured administrative notice is durable.
+	pub fn mark_orphan_notice_published(&self, inbound_id: &str) -> Result<(), LedgerError> {
+		let transaction = self.database.begin_write()?;
+		{
+			let mut table = transaction.open_table(QUARANTINE)?;
+			let mut orphan = match table.get(inbound_id)? {
+				Some(value) => decode_orphan(value.value())?,
+				None => return Err(LedgerError::CorruptRecord),
+			};
+			if orphan.notice.is_none() {
+				return Err(LedgerError::CorruptRecord);
+			}
+			orphan.notice_published = true;
+			table.insert(inbound_id, encode_orphan(&orphan).as_slice())?;
 		}
 		transaction.commit()?;
 		Ok(())
@@ -430,6 +458,15 @@ fn encode_orphan(orphan: &Orphan) -> Vec<u8> {
 		push_bytes(&mut output, object.name.as_bytes());
 		push_bytes(&mut output, &object.contents);
 	}
+	match &orphan.notice {
+		Some(notice) => {
+			output.push(1);
+			push_bytes(&mut output, notice.name.as_bytes());
+			push_bytes(&mut output, &notice.contents);
+			output.push(u8::from(orphan.notice_published));
+		}
+		None => output.push(0),
+	}
 	output
 }
 
@@ -447,12 +484,35 @@ fn decode_orphan(mut input: &[u8]) -> Result<Orphan, LedgerError> {
 				contents: take_bytes(&mut input)?,
 			});
 		}
+		// Records from before local notices were implemented end after the
+		// recovery objects and therefore carry no pending notice.
+		let (notice, notice_published) = if input.is_empty() {
+			(None, false)
+		} else {
+			match take_fixed::<1>(&mut input)?[0] {
+				0 => (None, false),
+				1 => (
+					Some(QuarantineObject {
+						name: String::from_utf8(take_bytes(&mut input)?).ok()?,
+						contents: take_bytes(&mut input)?,
+					}),
+					match take_fixed::<1>(&mut input)?[0] {
+						0 => false,
+						1 => true,
+						_ => return None,
+					},
+				),
+				_ => return None,
+			}
+		};
 		input.is_empty().then_some(Orphan {
 			inbound_id,
 			authentication,
 			reason,
 			payload,
 			objects,
+			notice,
+			notice_published,
 		})
 	};
 	read().ok_or(LedgerError::CorruptRecord)
@@ -592,11 +652,15 @@ mod tests {
 							contents: b"Area TEST\r\n".to_vec(),
 						},
 					],
+					Some(&QuarantineObject {
+						name: "00000002.pkt".to_owned(),
+						contents: b"sysop notice".to_vec(),
+					}),
 				)
 				.unwrap();
 			assert!(
 				ledger
-					.stage_orphan(&value, "Origin-Invalid", b"different TLV", &[])
+					.stage_orphan(&value, "Origin-Invalid", b"different TLV", &[], None)
 					.is_err(),
 				"a reused InboundID must not replace its quarantine"
 			);
@@ -611,7 +675,11 @@ mod tests {
 		assert_eq!(orphan.objects[0].name, "archive.zip");
 		assert_eq!(orphan.objects[0].contents, b"file bytes");
 		assert_eq!(orphan.objects[1].name, "00000001.tic");
+		assert_eq!(orphan.notice.as_ref().unwrap().contents, b"sysop notice");
+		assert!(!orphan.notice_published);
 		assert_eq!(ledger.orphans().unwrap(), vec![orphan]);
+		ledger.mark_orphan_notice_published("I1").unwrap();
+		assert!(ledger.orphan("I1").unwrap().unwrap().notice_published);
 		std::fs::remove_file(path).unwrap();
 	}
 

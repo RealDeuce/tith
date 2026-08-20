@@ -575,6 +575,8 @@ Area SYNCHRONET
     Tag SYNCHRONET
 End
 
+Orphan-Notice NetMail Sysop
+
 Policy
     Unsigned              Deliver-Warn
     SignedOrigin-Invalid  Orphan
@@ -588,14 +590,17 @@ come from trusted link configuration, keyed by the `Peer` a claim reports.
 `Area` maps each native `AreaName` to one unique legacy tag; a collision is
 refused rather than resolved. `Policy` is the TSP-0011 section 5.1 final
 authentication policy, whose defaults are the ones that document names.
+`Orphan-Notice` defaults to `NetMail Sysop`; `Disabled` suppresses that local
+administrative message, and all fields after `NetMail` form the legacy user
+name.
 
 ### What it publishes
 
 | Item | Objects, in publication order |
 |---|---|
 | Message | each attached File, then the `.pkt` naming them |
-| distribution File | the companion, then its `.tic` |
-| peer-addressed File | the file alone; it belongs to no area, so it has no TIC |
+| distribution File | the companion, its `.tic`, then a diagnostic `.pkt` under `Deliver-Warn` |
+| peer-addressed File | the file alone, then a diagnostic `.pkt` under `Deliver-Warn`; it has no TIC |
 | FileRequest | nothing; it is answered, not published. See below |
 
 Publication follows TSP-0013 section 5: each object is built under a private
@@ -636,11 +641,17 @@ could come back.
 
 ### Orphan recovery
 
-An `Orphan` policy result publishes nothing to the legacy inbound. Instead the
-ledger retains the exact native item TLV, its authentication result and reason,
-and any legacy objects the adapter could generate for deliberate recovery. The
-item remains quarantined after export; exporting is inspection and recovery,
-not permission to feed an invalid item to the tosser automatically.
+An `Orphan` policy result publishes none of the affected item's legacy recovery
+objects. Instead the ledger retains the exact native item TLV, its
+authentication result and reason, and any legacy objects the adapter could
+generate for deliberate recovery. By default the only adjacent object is a
+private terminal NetMail to `Sysop` identifying the item and carrying the exact
+authentication diagnostic; `Orphan-Notice Disabled` suppresses it. A pending
+notice and its generated name are durable, so interrupted publication retries
+without replacing another file.
+
+The item remains quarantined after export; exporting is inspection and
+recovery, not permission to feed an invalid item to the tosser automatically.
 
 ```sh
 tith inbound orphan list --config /usr/local/etc/tith/adapter

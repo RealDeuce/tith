@@ -7,12 +7,14 @@
 use std::collections::BTreeMap;
 
 use tith_ledger::{Ledger, LedgerError, Object, QuarantineObject, Record, State};
-use tith_message_legacy::{Packet, PacketOptions, endpoint};
+use tith_message_legacy::{
+	PackedMessage, Packet, PacketOptions, encode_body, endpoint, format_date_time,
+};
 use tith_wire::bundle::KeyResolver;
 use tith_wire::item::{ItemAuthentication, read_file_request, read_message, read_standalone_file};
 use tith_wire::{OwnedTlv, types};
 
-use crate::config::Configuration;
+use crate::config::{Configuration, OrphanNotice};
 use crate::convert::{Context, Fidelity, to_legacy};
 use crate::policy::{Action, Disposition, Refusal, diagnostic};
 use crate::publish::{Publication, digest, publish};
@@ -40,6 +42,8 @@ pub enum Outcome {
 		authentication: String,
 		payload: Vec<u8>,
 		recovery: Vec<Publication>,
+		/// A terminal local administrative `NetMail`, when configured.
+		notice: Option<Publication>,
 	},
 	/// A `FileRequest`. Nothing is published; the caller runs the FSC-0086.001
 	/// processor and submits each answering file as a TSP-0006 `Job Peer-File`
@@ -115,7 +119,13 @@ pub fn plan(
 		&& record.payload_hash == claim.payload_hash
 	{
 		match record.state {
-			State::Acknowledged | State::Retired => return Ok(None),
+			State::Acknowledged => return Ok(None),
+			State::Retired => {
+				if let Some(outcome) = pending_orphan_notice(ledger, &claim.inbound_id)? {
+					return Ok(Some(outcome));
+				}
+				return Ok(None);
+			}
 			State::Published => {
 				// Publication and the external action it creates are separate crash
 				// boundaries. A native distribution remains owed until its Forward Job
@@ -136,7 +146,11 @@ pub fn plan(
 				}
 				return Ok(None);
 			}
-			State::Staged => {}
+			State::Staged => {
+				if let Some(outcome) = pending_orphan_notice(ledger, &claim.inbound_id)? {
+					return Ok(Some(outcome));
+				}
+			}
 		}
 	}
 
@@ -180,6 +194,39 @@ pub fn plan(
 	}
 }
 
+fn pending_orphan_notice(
+	ledger: &Ledger,
+	inbound_id: &str,
+) -> Result<Option<Outcome>, InboundError> {
+	let Some(orphan) = ledger.orphan(inbound_id)? else {
+		return Ok(None);
+	};
+	if orphan.notice_published || orphan.notice.is_none() {
+		return Ok(None);
+	}
+	Ok(Some(Outcome::Orphan {
+		reason: orphan
+			.reason
+			.strip_prefix("orphan: ")
+			.unwrap_or(&orphan.reason)
+			.to_owned(),
+		authentication: orphan.authentication,
+		payload: orphan.payload,
+		recovery: orphan
+			.objects
+			.into_iter()
+			.map(|object| Publication {
+				name: object.name,
+				contents: object.contents,
+			})
+			.collect(),
+		notice: orphan.notice.map(|notice| Publication {
+			name: notice.name,
+			contents: notice.contents,
+		}),
+	}))
+}
+
 /// A `FileRequest` is served by the configured FSC-0086.001 processor.
 ///
 /// TSP-0011 section 5.1 says a receiver unwilling to serve one refuses it with
@@ -220,6 +267,18 @@ fn plan_message(
 	let read =
 		read_message(item, resolver).map_err(|error| InboundError::Payload(error.to_string()))?;
 	let action = configuration.policy.action(claim.authentication);
+	let notice = if action == Action::Orphan {
+		configured_orphan_notice(
+			claim,
+			configuration,
+			context,
+			ledger,
+			"Message",
+			&read.data.subject,
+		)?
+	} else {
+		None
+	};
 	let warning = match action {
 		Action::DeliverWarn | Action::Orphan => diagnostic(claim.authentication),
 		Action::Deliver => None,
@@ -234,6 +293,7 @@ fn plan_message(
 					payload,
 					format!("policy orphan; no recovery conversion: {error}"),
 					Vec::new(),
+					notice,
 				)));
 			}
 			let refusal = Refusal::Unconvertible(error.to_string());
@@ -299,6 +359,7 @@ fn plan_message(
 				diagnostic(claim.authentication).unwrap_or("no diagnostic")
 			),
 			objects,
+			notice,
 		)));
 	}
 	let distribution = converted_area.clone();
@@ -333,6 +394,21 @@ fn plan_file(
 
 	let identity = ledger.next_identity("object")?;
 	let name = transfer_name(&read.data.filename, truncate(identity));
+	let notice = match action {
+		Action::DeliverWarn => Some(administrative_notice(
+			claim,
+			context,
+			ledger,
+			"Sysop",
+			"TITH File authentication warning",
+			"File",
+			&name,
+		)?),
+		Action::Orphan => {
+			configured_orphan_notice(claim, configuration, context, ledger, "File", &name)?
+		}
+		Action::Deliver => None,
+	};
 
 	// A peer-addressed File belongs to no area, so it has no TIC and owes no
 	// onward copy. It is published on its own for the local sysop; an ARCmail
@@ -348,7 +424,12 @@ fn plan_file(
 				payload,
 				format!("policy orphans {:?}", claim.authentication),
 				objects,
+				notice,
 			)));
+		}
+		let mut objects = objects;
+		if let Some(notice) = notice {
+			objects.push(notice);
 		}
 		return Ok(Some(Outcome::Publish {
 			objects,
@@ -370,11 +451,16 @@ fn plan_file(
 		Ok(tic) => tic,
 		Err(error) => {
 			if action == Action::Orphan {
+				let recovery = vec![Publication {
+					name,
+					contents: read.data.contents.clone(),
+				}];
 				return Ok(Some(orphaned(
 					claim,
 					payload,
 					format!("policy orphan; no recovery conversion: {error}"),
-					Vec::new(),
+					recovery,
+					notice,
 				)));
 			}
 			let refusal = Refusal::Unconvertible(error.to_string());
@@ -388,7 +474,7 @@ fn plan_file(
 
 	// The companion is published before the TIC which names it.
 	let stem = name.split('.').next().unwrap_or("file").to_owned();
-	let objects = vec![
+	let mut objects = vec![
 		Publication {
 			name,
 			contents: read.data.contents.clone(),
@@ -404,7 +490,11 @@ fn plan_file(
 			payload,
 			format!("policy orphans {:?}", claim.authentication),
 			objects,
+			notice,
 		)));
+	}
+	if let Some(notice) = notice {
+		objects.push(notice);
 	}
 	Ok(Some(Outcome::Publish {
 		objects,
@@ -424,13 +514,90 @@ fn orphaned(
 	payload: &[u8],
 	reason: String,
 	recovery: Vec<Publication>,
+	notice: Option<Publication>,
 ) -> Outcome {
 	Outcome::Orphan {
 		reason,
 		authentication: authentication_name(claim.authentication).to_owned(),
 		payload: payload.to_vec(),
 		recovery,
+		notice,
 	}
+}
+
+fn configured_orphan_notice(
+	claim: &Claimed,
+	configuration: &Configuration,
+	context: &Context,
+	ledger: &Ledger,
+	kind: &str,
+	label: &str,
+) -> Result<Option<Publication>, InboundError> {
+	match &configuration.orphan_notice {
+		OrphanNotice::Disabled => Ok(None),
+		OrphanNotice::NetMail(user) => administrative_notice(
+			claim,
+			context,
+			ledger,
+			user,
+			&format!("TITH orphaned {kind}"),
+			kind,
+			label,
+		)
+		.map(Some),
+	}
+}
+
+fn administrative_notice(
+	claim: &Claimed,
+	context: &Context,
+	ledger: &Ledger,
+	recipient: &str,
+	subject: &str,
+	kind: &str,
+	label: &str,
+) -> Result<Publication, InboundError> {
+	let diagnostic = diagnostic(claim.authentication).unwrap_or("no authentication diagnostic");
+	let label = label.replace(['\0', '\r', '\n'], " ");
+	let text = encode_body(&format!(
+		"{diagnostic}\n\nAffected {kind}: {label}\nInboundID: {}\n",
+		claim.inbound_id
+	))
+	.map_err(|error| InboundError::Payload(error.to_string()))?;
+	let local = endpoint_of(context, false);
+	let message = PackedMessage {
+		origin: local,
+		destination: local,
+		attributes: 1,
+		date_time: format_date_time(current_local())
+			.map_err(|error| InboundError::Payload(error.to_string()))?,
+		to_user: recipient.to_owned(),
+		from_user: "TITH".to_owned(),
+		subject: subject.to_owned(),
+		controls: Vec::new(),
+		text,
+		area: None,
+	};
+	let packet = Packet {
+		origin: local,
+		destination: local,
+		messages: vec![message],
+	};
+	let bytes = packet
+		.encode(&PacketOptions {
+			created: current_local(),
+			product_code: 0,
+			revision_major: 0,
+			revision_minor: 1,
+			password: String::new(),
+			product_data: 0,
+		})
+		.map_err(|error| InboundError::Payload(error.to_string()))?;
+	let identity = ledger.next_identity("object")?;
+	Ok(Publication {
+		name: format!("{:08x}.pkt", truncate(identity)),
+		contents: bytes,
+	})
 }
 
 const fn authentication_name(authentication: ItemAuthentication) -> &'static str {
@@ -493,11 +660,16 @@ pub fn commit(
 			authentication,
 			payload,
 			recovery,
+			notice,
 		} => {
 			let record = Record {
 				inbound_id: claim.inbound_id.clone(),
 				payload_hash: claim.payload_hash,
-				state: State::Retired,
+				state: if notice.is_some() {
+					State::Staged
+				} else {
+					State::Retired
+				},
 				objects: Vec::new(),
 				note: format!("orphan: {reason}"),
 				claim_token: claim.claim_token.clone(),
@@ -512,7 +684,49 @@ pub fn commit(
 					contents: object.contents.clone(),
 				})
 				.collect::<Vec<_>>();
-			ledger.stage_orphan(&record, authentication, payload, &recovery)?;
+			let notice = notice.as_ref().map(|notice| QuarantineObject {
+				name: notice.name.clone(),
+				contents: notice.contents.clone(),
+			});
+			ledger.stage_orphan(&record, authentication, payload, &recovery, notice.as_ref())?;
+			if let Some(notice) = notice {
+				let publication = Publication {
+					name: notice.name,
+					contents: notice.contents,
+				};
+				let published =
+					match publish(&configuration.inbound, std::slice::from_ref(&publication)) {
+						Ok(Ok(())) => true,
+						Ok(Err(taken)) if taken == publication.name => {
+							let exact =
+								std::fs::read(configuration.inbound.join(&publication.name))
+									.is_ok_and(|contents| contents == publication.contents);
+							if exact {
+								let staged = configuration
+									.inbound
+									.join(format!(".tith-staging-{}", publication.name));
+								if let Err(error) = std::fs::remove_file(staged)
+									&& error.kind() != std::io::ErrorKind::NotFound
+								{
+									return Ok(Err(error.to_string()));
+								}
+							}
+							exact
+						}
+						Ok(Err(taken)) => {
+							return Ok(Err(format!("the name {taken} is already in use")));
+						}
+						Err(error) => return Ok(Err(error.to_string())),
+					};
+				if !published {
+					return Ok(Err(format!(
+						"the name {} is already in use",
+						publication.name
+					)));
+				}
+				ledger.mark_orphan_notice_published(&claim.inbound_id)?;
+				ledger.advance(&claim.inbound_id, State::Retired)?;
+			}
 			return Ok(Ok(()));
 		}
 		// The record is durable before the processor runs, so a redelivery is
@@ -585,7 +799,10 @@ mod tests {
 	use tith_crypto::SigningKeyPair;
 	use tith_wire::Address;
 	use tith_wire::bundle::Identity;
-	use tith_wire::item::{ItemProvenance, MessageData, build_originated_message};
+	use tith_wire::item::{
+		ItemProvenance, MessageData, StandaloneFileData, build_originated_file,
+		build_originated_message,
+	};
 
 	const CONFIGURATION: &str = "\
 Inbound INBOUND
@@ -709,6 +926,38 @@ End
 		(item.encode(), keys, origin)
 	}
 
+	fn distribution_file_item() -> Vec<u8> {
+		let keys = SigningKeyPair::from_seed(&[97; 32]).unwrap();
+		let origin: Address = "fidonet#1:104/1".parse().unwrap();
+		build_originated_file(
+			StandaloneFileData {
+				filename: "work.zip".to_owned(),
+				timestamp: Some(1_755_400_000),
+				contents: b"file payload".to_vec(),
+				area: Some("SYNCHRONET".to_owned()),
+				short_description: Some("A file".to_owned()),
+				long_description_lines: Vec::new(),
+				tear_line: None,
+				magic_word: None,
+				replaces: None,
+			},
+			&ItemProvenance {
+				origin: origin.clone(),
+				signer: Some(Identity {
+					address: origin,
+					public_key: keys.public,
+				}),
+			},
+			&keys.secret,
+			9,
+			1_755_500_001,
+			"tith 0.1",
+			&["fidonet#1:104/36".parse().unwrap()],
+		)
+		.unwrap()
+		.encode()
+	}
+
 	fn claimed(authentication: ItemAuthentication) -> Claimed {
 		Claimed {
 			inbound_id: "I1".to_owned(),
@@ -809,7 +1058,7 @@ End
 	}
 
 	#[test]
-	fn an_invalid_item_is_orphaned_and_publishes_nothing() {
+	fn an_invalid_message_is_quarantined_and_only_its_notice_is_published() {
 		let fixture = fixture("orphan");
 		let (payload, keys, origin) = message_item();
 		// The Destination key is resolved from the nodelist too, so the test
@@ -831,7 +1080,14 @@ End
 		commit(&claim, &outcome, &fixture.configuration, &fixture.ledger)
 			.unwrap()
 			.unwrap();
-		assert_eq!(std::fs::read_dir(&fixture.inbound).unwrap().count(), 0);
+		let published = std::fs::read_dir(&fixture.inbound)
+			.unwrap()
+			.map(|entry| entry.unwrap().path())
+			.collect::<Vec<_>>();
+		assert_eq!(published.len(), 1, "only the notice is locally delivered");
+		let notice = Packet::parse(&std::fs::read(&published[0]).unwrap()).unwrap();
+		assert_eq!(notice.messages[0].to_user, "Sysop");
+		assert!(notice.messages[0].text.starts_with("ERROR:"));
 		assert_eq!(
 			fixture.ledger.get("I1").unwrap().unwrap().state,
 			State::Retired
@@ -846,6 +1102,201 @@ End
 		assert_eq!(orphan.objects.len(), 1, "the recovery packet is retained");
 		let packet = Packet::parse(&orphan.objects[0].contents).unwrap();
 		assert!(packet.messages[0].text.starts_with("ERROR:"));
+	}
+
+	#[test]
+	fn a_deliver_warn_file_gets_an_adjacent_sysop_netmail_without_changing_contents() {
+		let fixture = fixture("file-warning");
+		let payload = distribution_file_item();
+		let claim = claimed(ItemAuthentication::SignedOriginValid);
+		let outcome = plan(
+			&claim,
+			&payload,
+			&fixture.configuration,
+			&fixture.ledger,
+			&|_: &Address| None,
+		)
+		.unwrap()
+		.unwrap();
+		let Outcome::Publish { objects, .. } = &outcome else {
+			panic!("expected publication, got {outcome:?}");
+		};
+		assert_eq!(
+			objects
+				.iter()
+				.find(|object| {
+					std::path::Path::new(&object.name)
+						.extension()
+						.is_some_and(|extension| extension.eq_ignore_ascii_case("zip"))
+				})
+				.unwrap()
+				.contents,
+			b"file payload"
+		);
+		let notice = objects
+			.iter()
+			.find(|object| {
+				std::path::Path::new(&object.name)
+					.extension()
+					.is_some_and(|extension| extension.eq_ignore_ascii_case("pkt"))
+			})
+			.expect("adjacent notice packet");
+		let packet = Packet::parse(&notice.contents).unwrap();
+		assert_eq!(packet.messages.len(), 1);
+		assert_eq!(packet.messages[0].to_user, "Sysop");
+		assert!(packet.messages[0].text.starts_with("NOTICE:"));
+		assert!(packet.messages[0].text.contains("work.zip"));
+		assert!(packet.messages[0].text.contains("I1"));
+	}
+
+	#[test]
+	fn an_orphaned_file_publishes_only_its_configured_notice() {
+		let fixture = fixture("file-orphan-notice");
+		let payload = distribution_file_item();
+		let claim = claimed(ItemAuthentication::OriginInvalid);
+		let outcome = plan(
+			&claim,
+			&payload,
+			&fixture.configuration,
+			&fixture.ledger,
+			&|_: &Address| None,
+		)
+		.unwrap()
+		.unwrap();
+		let Outcome::Orphan { notice, .. } = &outcome else {
+			panic!("expected orphan, got {outcome:?}");
+		};
+		assert!(notice.is_some());
+		commit(&claim, &outcome, &fixture.configuration, &fixture.ledger)
+			.unwrap()
+			.unwrap();
+		let published = std::fs::read_dir(&fixture.inbound)
+			.unwrap()
+			.map(|entry| entry.unwrap().path())
+			.collect::<Vec<_>>();
+		assert_eq!(published.len(), 1, "only the notice is locally delivered");
+		let packet = Packet::parse(&std::fs::read(&published[0]).unwrap()).unwrap();
+		assert_eq!(packet.messages[0].to_user, "Sysop");
+		assert!(packet.messages[0].text.starts_with("ERROR:"));
+		let orphan = fixture.ledger.orphan("I1").unwrap().unwrap();
+		assert_eq!(orphan.payload, payload);
+		assert_eq!(orphan.objects.len(), 2, "the file and TIC stay quarantined");
+		assert!(orphan.notice_published);
+	}
+
+	#[test]
+	fn disabling_orphan_notice_keeps_every_legacy_object_out_of_the_inbound() {
+		let mut fixture = fixture("file-orphan-silent");
+		fixture.configuration.orphan_notice = OrphanNotice::Disabled;
+		let payload = distribution_file_item();
+		let claim = claimed(ItemAuthentication::OriginInvalid);
+		let outcome = plan(
+			&claim,
+			&payload,
+			&fixture.configuration,
+			&fixture.ledger,
+			&|_: &Address| None,
+		)
+		.unwrap()
+		.unwrap();
+		let Outcome::Orphan { notice, .. } = &outcome else {
+			panic!("expected orphan, got {outcome:?}");
+		};
+		assert!(notice.is_none());
+		commit(&claim, &outcome, &fixture.configuration, &fixture.ledger)
+			.unwrap()
+			.unwrap();
+		assert_eq!(std::fs::read_dir(&fixture.inbound).unwrap().count(), 0);
+		assert!(fixture.ledger.orphan("I1").unwrap().is_some());
+	}
+
+	#[test]
+	fn an_interrupted_orphan_notice_reuses_its_durable_name() {
+		let fixture = fixture("file-orphan-resume");
+		let payload = distribution_file_item();
+		let claim = claimed(ItemAuthentication::OriginInvalid);
+		let outcome = plan(
+			&claim,
+			&payload,
+			&fixture.configuration,
+			&fixture.ledger,
+			&|_: &Address| None,
+		)
+		.unwrap()
+		.unwrap();
+		let Outcome::Orphan {
+			reason,
+			authentication,
+			payload: retained,
+			recovery,
+			notice: Some(notice),
+		} = outcome
+		else {
+			panic!("expected an orphan with a notice");
+		};
+		let record = Record {
+			inbound_id: claim.inbound_id.clone(),
+			payload_hash: claim.payload_hash,
+			state: State::Staged,
+			objects: Vec::new(),
+			note: format!("orphan: {reason}"),
+			claim_token: claim.claim_token.clone(),
+			distribution: String::new(),
+			forward_job: String::new(),
+			cleanup: Vec::new(),
+		};
+		let recovery = recovery
+			.into_iter()
+			.map(|object| QuarantineObject {
+				name: object.name,
+				contents: object.contents,
+			})
+			.collect::<Vec<_>>();
+		let durable_notice = QuarantineObject {
+			name: notice.name.clone(),
+			contents: notice.contents.clone(),
+		};
+		fixture
+			.ledger
+			.stage_orphan(
+				&record,
+				&authentication,
+				&retained,
+				&recovery,
+				Some(&durable_notice),
+			)
+			.unwrap();
+		// The notice reached its final name, but the process stopped before it
+		// could record that fact.
+		std::fs::write(fixture.inbound.join(&notice.name), &notice.contents).unwrap();
+
+		let resumed = plan(
+			&claim,
+			&payload,
+			&fixture.configuration,
+			&fixture.ledger,
+			&|_: &Address| None,
+		)
+		.unwrap()
+		.unwrap();
+		let Outcome::Orphan {
+			notice: Some(resumed_notice),
+			..
+		} = &resumed
+		else {
+			panic!("the pending notice was not resumed");
+		};
+		assert_eq!(resumed_notice.name, notice.name);
+		commit(&claim, &resumed, &fixture.configuration, &fixture.ledger)
+			.unwrap()
+			.unwrap();
+		let orphan = fixture.ledger.orphan("I1").unwrap().unwrap();
+		assert!(orphan.notice_published);
+		assert_eq!(
+			fixture.ledger.get("I1").unwrap().unwrap().state,
+			State::Retired
+		);
+		assert_eq!(std::fs::read_dir(&fixture.inbound).unwrap().count(), 1);
 	}
 
 	/// One encoded `FileRequest` for `wanted.zip`.

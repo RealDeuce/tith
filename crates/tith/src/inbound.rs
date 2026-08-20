@@ -747,6 +747,7 @@ mod tests {
 					name: "00000001.pkt".to_owned(),
 					contents: b"recovery packet".to_vec(),
 				}],
+				None,
 			)
 			.expect("stage orphan");
 
