@@ -236,6 +236,9 @@ fn handle(
 	let Pending { claim, token, .. } = pending;
 	let token = token.as_str();
 	let payload = std::fs::read(&pending.payload_path)?;
+	let resuming_published = ledger.get(&claim.inbound_id)?.is_some_and(|record| {
+		record.payload_hash == claim.payload_hash && record.state == State::Published
+	});
 
 	let Some(outcome) = plan(claim, &payload, configuration, ledger, resolver)? else {
 		// Already published under this exact InboundID and PayloadHash.
@@ -269,7 +272,15 @@ fn handle(
 		Outcome::Publish { .. } | Outcome::Orphan { .. } | Outcome::ServeRequest { .. } => {}
 	}
 
-	match commit(claim, &outcome, configuration, ledger)? {
+	let committed = if resuming_published {
+		// The legacy objects already have their final durable names. Re-publishing
+		// would either duplicate them or collide with them; only the interrupted
+		// external obligation below remains.
+		Ok(())
+	} else {
+		commit(claim, &outcome, configuration, ledger)?
+	};
+	match committed {
 		Ok(()) => {
 			// A distribution obligation is discharged before the claim is
 			// resolved, because TSP-0013 section 4 requires the native copies be

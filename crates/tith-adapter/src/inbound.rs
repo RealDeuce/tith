@@ -108,11 +108,31 @@ pub fn plan(
 	// the adapter does not publish a duplicate.
 	if let Some(record) = ledger.get(&claim.inbound_id)?
 		&& record.payload_hash == claim.payload_hash
-		&& matches!(
-			record.state,
-			State::Published | State::Acknowledged | State::Retired
-		) {
-		return Ok(None);
+	{
+		match record.state {
+			State::Acknowledged | State::Retired => return Ok(None),
+			State::Published => {
+				// Publication and the external action it creates are separate crash
+				// boundaries. A native distribution remains owed until its Forward Job
+				// is recorded, and a FileRequest reply is idempotently resubmitted until
+				// the inbound claim can be acknowledged.
+				if !record.distribution.is_empty() && record.forward_job.is_empty() {
+					return Ok(Some(Outcome::Publish {
+						objects: Vec::new(),
+						note: record.note,
+						distribution: Some(record.distribution),
+						forwardable: is_forwardable(claim.authentication),
+					}));
+				}
+				let mut values = tith_wire::tlv::parse_sequence(payload)
+					.map_err(|error| InboundError::Payload(error.to_string()))?;
+				if values.len() == 1 && values[0].type_code == types::FILE_REQUEST {
+					return plan_file_request(&values.remove(0), configuration);
+				}
+				return Ok(None);
+			}
+			State::Staged => {}
+		}
 	}
 
 	let link = configuration
@@ -780,17 +800,32 @@ End
 			.unwrap()
 			.unwrap();
 		assert_eq!(std::fs::read_dir(&fixture.inbound).unwrap().count(), 0);
+		let resumed = plan(
+			&claim,
+			&file_request(),
+			&fixture.configuration,
+			&fixture.ledger,
+			&resolver,
+		)
+		.unwrap()
+		.expect("a published request still needs its reply committed");
+		assert!(matches!(resumed, Outcome::ServeRequest { .. }));
+
+		fixture
+			.ledger
+			.advance(&claim.inbound_id, State::Acknowledged)
+			.unwrap();
 		assert!(
 			plan(
 				&claim,
 				&file_request(),
 				&fixture.configuration,
 				&fixture.ledger,
-				&resolver
+				&resolver,
 			)
 			.unwrap()
 			.is_none(),
-			"a redelivered request must not be served twice"
+			"an acknowledged request must not be served twice"
 		);
 	}
 
@@ -878,6 +913,25 @@ End
 			fixture.ledger.get("I1").unwrap().unwrap().distribution,
 			"SYNCHRONET"
 		);
+		let resumed = plan(
+			&claim,
+			&payload,
+			&fixture.configuration,
+			&fixture.ledger,
+			&resolver,
+		)
+		.unwrap()
+		.expect("a published distribution still needs forwarding");
+		let Outcome::Publish {
+			distribution,
+			forwardable,
+			..
+		} = resumed
+		else {
+			panic!("expected a resumed publication");
+		};
+		assert_eq!(distribution.as_deref(), Some("SYNCHRONET"));
+		assert!(forwardable);
 	}
 
 	#[test]
