@@ -1,39 +1,66 @@
-//! Files only their owner may read: the node signing key and the IPC key.
+//! Files and directories only their owner may reach: the key files, the
+//! endpoint directories, and the exported item payloads.
 //!
-//! POSIX spells that as mode 0600 and a check that no group or other bit is
-//! set. Windows has no mode. Its equivalent is a protected DACL granting full
-//! access only to `LocalSystem` and the object owner — the same descriptor the
-//! named-pipe binding already builds for the service pipe — and a check that
-//! the stored descriptor still says exactly that.
+//! POSIX spells this as a mode. Windows has no mode; its equivalent is a
+//! protected DACL naming `LocalSystem` and the object owner and nobody else.
+//! Protected matters: without it an object in a user profile inherits whatever
+//! that profile grants.
 //!
-//! Neither platform is served by skipping the other's mechanism, so each gets
-//! its own rather than a key written with whatever the host happened to
-//! inherit.
+//! Each platform gets its own mechanism rather than one getting nothing, which
+//! is why every function here is implemented twice instead of being skipped
+//! under a `cfg`.
 
+use std::fs::File;
 use std::io;
 use std::path::Path;
+
+/// Creates `path` reachable only by its owner, failing when it already exists.
+pub fn create_file(path: &Path) -> io::Result<File> {
+	platform::create(path)
+}
 
 /// Creates `path` reachable only by its owner and writes `bytes` durably.
 ///
 /// The create fails when the file already exists, so a key is never replaced by
 /// accident.
-pub fn write(path: &Path, bytes: &[u8]) -> io::Result<()> {
+pub fn write_file(path: &Path, bytes: &[u8]) -> io::Result<()> {
 	use io::Write as _;
-	let mut file = platform::create(path)?;
+	let mut file = create_file(path)?;
 	file.write_all(bytes)?;
 	file.sync_all()?;
 	Ok(())
 }
 
 /// Reads `path` once the host confirms nobody but its owner can reach it.
-pub fn read(path: &Path) -> io::Result<Vec<u8>> {
+pub fn read_file(path: &Path) -> io::Result<Vec<u8>> {
 	platform::check(path)?;
 	std::fs::read(path)
 }
 
+/// Creates `path` and every missing parent, then restricts `path` to its owner.
+///
+/// The restriction is applied whether or not this call created the directory,
+/// because an endpoint root handed over by an operator is exactly the case that
+/// needs it.
+pub fn create_directory(path: &Path) -> io::Result<()> {
+	std::fs::create_dir_all(path)?;
+	platform::restrict_directory(path)
+}
+
+/// Leaves an existing file readable by its owner and writable by nobody.
+///
+/// Used for a published export, which its consumer reads and the service later
+/// removes, and which neither should modify in place. Removing it stays
+/// possible: POSIX gates that on the containing directory, and the Windows
+/// spelling grants the owner DELETE rather than setting the read-only attribute,
+/// which would make the service unable to clean up after itself.
+pub fn seal(path: &Path) -> io::Result<()> {
+	platform::seal_file(path)
+}
+
 #[cfg(unix)]
 mod platform {
-	use std::fs::{File, OpenOptions};
+	use std::fs::{File, OpenOptions, Permissions};
 	use std::io;
 	use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 	use std::path::Path;
@@ -64,11 +91,21 @@ mod platform {
 			),
 		))
 	}
+
+	pub fn restrict_directory(path: &Path) -> io::Result<()> {
+		std::fs::set_permissions(path, Permissions::from_mode(0o700))
+	}
+
+	pub fn seal_file(path: &Path) -> io::Result<()> {
+		std::fs::set_permissions(path, Permissions::from_mode(0o400))
+	}
 }
 
 #[cfg(windows)]
 mod platform {
-	pub use crate::windows::{create_owner_only as create, owner_only_dacl as check};
+	pub use crate::windows::{
+		create_owner_only as create, owner_only_dacl as check, restrict_directory, seal_file,
+	};
 }
 
 /// Whether an SDDL DACL is protected and reaches nobody but `LocalSystem` and
@@ -76,12 +113,13 @@ mod platform {
 ///
 /// This lives here rather than beside the Win32 calls that produce its input so
 /// that it is ordinary safe Rust with tests which run on every host. Only the
-/// two FFI calls that fetch the descriptor are Windows-only, and those are as
+/// calls which fetch and apply the descriptor are Windows-only, and those are as
 /// small as the API allows.
 ///
 /// Rights are deliberately not compared. Windows may spell `FILE_ALL_ACCESS` as
-/// "FA" or as its hexadecimal value, and which one it picks says nothing about
-/// who can reach the key. The trustees do.
+/// "FA" or as its hexadecimal value, a sealed file grants its owner less than an
+/// unsealed one, and none of that says who can reach the object. The trustees
+/// do.
 #[cfg(any(windows, test))]
 pub(crate) fn permits_only_owner(sddl: &str) -> bool {
 	// "SY" is LocalSystem and "OW" is OWNER RIGHTS, which Windows evaluates as
@@ -121,12 +159,12 @@ pub(crate) fn permits_only_owner(sddl: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-	use super::{permits_only_owner, read, write};
+	use super::{create_directory, permits_only_owner, read_file, seal, write_file};
 	use std::io;
 
 	fn directory(name: &str) -> std::path::PathBuf {
 		let path = std::env::temp_dir().join(format!(
-			"tith-secret-{name}-{}-{:?}",
+			"tith-owner-only-{name}-{}-{:?}",
 			std::process::id(),
 			std::thread::current().id()
 		));
@@ -142,12 +180,12 @@ mod tests {
 	fn a_key_reads_back_and_an_ordinary_file_does_not() {
 		let root = directory("roundtrip");
 		let key = root.join("node.secret");
-		write(&key, b"secret bytes").unwrap();
-		assert_eq!(read(&key).unwrap(), b"secret bytes");
+		write_file(&key, b"secret bytes").unwrap();
+		assert_eq!(read_file(&key).unwrap(), b"secret bytes");
 
 		// The create is exclusive, so an existing key is never replaced.
 		assert_eq!(
-			write(&key, b"other").unwrap_err().kind(),
+			write_file(&key, b"other").unwrap_err().kind(),
 			io::ErrorKind::AlreadyExists
 		);
 
@@ -161,9 +199,59 @@ mod tests {
 			use std::os::unix::fs::PermissionsExt as _;
 			std::fs::set_permissions(&ordinary, std::fs::Permissions::from_mode(0o644)).unwrap();
 		}
-		let error = read(&ordinary).unwrap_err();
+		let error = read_file(&ordinary).unwrap_err();
 		assert_eq!(error.kind(), io::ErrorKind::PermissionDenied, "{error}");
 
+		std::fs::remove_dir_all(root).unwrap();
+	}
+
+	/// A directory is restricted whether this created it or found it, and stays
+	/// usable afterwards: the service still writes into it and reads back.
+	#[test]
+	fn a_directory_is_restricted_and_still_usable() {
+		let root = directory("directory");
+		let fresh = root.join("endpoint").join("requests");
+		create_directory(&fresh).unwrap();
+		assert!(fresh.is_dir());
+
+		// An operator's existing directory is restricted rather than left alone.
+		let existing = root.join("handed-over");
+		std::fs::create_dir_all(&existing).unwrap();
+		create_directory(&existing).unwrap();
+
+		for path in [&fresh, &existing] {
+			#[cfg(unix)]
+			{
+				use std::os::unix::fs::PermissionsExt as _;
+				let mode = std::fs::metadata(path).unwrap().permissions().mode();
+				assert_eq!(mode & 0o077, 0, "{} is {mode:o}", path.display());
+			}
+			let file = path.join("item.tlv");
+			std::fs::write(&file, b"payload").unwrap();
+			assert_eq!(std::fs::read(&file).unwrap(), b"payload");
+		}
+		std::fs::remove_dir_all(root).unwrap();
+	}
+
+	/// A sealed export stays readable and, crucially, stays removable: the
+	/// service deletes it once its consumer acknowledges.
+	#[test]
+	fn a_sealed_file_is_readable_and_still_removable() {
+		let root = directory("seal");
+		let export = root.join("item.tlv");
+		write_file(&export, b"payload").unwrap();
+		seal(&export).unwrap();
+
+		assert_eq!(std::fs::read(&export).unwrap(), b"payload");
+		#[cfg(unix)]
+		{
+			use std::os::unix::fs::PermissionsExt as _;
+			assert_eq!(
+				std::fs::metadata(&export).unwrap().permissions().mode() & 0o777,
+				0o400
+			);
+		}
+		std::fs::remove_file(&export).unwrap();
 		std::fs::remove_dir_all(root).unwrap();
 	}
 
@@ -174,8 +262,10 @@ mod tests {
 		assert!(permits_only_owner("D:P(A;;0x1f01ff;;;SY)(A;;FA;;;OW)"));
 		assert!(permits_only_owner("D:P(A;;FA;;;S-1-5-18)(A;;FA;;;S-1-3-4)"));
 		assert!(permits_only_owner("D:P(A;;FA;;;OW)"));
+		// What `seal` writes: the owner reads and deletes but cannot write.
+		assert!(permits_only_owner("D:P(A;;FA;;;SY)(A;;FRSD;;;OW)"));
 
-		// Any other trustee can reach the key, whoever it is.
+		// Any other trustee can reach the object, whoever it is.
 		assert!(!permits_only_owner("D:P(A;;FA;;;SY)(A;;FA;;;WD)"));
 		assert!(!permits_only_owner("D:P(A;;FA;;;BA)"));
 		assert!(!permits_only_owner("D:P(A;;FR;;;S-1-5-21-1-2-3-1001)"));

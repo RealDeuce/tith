@@ -1,9 +1,6 @@
 use std::error::Error;
-use std::fs;
 use std::io::Read;
 use std::net::{SocketAddr, TcpListener, TcpStream};
-#[cfg(unix)]
-use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -16,12 +13,12 @@ use tith_ipc::EnvelopeKind;
 use tith_ipc_tcp::SecureChannel;
 
 pub fn write_secret(path: &Path, secret: &KxSecretKey) -> Result<(), Box<dyn Error>> {
-	crate::secret::write(path, secret.as_bytes())?;
+	crate::owner_only::write_file(path, secret.as_bytes())?;
 	Ok(())
 }
 
 pub fn read_secret(path: &Path) -> Result<KxSecretKey, Box<dyn Error>> {
-	let bytes: [u8; KX_SECRET_KEY_BYTES] = crate::secret::read(path)?
+	let bytes: [u8; KX_SECRET_KEY_BYTES] = crate::owner_only::read_file(path)?
 		.try_into()
 		.map_err(|_| "IPC secret key file has the wrong length")?;
 	Ok(KxSecretKey::from_bytes(bytes))
@@ -39,9 +36,7 @@ pub fn serve(
 	if !address.ip().is_loopback() {
 		return Err("refusing to bind TCP IPC to a nonloopback address".into());
 	}
-	fs::create_dir_all(exports)?;
-	#[cfg(unix)]
-	fs::set_permissions(exports, fs::Permissions::from_mode(0o700))?;
+	crate::owner_only::create_directory(exports)?;
 	let listener = TcpListener::bind(address)?;
 	if !listener.local_addr()?.ip().is_loopback() {
 		return Err("TCP IPC listener is not bound to loopback".into());
@@ -100,6 +95,7 @@ fn transaction(
 
 #[cfg(test)]
 mod tests {
+	use std::fs;
 	use std::net::TcpListener;
 	use std::time::{SystemTime, UNIX_EPOCH};
 

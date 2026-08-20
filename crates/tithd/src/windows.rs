@@ -24,12 +24,13 @@ use windows_sys::Win32::Foundation::{
 use windows_sys::Win32::Security::Authorization::{
 	ConvertSecurityDescriptorToStringSecurityDescriptorW,
 	ConvertStringSecurityDescriptorToSecurityDescriptorW, GetNamedSecurityInfoW, SDDL_REVISION_1,
-	SE_FILE_OBJECT,
+	SE_FILE_OBJECT, SetNamedSecurityInfoW,
 };
 use windows_sys::Win32::Security::{
-	DACL_SECURITY_INFORMATION, EqualSid, GetTokenInformation, RevertToSelf, SECURITY_ATTRIBUTES,
-	SecurityImpersonation, TOKEN_QUERY, TOKEN_STATISTICS, TOKEN_USER, TokenImpersonationLevel,
-	TokenSessionId, TokenStatistics, TokenUser,
+	DACL_SECURITY_INFORMATION, EqualSid, GetSecurityDescriptorDacl, GetTokenInformation,
+	PROTECTED_DACL_SECURITY_INFORMATION, RevertToSelf, SECURITY_ATTRIBUTES, SecurityImpersonation,
+	TOKEN_QUERY, TOKEN_STATISTICS, TOKEN_USER, TokenImpersonationLevel, TokenSessionId,
+	TokenStatistics, TokenUser,
 };
 use windows_sys::Win32::Storage::FileSystem::{
 	CREATE_NEW, CreateFileW, FILE_ATTRIBUTE_NORMAL, FILE_SHARE_NONE, FlushFileBuffers,
@@ -403,6 +404,76 @@ pub fn create_owner_only(path: &Path) -> io::Result<File> {
 	}
 	// SAFETY: CreateFileW returned one live handle and this is its only owner.
 	Ok(unsafe { File::from_raw_handle(handle) })
+}
+
+/// The same protection for an object whose owner should read it but never
+/// rewrite it in place.
+///
+/// "FRSD" is `FILE_GENERIC_READ` and DELETE. The read-only file attribute would
+/// be the tempting spelling and is the wrong one: Windows refuses to delete a
+/// file carrying it, and the service has to remove an export once its consumer
+/// acknowledges.
+const OWNER_READ_ONLY: &str = "D:P(A;;FA;;;SY)(A;;FRSD;;;OW)";
+
+/// Applies [`OWNER_ONLY`] to an existing directory.
+///
+/// A directory is restricted after the fact rather than created with the
+/// descriptor, because `create_dir_all` may find it already there — an endpoint
+/// root an operator laid down is exactly the case that needs restricting.
+pub fn restrict_directory(path: &Path) -> io::Result<()> {
+	apply(path, OWNER_ONLY)
+}
+
+/// Applies [`OWNER_READ_ONLY`] to an existing file.
+pub fn seal_file(path: &Path) -> io::Result<()> {
+	apply(path, OWNER_READ_ONLY)
+}
+
+/// Replaces the DACL of an existing object, protected so it inherits nothing.
+fn apply(path: &Path, sddl: &str) -> io::Result<()> {
+	let name = wide(path.as_os_str());
+	let text: Vec<u16> = sddl.encode_utf16().chain([0]).collect();
+	let mut descriptor = null_mut();
+	if unsafe {
+		ConvertStringSecurityDescriptorToSecurityDescriptorW(
+			text.as_ptr(),
+			SDDL_REVISION_1,
+			&mut descriptor,
+			null_mut(),
+		)
+	} == 0
+	{
+		return Err(io::Error::last_os_error());
+	}
+	let descriptor = LocalSecurityDescriptor(descriptor);
+	let mut dacl = null_mut();
+	let mut present = 0;
+	let mut defaulted = 0;
+	if unsafe { GetSecurityDescriptorDacl(descriptor.0, &mut present, &mut dacl, &mut defaulted) }
+		== 0
+	{
+		return Err(io::Error::last_os_error());
+	}
+	if present == 0 {
+		return Err(io::Error::other("the owner-only descriptor has no DACL"));
+	}
+	let status = unsafe {
+		SetNamedSecurityInfoW(
+			name.as_ptr(),
+			SE_FILE_OBJECT,
+			DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
+			null_mut(),
+			null_mut(),
+			dacl,
+			null_mut(),
+		)
+	};
+	if status == ERROR_SUCCESS {
+		return Ok(());
+	}
+	Err(io::Error::from_raw_os_error(
+		i32::try_from(status).unwrap_or(-1),
+	))
 }
 
 /// Confirms that `path` still carries exactly [`OWNER_ONLY`].

@@ -6,8 +6,8 @@ mod filesystem;
 mod framing;
 mod ipc;
 mod mail;
+mod owner_only;
 mod schedule;
-mod secret;
 mod submission;
 mod tcp;
 #[cfg(unix)]

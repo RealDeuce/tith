@@ -1,9 +1,7 @@
 use std::collections::BTreeSet;
 use std::error::Error;
-use std::fs::{self, OpenOptions};
+use std::fs;
 use std::io::Write;
-#[cfg(unix)]
-use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::thread;
@@ -67,9 +65,7 @@ impl IpcService {
 		if exports.to_str().is_none() {
 			return Err("the payload export directory is not representable as UTF-8".into());
 		}
-		fs::create_dir_all(exports)?;
-		#[cfg(unix)]
-		fs::set_permissions(exports, fs::Permissions::from_mode(0o700))?;
+		crate::owner_only::create_directory(exports)?;
 		let store = Arc::new(InboundStore::create(database)?);
 		let outbound = store.outbound()?;
 		Ok(Self {
@@ -559,15 +555,13 @@ impl IpcService {
 			return Ok(path);
 		}
 		let temporary = self.exports.join(format!(".{id}-{token}.tmp"));
-		let mut options = OpenOptions::new();
-		options.create_new(true).write(true);
-		#[cfg(unix)]
-		options.mode(0o600);
-		let mut file = options.open(&temporary)?;
+		let mut file = crate::owner_only::create_file(&temporary)?;
 		file.write_all(payload)?;
 		file.sync_all()?;
-		#[cfg(unix)]
-		fs::set_permissions(&temporary, fs::Permissions::from_mode(0o400))?;
+		drop(file);
+		// Sealed before it is published, so the name a consumer can see never
+		// refers to a writable object.
+		crate::owner_only::seal(&temporary)?;
 		fs::rename(&temporary, &path)?;
 		if let Ok(directory) = fs::File::open(&self.exports) {
 			directory.sync_all()?;

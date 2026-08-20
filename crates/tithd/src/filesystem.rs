@@ -4,7 +4,7 @@ use std::fs::File;
 use std::fs::{self, OpenOptions};
 use std::io::{Read, Write};
 #[cfg(unix)]
-use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::thread;
@@ -25,9 +25,7 @@ struct Endpoint {
 
 impl Endpoint {
 	fn create(root: &Path) -> Result<Self, Box<dyn Error>> {
-		fs::create_dir_all(root)?;
-		#[cfg(unix)]
-		fs::set_permissions(root, fs::Permissions::from_mode(0o700))?;
+		crate::owner_only::create_directory(root)?;
 		let endpoint = Self {
 			requests: root.join("requests"),
 			claimed: root.join("claimed"),
@@ -42,9 +40,7 @@ impl Endpoint {
 			&endpoint.acknowledgements,
 			&endpoint.private,
 		] {
-			fs::create_dir_all(directory)?;
-			#[cfg(unix)]
-			fs::set_permissions(directory, fs::Permissions::from_mode(0o700))?;
+			crate::owner_only::create_directory(directory)?;
 		}
 		Ok(endpoint)
 	}

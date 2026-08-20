@@ -299,11 +299,15 @@ lengths and outstanding-response accounting cannot resolve.
   default. An item TSP-0006 section 6 will not forward owes no native copy.
 - `crates/tithd` is the blocking reference service and contains host bindings.
   A host mechanism POSIX has and Windows spells differently is implemented for
-  both, never skipped on one. `secret` owns the key files that way: mode 0600
-  and a group-and-other check on POSIX, a protected DACL granting only
-  LocalSystem and the object owner and a check that it still says so on Windows.
-  Its SDDL parsing lives beside the portable half so it has tests which run on
-  every host; only the two calls which fetch the descriptor are Windows-only.
+  both, never skipped on one. `owner_only` is where that lives: it owns the key
+  files, the endpoint and export directories, and the published export payloads,
+  as a mode on POSIX and a protected DACL naming only LocalSystem and the object
+  owner on Windows. Reach for it rather than `set_permissions` under a `cfg`.
+  Its SDDL parsing sits beside the portable half so it has tests which run on
+  every host, and only the calls which fetch and apply a descriptor are
+  Windows-only. A sealed export grants its owner DELETE rather than carrying the
+  read-only attribute, because Windows will not delete a file which has one and
+  the service must be able to clean up after itself.
   Its native mail listener accepts only operations whose wire grammar and
   durable behavior are implemented; unsupported work receives an explicit
   response rather than being discarded.

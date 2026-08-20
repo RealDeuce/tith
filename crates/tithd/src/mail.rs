@@ -28,12 +28,12 @@ use tith_wire::tlv::{OwnedTlv, TlvReader, parse_sequence};
 use tith_wire::types;
 
 pub fn write_secret(path: &Path, secret: &SecretKey) -> Result<(), Box<dyn Error>> {
-	crate::secret::write(path, secret.as_bytes())?;
+	crate::owner_only::write_file(path, secret.as_bytes())?;
 	Ok(())
 }
 
 pub fn read_secret(path: &Path) -> Result<SecretKey, Box<dyn Error>> {
-	let bytes: [u8; SECRET_KEY_BYTES] = crate::secret::read(path)?
+	let bytes: [u8; SECRET_KEY_BYTES] = crate::owner_only::read_file(path)?
 		.try_into()
 		.map_err(|_| "node secret key file has the wrong length")?;
 	Ok(SecretKey::from_bytes(bytes))
