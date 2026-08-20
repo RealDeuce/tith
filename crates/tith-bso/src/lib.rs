@@ -12,9 +12,10 @@
 
 mod layout;
 
-use std::fs;
+use std::fs::{self, File, TryLockError};
 use std::io::{self, Write as _};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use tith_message_legacy::{Attachment, Disposition};
@@ -182,10 +183,15 @@ pub fn rewrite_request(path: &Path, keep: &[String]) -> io::Result<()> {
 	rewrite_reference(path, keep)
 }
 
-/// A held `.bsy` lock. Dropping it removes the file.
+static BUSY_OWNER_SEQUENCE: AtomicU64 = AtomicU64::new(1);
+
+/// A held `.bsy` lock. Dropping it removes the file if this guard still owns it.
 #[derive(Debug)]
 pub struct BusyLock {
 	path: PathBuf,
+	file: File,
+	owner: Vec<u8>,
+	remove_on_drop: bool,
 }
 
 impl BusyLock {
@@ -193,45 +199,121 @@ impl BusyLock {
 	///
 	/// Created with `create_new`, which is the `O_EXCL` that section 5.1's own
 	/// note about `fopen` quietly overwriting is asking for. A lock older than
-	/// `stale_after` is removed first: section 5.1 recommends ignoring and
-	/// deleting a bsy older than twice the maximum session time.
+	/// `stale_after` is reclaimed in place: section 5.1 recommends ignoring and
+	/// deleting a bsy older than twice the maximum session time. Keeping an
+	/// exclusive OS lock on the file serializes our stale reclaimers without
+	/// weakening the existence-based convention used by other BSO programs.
 	pub fn take(path: PathBuf, stale_after: Duration) -> io::Result<Option<Self>> {
-		if let Ok(metadata) = fs::metadata(&path)
-			&& metadata
-				.modified()
-				.ok()
-				.and_then(|modified| modified.elapsed().ok())
-				.is_some_and(|age| age >= stale_after)
-		{
-			let _ = fs::remove_file(&path);
-		}
-		match fs::OpenOptions::new()
-			.create_new(true)
-			.write(true)
-			.open(&path)
-		{
-			Ok(mut file) => {
-				// Section 5.1 permits one line of PID information under 70 bytes.
-				let line = format!("tith bso scan pid {}\n", std::process::id());
-				file.write_all(line.as_bytes())?;
-				file.sync_all()?;
-				Ok(Some(Self { path }))
+		let owner = Self::owner_record();
+		for _ in 0..4 {
+			match fs::OpenOptions::new()
+				.create_new(true)
+				.read(true)
+				.write(true)
+				.open(&path)
+			{
+				Ok(mut file) => {
+					file.try_lock().map_err(|error| match error {
+						TryLockError::WouldBlock => {
+							io::Error::other("new BSO busy file was unexpectedly locked")
+						}
+						TryLockError::Error(error) => error,
+					})?;
+					if let Err(error) = Self::write_owner(&mut file, &owner) {
+						let _ = fs::remove_file(&path);
+						return Err(error);
+					}
+					return Ok(Some(Self {
+						path,
+						file,
+						owner,
+						remove_on_drop: true,
+					}));
+				}
+				Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
+				Err(error) => return Err(error),
 			}
-			Err(error) if error.kind() == io::ErrorKind::AlreadyExists => Ok(None),
-			Err(error) => Err(error),
+
+			let mut file = match fs::OpenOptions::new().read(true).write(true).open(&path) {
+				Ok(file) => file,
+				Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+				Err(error) => return Err(error),
+			};
+			if !Self::is_stale(&file, stale_after)? {
+				return Ok(None);
+			}
+			match file.try_lock() {
+				Ok(()) => {}
+				Err(TryLockError::WouldBlock) => return Ok(None),
+				Err(TryLockError::Error(error)) => return Err(error),
+			}
+			// The owner may have refreshed the file before releasing its lock.
+			if !Self::is_stale(&file, stale_after)? {
+				return Ok(None);
+			}
+			Self::write_owner(&mut file, &owner)?;
+			// The former owner could have removed this open file immediately before
+			// we acquired its lock. Do not claim a replacement at the same path.
+			if fs::read(&path).ok().as_deref() != Some(owner.as_slice()) {
+				return Ok(None);
+			}
+			return Ok(Some(Self {
+				path,
+				file,
+				owner,
+				remove_on_drop: true,
+			}));
 		}
+		Ok(None)
+	}
+
+	fn owner_record() -> Vec<u8> {
+		let sequence = BUSY_OWNER_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+		let nanos = SystemTime::now()
+			.duration_since(UNIX_EPOCH)
+			.map_or(0, |duration| duration.as_nanos());
+		// FTS-5005 section 5.1 permits one line of PID information under 70 bytes.
+		format!(
+			"tith bso scan pid {} {nanos:x} {sequence:x}\n",
+			std::process::id()
+		)
+		.into_bytes()
+	}
+
+	fn write_owner(file: &mut File, owner: &[u8]) -> io::Result<()> {
+		file.set_len(0)?;
+		file.write_all(owner)?;
+		file.sync_all()
+	}
+
+	fn is_stale(file: &File, stale_after: Duration) -> io::Result<bool> {
+		Ok(file
+			.metadata()?
+			.modified()?
+			.elapsed()
+			.is_ok_and(|age| age >= stale_after))
 	}
 
 	#[must_use]
 	pub fn path(&self) -> &Path {
 		&self.path
 	}
+
+	#[cfg(test)]
+	fn abandon(mut self) {
+		self.remove_on_drop = false;
+	}
 }
 
 impl Drop for BusyLock {
 	fn drop(&mut self) {
 		// Section 5.1: after the job, successful or not, the file is deleted.
-		let _ = fs::remove_file(&self.path);
+		if self.remove_on_drop
+			&& fs::read(&self.path).ok().as_deref() == Some(self.owner.as_slice())
+		{
+			let _ = fs::remove_file(&self.path);
+		}
+		let _ = self.file.unlock();
 	}
 }
 
@@ -406,19 +488,43 @@ mod tests {
 	}
 
 	#[test]
+	fn dropping_a_displaced_guard_does_not_remove_its_replacement() {
+		let directory = temp_dir("bsy-replacement");
+		let path = directory.join("00680024.bsy");
+		let first = BusyLock::take(path.clone(), Duration::from_mins(10))
+			.expect("take")
+			.expect("first holder");
+		fs::remove_file(&path).expect("simulate stale-lock displacement");
+		let replacement = BusyLock::take(path.clone(), Duration::from_mins(10))
+			.expect("take")
+			.expect("replacement holder");
+
+		drop(first);
+		assert!(path.exists(), "the old guard removed the replacement lock");
+		drop(replacement);
+		fs::remove_dir_all(directory).expect("cleanup");
+	}
+
+	#[test]
 	fn a_stale_lock_is_reclaimed_but_a_fresh_one_is_not() {
 		let directory = temp_dir("stale");
 		let path = directory.join("00680024.bsy");
 		let held = BusyLock::take(path.clone(), Duration::from_mins(10))
 			.expect("take")
 			.expect("holder");
-		std::mem::forget(held); // simulate a crash: the file stays behind
 
 		assert!(
 			BusyLock::take(path.clone(), Duration::from_mins(10))
 				.expect("take")
 				.is_none()
 		);
+		assert!(
+			BusyLock::take(path.clone(), Duration::ZERO)
+				.expect("take")
+				.is_none(),
+			"a live scanner must not lose its lock merely because it ran long"
+		);
+		held.abandon(); // simulate a crash: close the handle but retain the file
 		let reclaimed = BusyLock::take(path.clone(), Duration::ZERO)
 			.expect("take")
 			.expect("stale lock reclaimed");
