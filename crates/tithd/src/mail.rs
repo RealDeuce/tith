@@ -1254,6 +1254,26 @@ mod tests {
 	/// the Reply Header. Windows may consequently report the Server's pending
 	/// write as an aborted connection; that is an expected form of the Client's
 	/// active close, but every later transaction still has to complete.
+	fn is_expected_stale_close(error: &(dyn std::error::Error + 'static)) -> bool {
+		let kind = error
+			.downcast_ref::<std::io::Error>()
+			.map(std::io::Error::kind)
+			.or_else(
+				|| match error.downcast_ref::<tith_exchange::ExchangeError>() {
+					Some(tith_exchange::ExchangeError::Io(error)) => Some(error.kind()),
+					_ => None,
+				},
+			);
+		kind.is_some_and(|kind| {
+			matches!(
+				kind,
+				std::io::ErrorKind::ConnectionAborted
+					| std::io::ErrorKind::ConnectionReset
+					| std::io::ErrorKind::BrokenPipe
+			)
+		})
+	}
+
 	fn accept_stale_key_retry(
 		listener: TcpListener,
 		mailer: &Arc<Mailer>,
@@ -1264,21 +1284,29 @@ mod tests {
 				let (stream, _) = listener.accept().unwrap();
 				let result = transaction(stream, &mailer);
 				if connection == 0
-					&& result.as_ref().is_err_and(|error| {
-						error.downcast_ref::<std::io::Error>().is_some_and(|error| {
-							matches!(
-								error.kind(),
-								std::io::ErrorKind::ConnectionAborted
-									| std::io::ErrorKind::ConnectionReset
-									| std::io::ErrorKind::BrokenPipe
-							)
-						})
-					}) {
+					&& result
+						.as_ref()
+						.is_err_and(|error| is_expected_stale_close(error.as_ref()))
+				{
 					continue;
 				}
 				result.unwrap();
 			}
 		})
+	}
+
+	#[test]
+	fn expected_stale_close_recognises_a_wrapped_exchange_io_error() {
+		let wrapped = tith_exchange::ExchangeError::Io(std::io::Error::new(
+			std::io::ErrorKind::ConnectionAborted,
+			"the Client actively closed",
+		));
+		assert!(is_expected_stale_close(&wrapped));
+		let unrelated = tith_exchange::ExchangeError::Io(std::io::Error::new(
+			std::io::ErrorKind::PermissionDenied,
+			"not a close",
+		));
+		assert!(!is_expected_stale_close(&unrelated));
 	}
 
 	fn driver(node: &Node) -> Outbound {
