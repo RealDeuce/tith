@@ -121,7 +121,51 @@ pub(crate) fn permits_only_owner(sddl: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-	use super::permits_only_owner;
+	use super::{permits_only_owner, read, write};
+	use std::io;
+
+	fn directory(name: &str) -> std::path::PathBuf {
+		let path = std::env::temp_dir().join(format!(
+			"tith-secret-{name}-{}-{:?}",
+			std::process::id(),
+			std::thread::current().id()
+		));
+		let _ = std::fs::remove_dir_all(&path);
+		std::fs::create_dir_all(&path).unwrap();
+		path
+	}
+
+	/// The round trip through the host, which is the half `permits_only_owner`
+	/// cannot check by itself: whether what `create` writes is what `check`
+	/// accepts, in whatever spelling the host stores and reports it.
+	#[test]
+	fn a_key_reads_back_and_an_ordinary_file_does_not() {
+		let root = directory("roundtrip");
+		let key = root.join("node.secret");
+		write(&key, b"secret bytes").unwrap();
+		assert_eq!(read(&key).unwrap(), b"secret bytes");
+
+		// The create is exclusive, so an existing key is never replaced.
+		assert_eq!(
+			write(&key, b"other").unwrap_err().kind(),
+			io::ErrorKind::AlreadyExists
+		);
+
+		// A file made the ordinary way is reachable by more than its owner and is
+		// refused. Without this the assertion above could pass by accepting
+		// everything the host ever returns.
+		let ordinary = root.join("ordinary");
+		std::fs::write(&ordinary, b"secret bytes").unwrap();
+		#[cfg(unix)]
+		{
+			use std::os::unix::fs::PermissionsExt as _;
+			std::fs::set_permissions(&ordinary, std::fs::Permissions::from_mode(0o644)).unwrap();
+		}
+		let error = read(&ordinary).unwrap_err();
+		assert_eq!(error.kind(), io::ErrorKind::PermissionDenied, "{error}");
+
+		std::fs::remove_dir_all(root).unwrap();
+	}
 
 	#[test]
 	fn accepts_only_a_protected_owner_and_system_dacl() {
