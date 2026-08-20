@@ -125,17 +125,37 @@ pub fn parse_request(contents: &str) -> Vec<Request> {
 			let filename = fields.next()?;
 			let mut newer_than = None;
 			let mut unsupported = false;
+			let mut password_seen = false;
+			let mut condition_seen = false;
 			for field in fields {
-				if field.starts_with('!') {
+				if let Some(password) = field.strip_prefix('!') {
 					// A legacy transaction password. It is not transmitted, stored as
 					// a TITH credential, or treated as native authority.
+					if password.is_empty() || password_seen || condition_seen {
+						unsupported = true;
+					}
+					password_seen = true;
 					continue;
 				}
-				match field.strip_prefix('+') {
-					Some(value) => newer_than = value.parse().ok(),
-					// A minus time has no exact TITH representation, and neither does
-					// anything else this grammar does not define.
-					None => unsupported = true,
+				let (newer, value) = if let Some(value) = field.strip_prefix('+') {
+					(true, value)
+				} else if let Some(value) = field.strip_prefix('-') {
+					(false, value)
+				} else {
+					unsupported = true;
+					continue;
+				};
+				if condition_seen || value.is_empty() {
+					unsupported = true;
+				}
+				condition_seen = true;
+				match value.parse::<u64>() {
+					Ok(value) if newer => newer_than = Some(value),
+					Ok(_) => {
+						// A minus time has no exact TITH representation.
+						unsupported = true;
+					}
+					Err(_) => unsupported = true,
 				}
 			}
 			// The filename restrictions are the ones section 8 states for canonical
@@ -331,6 +351,25 @@ mod tests {
 		assert_eq!(requests[3].line, "old.zip -1755400000");
 		// A Filename may not carry a path component.
 		assert!(parse_request("sub/dir.zip\n")[0].unsupported);
+	}
+
+	#[test]
+	fn malformed_or_out_of_order_request_conditions_stay_unsupported() {
+		let valid = &parse_request("good.zip !password +123")[0];
+		assert!(!valid.unsupported);
+		assert_eq!(valid.newer_than, Some(123));
+
+		for line in [
+			"bad.zip +not-a-time",
+			"bad.zip !",
+			"bad.zip +123 !password",
+			"bad.zip !one !two",
+			"bad.zip +123 +456",
+			"bad.zip unexpected",
+		] {
+			let request = &parse_request(line)[0];
+			assert!(request.unsupported, "{line} became a native request");
+		}
 	}
 
 	#[test]
