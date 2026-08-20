@@ -1,5 +1,5 @@
 use std::error::Error;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::net::{Shutdown, SocketAddr, TcpListener, TcpStream};
 use std::path::Path;
 use std::sync::Arc;
@@ -502,8 +502,8 @@ fn malformed_rejection(value: &OwnedTlv, response_to: TlvHash) -> Result<OwnedTl
 	)?)
 }
 
-fn validate_final_reply(
-	reader: &mut TlvReader<TcpStream>,
+fn validate_final_reply<R: Read>(
+	reader: &mut TlvReader<R>,
 	first: OwnedTlv,
 	request: &IncomingBundle,
 	mailer: &Mailer,
@@ -512,6 +512,9 @@ fn validate_final_reply(
 	let reply = read_header(reader, Some(first), mailer)?.ok_or("missing final Reply Bundle")?;
 	if reply.bundle.origin != request.bundle.origin || reply.bundle.destination != mailer.local {
 		return Err("final Reply Bundle has the wrong identities".into());
+	}
+	if holds.is_empty() {
+		return Ok(());
 	}
 	let outbound = mailer.store.outbound()?;
 	while let Some(value) = reader.read_next()? {
@@ -539,32 +542,41 @@ fn validate_final_reply(
 				};
 				resolve_hold(&item, holds, &outbound)?;
 			}
+			// TTS-0005 section 6 makes the Reply Bundle complete once the
+			// authenticated SignedTLV containing the last expected response has
+			// arrived. The Server must not wait for the Client's FIN.
+			if holds.is_empty() {
+				return Ok(());
+			}
 		} else if types::is_defined(value.type_code) {
 			return Err("unexpected top-level value after final Reply Header".into());
 		}
 	}
-	Ok(())
+	Err(format!(
+		"final Reply Bundle ended with {} response(s) missing",
+		holds.len()
+	)
+	.into())
 }
 
 /// Applies one peer response to the copy it answers.
 ///
-/// A response naming nothing this connection returned is ignored rather than
-/// fatal: the peer may be answering a value from an exchange which has already
-/// been retired, and refusing the whole connection would strand the rest.
+/// TTS-0005 section 6 requires exactly one response per returned value in the
+/// original order, so only the first outstanding hold can be answered next.
 fn resolve_hold(
 	item: &ValidatedItem,
 	holds: &mut Vec<PollHold>,
 	outbound: &OutboundStore,
 ) -> Result<(), Box<dyn Error>> {
-	let Some(response_to) = item.response_to else {
-		return Ok(());
-	};
-	let Some(position) = holds.iter().position(|hold| {
-		hold.signed_tlv_hash == response_to && hold.request_identifier == item.request_identifier
-	}) else {
-		return Ok(());
-	};
-	let hold = holds.remove(position);
+	let response_to = item
+		.response_to
+		.ok_or("final Reply Bundle response has no ResponseTo")?;
+	let hold = holds
+		.first()
+		.ok_or("final Reply Bundle has an unexpected extra response")?;
+	if hold.signed_tlv_hash != response_to || hold.request_identifier != item.request_identifier {
+		return Err("final Reply Bundle responses are missing, duplicated, or out of order".into());
+	}
 	let outcome = match item.kind {
 		ItemKind::Accepted => DeliveryOutcome::Delivered("accepted by poll".to_owned()),
 		_ => crate::deliver::rejection_outcome(item.rejection.as_ref(), now()),
@@ -576,6 +588,7 @@ fn resolve_hold(
 		now(),
 		outcome,
 	)?;
+	holds.remove(0);
 	Ok(())
 }
 
@@ -584,7 +597,7 @@ mod tests {
 	use base64::Engine as _;
 	use base64::engine::general_purpose::STANDARD_NO_PAD;
 	use std::fs;
-	use std::io::{Read, Write};
+	use std::io::{Cursor, Read, Write};
 	use std::sync::Arc;
 	use std::time::{SystemTime, UNIX_EPOCH};
 	use tith_crypto::{SigningKeyPair, sign_tlv};
@@ -1449,6 +1462,175 @@ mod tests {
 		assert_eq!(identifiers, vec![1, 2]);
 		drop(mailer);
 		fs::remove_file(database).unwrap();
+	}
+
+	fn final_reply_fixture() -> (
+		Node,
+		SigningKeyPair,
+		Identity,
+		IncomingBundle,
+		TlvHash,
+		Vec<PollHold>,
+	) {
+		let (mailer, peer_keys, peer, local, database) = setup();
+		let node = Node {
+			mailer: Arc::clone(&mailer),
+			database,
+		};
+		submit(
+			&node,
+			&peer.address.to_string(),
+			"Passive \"@remote\"",
+			"held-first",
+		);
+		submit(
+			&node,
+			&peer.address.to_string(),
+			"Passive \"@remote\"",
+			"held-second",
+		);
+		let claims = mailer
+			.store
+			.outbound()
+			.unwrap()
+			.claim_poll_snapshot(&peer.address.to_string(), None, &[JobKind::NetMail], now())
+			.unwrap();
+		assert_eq!(claims.len(), 2);
+		let response_to = TlvHash::from_bytes([7; 32]);
+		let holds = claims
+			.into_iter()
+			.enumerate()
+			.map(|(index, claim)| PollHold {
+				signed_tlv_hash: response_to,
+				request_identifier: u64::try_from(index + 1).unwrap(),
+				claim,
+			})
+			.collect::<Vec<_>>();
+
+		let poll = container(
+			types::POLL_MESSAGES,
+			&[OwnedTlv::new(types::REQUEST_IDENTIFIER, encode_u64(10)).unwrap()],
+		);
+		let initial = build_bundle(&peer, &peer_keys.secret, &local, 1, vec![vec![poll]]).unwrap();
+		let mut initial_reader = TlvReader::new(Cursor::new(initial));
+		let request = read_header(&mut initial_reader, None, mailer.as_ref())
+			.unwrap()
+			.unwrap();
+		(node, peer_keys, peer, request, response_to, holds)
+	}
+
+	fn check_final_reply(
+		node: &Node,
+		peer_keys: &SigningKeyPair,
+		peer: &Identity,
+		request: &IncomingBundle,
+		holds: &mut Vec<PollHold>,
+		responses: Vec<OwnedTlv>,
+		trailing: &[u8],
+	) -> Result<(), Box<dyn Error>> {
+		let final_reply = build_bundle(
+			peer,
+			&peer_keys.secret,
+			&node.mailer.local,
+			2,
+			vec![responses],
+		)
+		.unwrap();
+		let mut final_reply = final_reply;
+		final_reply.extend_from_slice(trailing);
+		let mut final_reader = TlvReader::new(Cursor::new(final_reply));
+		let first = final_reader
+			.read_next()
+			.unwrap()
+			.unwrap()
+			.read_owned()
+			.unwrap();
+		validate_final_reply(
+			&mut final_reader,
+			first,
+			request,
+			node.mailer.as_ref(),
+			holds,
+		)
+	}
+
+	#[test]
+	fn final_reply_responses_must_follow_the_returned_value_order() {
+		let (node, peer_keys, peer, request, response_to, mut holds) = final_reply_fixture();
+		assert!(
+			check_final_reply(
+				&node,
+				&peer_keys,
+				&peer,
+				&request,
+				&mut holds,
+				vec![
+					accepted(2, response_to).unwrap(),
+					accepted(1, response_to).unwrap(),
+				],
+				&[],
+			)
+			.is_err()
+		);
+	}
+
+	#[test]
+	fn final_reply_must_answer_every_returned_value() {
+		let (node, peer_keys, peer, request, response_to, mut holds) = final_reply_fixture();
+		assert!(
+			check_final_reply(
+				&node,
+				&peer_keys,
+				&peer,
+				&request,
+				&mut holds,
+				vec![accepted(1, response_to).unwrap()],
+				&[],
+			)
+			.is_err()
+		);
+		assert_eq!(holds.len(), 1);
+	}
+
+	#[test]
+	fn final_reply_must_not_answer_a_returned_value_twice() {
+		let (node, peer_keys, peer, request, response_to, mut holds) = final_reply_fixture();
+		assert!(
+			check_final_reply(
+				&node,
+				&peer_keys,
+				&peer,
+				&request,
+				&mut holds,
+				vec![
+					accepted(1, response_to).unwrap(),
+					accepted(1, response_to).unwrap(),
+				],
+				&[],
+			)
+			.is_err()
+		);
+		assert_eq!(holds.len(), 1);
+	}
+
+	#[test]
+	fn final_reply_completes_without_waiting_past_the_last_response() {
+		let (node, peer_keys, peer, request, response_to, mut holds) = final_reply_fixture();
+		check_final_reply(
+			&node,
+			&peer_keys,
+			&peer,
+			&request,
+			&mut holds,
+			vec![
+				accepted(1, response_to).unwrap(),
+				accepted(2, response_to).unwrap(),
+			],
+			// An unterminated integer makes any read past the complete Reply fail.
+			&[0x80],
+		)
+		.unwrap();
+		assert!(holds.is_empty());
 	}
 
 	/// The Passive half: a held copy only moves when the peer asks for it.
