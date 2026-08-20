@@ -3,7 +3,7 @@ TITH                                              THIS ISN'T THAT HARD
 **********************************************************************
 
 Publication:  TSP‑0011
-Revision:     4
+Revision:     5
 Title:        Durable Inbound Delivery Items
 Author(s):    Stephen Hurd
 Date:         2026‑08‑20
@@ -102,9 +102,10 @@ Contents
   The receiving local identity is the exact local identity represented
   by the Destination in the Bundle Header.  The immediate peer is the
   authenticated top‐level Origin of the Bundle which carried the item.
-  Its recorded key is the exact key used to authenticate that peer,
-  including the nodelist key for a listed address.  It does not replace
-  the Origin or PublicKey inside a Message or standalone File.
+  Its recorded key is the exact key used to authenticate that peer:
+  the accompanying key for an anonymous identity or the effective key
+  resolved under TSP‑0015 for a non‐anonymous identity.  It does not
+  replace the Origin or PublicKey inside a Message or standalone File.
 
   ItemAuthentication is one of these values for a Message or
   standalone File:
@@ -326,7 +327,7 @@ Contents
   SignedOrigin-Invalid and Origin-Invalid use an ERROR.  In both cases
   the received bytes are known not to match the bytes authenticated by
   the selected signer.  For Origin-Invalid, this specifically means the
-  item is known not to be what the listed author signed.  A suitable
+  item is known not to be what the Origin author signed.  A suitable
   diagnostic is:
 
     ERROR: This signed message or its signature was modified in
@@ -481,9 +482,11 @@ A. References
   [TSP‑0013] "Legacy Mailer and Tosser IPC Adapters", TITH,
   2026‑08‑20.
 
-  [TTS‑0003] "Common TLV Types", TITH, 2026‑08‑18.
+  [TSP‑0015] "Public Key Trust and Continuity", TITH, 2026‑08‑20.
 
-  [TTS‑0004] "Node Addresses", TITH, 2026‑08‑17.
+  [TTS‑0003] "Common TLV Types", TITH, 2026‑08‑20.
+
+  [TTS‑0004] "Node Addresses", TITH, 2026‑08‑20.
 
   [TTS‑0005] "Bundle Format", TITH, 2026‑08‑20.
 
@@ -508,5 +511,8 @@ B. History
    adapter, to discharge eligible distribution through Job Forward;
    made legacy publication terminal local delivery and prohibited
    onward copies of unsigned or invalid items.
+
+   Rev.5, 2026‑08‑20: Distinguished anonymous address grammar from
+   listing status and recorded the exact effective transport key.
 
 **********************************************************************

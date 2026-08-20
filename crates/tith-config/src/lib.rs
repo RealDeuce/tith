@@ -28,7 +28,7 @@ impl std::error::Error for ConfigError {}
 
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum IdentityRef {
-	Listed(Address),
+	Address(Address),
 	Peer(String),
 }
 
@@ -269,14 +269,14 @@ fn identity(file: &'static str, line: usize, value: &str) -> Result<IdentityRef,
 		Ok(IdentityRef::Peer(peer_ref(file, line, value)?))
 	} else {
 		let address = Address::from_str(value).map_err(|e| err(file, line, e.to_string()))?;
-		if address.is_unlisted() {
+		if address.is_anonymous() {
 			Err(err(
 				file,
 				line,
-				"unlisted local identity must be a peer reference",
+				"anonymous local identity must be a peer reference",
 			))
 		} else {
-			Ok(IdentityRef::Listed(address))
+			Ok(IdentityRef::Address(address))
 		}
 	}
 }
@@ -309,7 +309,7 @@ fn selector(
 				_ => return Err(bad()),
 			};
 			let address = Address::from_str(address).map_err(|_| bad())?;
-			if address.is_unlisted() {
+			if address.is_anonymous() {
 				return Err(bad());
 			}
 			Ok((Selector::Branch(kind, address), 3))
@@ -321,7 +321,7 @@ fn selector(
 				_ => return Err(bad()),
 			};
 			let address = Address::from_str(address).map_err(|_| bad())?;
-			if address.is_unlisted() {
+			if address.is_anonymous() {
 				return Err(bad());
 			}
 			Ok((Selector::Independent(kind, address), 3))
@@ -470,25 +470,25 @@ fn parse_peers(input: &str) -> Result<BTreeMap<String, Peer>, ConfigError> {
 		}
 		let address =
 			address.ok_or_else(|| err(file, input[index - 1].number, "missing Address"))?;
-		if address.is_unlisted() != public_key.is_some() {
+		if address.is_anonymous() != public_key.is_some() {
 			return Err(err(
 				file,
 				input[index - 1].number,
-				"Public-Key must occur exactly for an unlisted address",
+				"Public-Key must occur exactly for an anonymous address",
 			));
 		}
-		if !address.is_unlisted() && (boss.is_some() || hub.is_some()) {
+		if !address.is_anonymous() && (boss.is_some() || hub.is_some()) {
 			return Err(err(
 				file,
 				input[index - 1].number,
-				"Boss and Hub require an unlisted peer",
+				"Boss and Hub require an anonymous peer",
 			));
 		}
-		if trust_on_first_use && (address.is_unlisted() || endpoints.is_empty()) {
+		if trust_on_first_use && (address.is_anonymous() || endpoints.is_empty()) {
 			return Err(err(
 				file,
 				input[index - 1].number,
-				"Trust-On-First-Use requires a listed address and an Endpoint",
+				"Trust-On-First-Use requires a non-anonymous address and an Endpoint",
 			));
 		}
 		let key = (address.clone(), public_key.map(|value| *value.as_bytes()));
@@ -1119,17 +1119,17 @@ mod tests {
 	}
 
 	#[test]
-	fn trust_on_first_use_requires_a_listed_contact_endpoint() {
-		let listed =
+	fn trust_on_first_use_requires_a_non_anonymous_contact_endpoint() {
+		let contact =
 			"Peer nc\nAddress fidonet#1:123\nEndpoint nc.example 24555\nTrust-On-First-Use\nEnd\n";
-		let peers = parse_peers(listed).unwrap();
+		let peers = parse_peers(contact).unwrap();
 		assert!(peers["nc"].trust_on_first_use);
 
 		let no_endpoint = "Peer nc\nAddress fidonet#1:123\nTrust-On-First-Use\nEnd\n";
 		assert!(parse_peers(no_endpoint).is_err());
 
-		let unlisted = "Peer nc\nAddress p2p#-1\nPublic-Key AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\nEndpoint nc.example 24555\nTrust-On-First-Use\nEnd\n";
-		assert!(parse_peers(unlisted).is_err());
+		let anonymous = "Peer nc\nAddress p2p#-1\nPublic-Key AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\nEndpoint nc.example 24555\nTrust-On-First-Use\nEnd\n";
+		assert!(parse_peers(anonymous).is_err());
 	}
 
 	#[test]

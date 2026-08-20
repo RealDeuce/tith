@@ -79,7 +79,7 @@ pub struct MessageSubmission {
 	/// The one local identity whose routing configuration and Via apply.
 	pub local_identity: Option<String>,
 	pub signed_origin: Option<String>,
-	/// Present only when a retained Signed-Origin is the unlisted address.
+	/// Present only when a retained Signed-Origin is the anonymous address.
 	pub signed_origin_public_key: Option<String>,
 	pub destination_or_area: String,
 	pub to_user: String,

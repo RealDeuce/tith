@@ -102,10 +102,10 @@ pub struct VerifiedSignedTlv {
 pub struct Bundle {
 	pub encoded: Vec<u8>,
 	pub origin: Identity,
-	/// A listed outer Origin key carried only by a `PublicKeyRequest` reply.
+	/// A non-anonymous outer Origin key carried only by a `PublicKeyRequest` reply.
 	pub advertised_origin_key: Option<PublicKey>,
 	pub destination: Identity,
-	/// A listed Header Destination predecessor key requested by a key probe.
+	/// A non-anonymous Header Destination predecessor key requested by a key probe.
 	pub requested_destination_key: Option<PublicKey>,
 	pub timestamp: u64,
 	pub header: VerifiedSignedTlv,
@@ -142,13 +142,15 @@ fn identity(
 	resolver: &impl KeyResolver,
 ) -> Result<Identity, BundleError> {
 	let address = address_value(address_tlv)?;
-	let public_key = if address.is_unlisted() {
+	let public_key = if address.is_anonymous() {
 		public_key_tlv
-			.ok_or(BundleError::Missing("PublicKey for unlisted address"))
+			.ok_or(BundleError::Missing("PublicKey for anonymous address"))
 			.and_then(public_key_value)?
 	} else {
 		if public_key_tlv.is_some() {
-			return Err(BundleError::Unexpected("PublicKey for listed address"));
+			return Err(BundleError::Unexpected(
+				"PublicKey for non-anonymous address",
+			));
 		}
 		resolver
 			.public_key(&address)
@@ -176,16 +178,18 @@ fn signed_tlv_parts(
 		index += 1;
 		let address = address_value(origin)?;
 		let next = children.get(index);
-		if address.is_unlisted() {
+		if address.is_anonymous() {
 			let key = next
 				.filter(|child| child.type_code == types::PUBLIC_KEY)
-				.ok_or(BundleError::Missing("PublicKey after unlisted Origin"))?
+				.ok_or(BundleError::Missing("PublicKey after anonymous Origin"))?
 				.clone();
 			index += 1;
 			Some(key)
 		} else {
 			if next.is_some_and(|child| child.type_code == types::PUBLIC_KEY) {
-				return Err(BundleError::Unexpected("PublicKey after listed Origin"));
+				return Err(BundleError::Unexpected(
+					"PublicKey after non-anonymous Origin",
+				));
 			}
 			None
 		}
@@ -250,7 +254,7 @@ pub fn unauthenticated_signed_data(value: &OwnedTlv) -> Result<Vec<OwnedTlv>, Bu
 
 impl Bundle {
 	pub fn parse(encoded: &[u8], resolver: &impl KeyResolver) -> Result<Self, BundleError> {
-		Self::parse_internal(encoded, resolver, ListedOriginKey::Prohibited, false)
+		Self::parse_internal(encoded, resolver, NonAnonymousOriginKey::Prohibited, false)
 	}
 
 	/// Parses only the Origin and Header prefix while deferring rules which
@@ -259,10 +263,10 @@ impl Bundle {
 		encoded: &[u8],
 		resolver: &impl KeyResolver,
 	) -> Result<Self, BundleError> {
-		Self::parse_internal(encoded, resolver, ListedOriginKey::Prohibited, true)
+		Self::parse_internal(encoded, resolver, NonAnonymousOriginKey::Prohibited, true)
 	}
 
-	/// Parses a probe reply whose listed outer Origin carries the key that
+	/// Parses a probe reply whose non-anonymous outer Origin carries the key that
 	/// authenticated the reply. `expected` pins that key when a predecessor is
 	/// already trusted; `None` is the explicit first-contact TOFU case.
 	pub fn parse_public_key_reply(
@@ -270,7 +274,7 @@ impl Bundle {
 		resolver: &impl KeyResolver,
 		expected: Option<PublicKey>,
 	) -> Result<Self, BundleError> {
-		let mode = expected.map_or(ListedOriginKey::Any, ListedOriginKey::Exact);
+		let mode = expected.map_or(NonAnonymousOriginKey::Any, NonAnonymousOriginKey::Exact);
 		let bundle = Self::parse_internal(encoded, resolver, mode, false)?;
 		if bundle.advertised_origin_key.is_none()
 			|| bundle.payloads.len() != 1
@@ -291,7 +295,7 @@ impl Bundle {
 	fn parse_internal(
 		encoded: &[u8],
 		resolver: &impl KeyResolver,
-		listed_origin_key: ListedOriginKey,
+		non_anonymous_origin_key: NonAnonymousOriginKey,
 		allow_header_only: bool,
 	) -> Result<Self, BundleError> {
 		let top = parse_sequence(encoded)?;
@@ -302,7 +306,7 @@ impl Bundle {
 		let origin_address = address_value(origin_tlv)?;
 		let mut index = 1;
 		let mut advertised_origin_key = None;
-		let origin_public_key = if origin_address.is_unlisted() {
+		let origin_public_key = if origin_address.is_anonymous() {
 			let value = top
 				.get(index)
 				.ok_or(BundleError::Missing("Origin PublicKey"))?;
@@ -317,14 +321,14 @@ impl Bundle {
 		{
 			let value = &top[index];
 			let key = public_key_value(value)?;
-			match listed_origin_key {
-				ListedOriginKey::Prohibited => {
-					return Err(BundleError::Unexpected("listed Origin PublicKey"));
+			match non_anonymous_origin_key {
+				NonAnonymousOriginKey::Prohibited => {
+					return Err(BundleError::Unexpected("non-anonymous Origin PublicKey"));
 				}
-				ListedOriginKey::Exact(expected) if key != expected => {
+				NonAnonymousOriginKey::Exact(expected) if key != expected => {
 					return Err(BundleError::InvalidSignature);
 				}
-				ListedOriginKey::Any | ListedOriginKey::Exact(_) => {}
+				NonAnonymousOriginKey::Any | NonAnonymousOriginKey::Exact(_) => {}
 			}
 			index += 1;
 			advertised_origin_key = Some(key);
@@ -390,7 +394,7 @@ impl Bundle {
 				&& payloads[0].data[1].type_code == types::PUBLIC_KEY_REQUEST)
 		{
 			return Err(BundleError::Unexpected(
-				"listed Destination PublicKey outside a sole PublicKeyRequest",
+				"non-anonymous Destination PublicKey outside a sole PublicKeyRequest",
 			));
 		}
 
@@ -427,7 +431,7 @@ impl Bundle {
 }
 
 #[derive(Clone, Copy)]
-enum ListedOriginKey {
+enum NonAnonymousOriginKey {
 	Prohibited,
 	Any,
 	Exact(PublicKey),
@@ -453,7 +457,7 @@ fn validate_header(
 		.ok_or(BundleError::Missing("Destination"))?;
 	let destination_address = address_value(destination_tlv)?;
 	let mut requested_destination_key = None;
-	let destination_key = if destination_address.is_unlisted() {
+	let destination_key = if destination_address.is_anonymous() {
 		let value = children
 			.get(index)
 			.ok_or(BundleError::Missing("Destination PublicKey"))?;
@@ -516,7 +520,7 @@ pub fn build_signed_tlv(
 			types::ORIGIN,
 			origin.address.to_string().into_bytes(),
 		)?);
-		if origin.address.is_unlisted() {
+		if origin.address.is_anonymous() {
 			children.push(OwnedTlv::new(
 				types::PUBLIC_KEY,
 				origin.public_key.as_bytes().to_vec(),
@@ -542,7 +546,7 @@ pub fn build_bundle(
 		types::ORIGIN,
 		origin.address.to_string().into_bytes(),
 	)?];
-	if origin.address.is_unlisted() {
+	if origin.address.is_anonymous() {
 		top.push(OwnedTlv::new(
 			types::PUBLIC_KEY,
 			origin.public_key.as_bytes().to_vec(),
@@ -552,7 +556,7 @@ pub fn build_bundle(
 		types::DESTINATION,
 		destination.address.to_string().into_bytes(),
 	)?];
-	if destination.address.is_unlisted() {
+	if destination.address.is_anonymous() {
 		header_data.push(OwnedTlv::new(
 			types::PUBLIC_KEY,
 			destination.public_key.as_bytes().to_vec(),
@@ -582,16 +586,16 @@ pub fn build_public_key_probe(
 	timestamp: u64,
 	request_identifier: u64,
 ) -> Result<Vec<u8>, BundleError> {
-	if destination.is_unlisted() {
+	if destination.is_anonymous() {
 		return Err(BundleError::Unexpected(
-			"PublicKeyRequest for an unlisted Destination",
+			"PublicKeyRequest for an anonymous Destination",
 		));
 	}
 	let mut top = vec![OwnedTlv::new(
 		types::ORIGIN,
 		origin.address.to_string().into_bytes(),
 	)?];
-	if origin.address.is_unlisted() {
+	if origin.address.is_anonymous() {
 		top.push(OwnedTlv::new(
 			types::PUBLIC_KEY,
 			origin.public_key.as_bytes().to_vec(),
@@ -619,7 +623,7 @@ pub fn build_public_key_probe(
 /// Builds the reply to one `PublicKeyRequest`.
 ///
 /// `signing_origin` is the requested predecessor identity and may use a
-/// retained secret. Its key is repeated after the listed outer Origin so the
+/// retained secret. Its key is repeated after the non-anonymous outer Origin so the
 /// client can select it before authenticating the Header. `current_key` is
 /// inside Accepted and is therefore certified by that predecessor signature.
 pub fn build_public_key_reply(
@@ -635,7 +639,7 @@ pub fn build_public_key_reply(
 		types::ORIGIN,
 		signing_origin.address.to_string().into_bytes(),
 	)?];
-	// A probe reply always states its signing key, including for a listed Origin.
+	// A probe reply always states its signing key, including for a non-anonymous Origin.
 	top.push(OwnedTlv::new(
 		types::PUBLIC_KEY,
 		signing_origin.public_key.as_bytes().to_vec(),
@@ -644,7 +648,7 @@ pub fn build_public_key_reply(
 		types::DESTINATION,
 		destination.address.to_string().into_bytes(),
 	)?];
-	if destination.address.is_unlisted() {
+	if destination.address.is_anonymous() {
 		header_data.push(OwnedTlv::new(
 			types::PUBLIC_KEY,
 			destination.public_key.as_bytes().to_vec(),
@@ -669,7 +673,7 @@ mod tests {
 	use super::*;
 
 	#[test]
-	fn listed_bundle_round_trip_and_exact_hash() {
+	fn non_anonymous_bundle_round_trip_and_exact_hash() {
 		let origin_keys = SigningKeyPair::from_seed(&[1; 32]).unwrap();
 		let destination_keys = SigningKeyPair::from_seed(&[2; 32]).unwrap();
 		let origin = Identity {
@@ -774,15 +778,15 @@ mod tests {
 	}
 
 	#[test]
-	fn unlisted_keys_are_carried_and_bad_signatures_are_rejected() {
+	fn anonymous_keys_are_carried_and_bad_signatures_are_rejected() {
 		let origin_keys = SigningKeyPair::from_seed(&[3; 32]).unwrap();
 		let destination_keys = SigningKeyPair::from_seed(&[4; 32]).unwrap();
 		let origin = Identity {
-			address: Address::unlisted("p2p".into()).unwrap(),
+			address: Address::anonymous("p2p".into()).unwrap(),
 			public_key: origin_keys.public,
 		};
 		let destination = Identity {
-			address: Address::unlisted("p2p".into()).unwrap(),
+			address: Address::anonymous("p2p".into()).unwrap(),
 			public_key: destination_keys.public,
 		};
 		let mut encoded =
@@ -799,10 +803,10 @@ mod tests {
 	}
 
 	#[test]
-	fn signed_tlv_carries_an_unlisted_origin_key() {
+	fn signed_tlv_carries_an_anonymous_origin_key() {
 		let keys = SigningKeyPair::from_seed(&[5; 32]).unwrap();
 		let origin = Identity {
-			address: Address::unlisted("p2p".into()).unwrap(),
+			address: Address::anonymous("p2p".into()).unwrap(),
 			public_key: keys.public,
 		};
 		let data = [OwnedTlv::new(200, b"extension".to_vec()).unwrap()];
@@ -816,9 +820,9 @@ mod tests {
 	}
 
 	#[test]
-	fn unknown_value_cannot_separate_an_unlisted_origin_and_key() {
+	fn unknown_value_cannot_separate_an_anonymous_origin_and_key() {
 		let keys = SigningKeyPair::from_seed(&[6; 32]).unwrap();
-		let origin = Address::unlisted("p2p".into()).unwrap();
+		let origin = Address::anonymous("p2p".into()).unwrap();
 		let children = [
 			OwnedTlv::new(types::ORIGIN, origin.to_string().into_bytes()).unwrap(),
 			OwnedTlv::new(200, Vec::new()).unwrap(),
@@ -829,7 +833,7 @@ mod tests {
 		let signed = OwnedTlv::new(types::SIGNED_TLV, concatenate(&children)).unwrap();
 		assert!(matches!(
 			verify_signed_tlv(&signed, None, &|_: &Address| None),
-			Err(BundleError::Missing("PublicKey after unlisted Origin"))
+			Err(BundleError::Missing("PublicKey after anonymous Origin"))
 		));
 	}
 

@@ -3,11 +3,11 @@ TITH                                              THIS ISN'T THAT HARD
 **********************************************************************
 
 Publication:  TTS‑5000
-Revision:     4
+Revision:     5
 Title:        The Distribution Nodelist
 Author(s):    FTSC Members, Administrator, Honoured Guests and
               Stephen Hurd
-Date:         2026‑08‑19
+Date:         2026‑08‑20
 ══════════════════════════════════════════════════════════════════════
 
 Status of this document
@@ -458,8 +458,12 @@ Contents
      Every IIH occurrence on one data line MUST contain the same
      PublicKey.  A line containing different IIH PublicKeys is invalid.
 
-     When a node is first listed following an application from the
-     unlisted address defined in TTS‑0004, this PublicKey MUST be
+     The IIH PublicKey is the nodelist trust anchor for this address.
+     TSP‑0015 determines whether that anchor or an authenticated
+     successor is the effective key for a particular implementation.
+
+     When a node is first published following an application from the
+     anonymous address defined in TTS‑0004, this PublicKey MUST be
      the same PublicKey that accompanied the Origin of the application
      Message.
 
@@ -541,9 +545,11 @@ A. References
   [FTA‑1006.002] "Key words to indicate requirement levels"
   FTSC, 1998‑01‑17.
 
-  [TTS‑0003] "Common TLV Types", TITH, 2026‑08‑18.
+  [TTS‑0003] "Common TLV Types", TITH, 2026‑08‑20.
 
-  [TTS‑0004] "Node Addresses", TITH, 2026‑08‑17.
+  [TTS‑0004] "Node Addresses", TITH, 2026‑08‑20.
+
+  [TSP‑0015] "Public Key Trust and Continuity", TITH, 2026‑08‑20.
 
   [TTS‑0005] "Bundle Format", TITH, 2026‑08‑20.
 
@@ -568,5 +574,9 @@ B. History
    whose contents are not interpreted.  Made the Private contact
    information rule normative, excepted the endpointless IIH form
    from it, and defined what a converter does with such an entry.
+
+   Rev.5, 2026‑08‑20: Distinguished publication in a nodelist from
+   observer‐relative listing and identified IIH as the external trust
+   anchor used by TSP‑0015 effective key resolution.
 
 **********************************************************************

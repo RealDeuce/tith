@@ -201,7 +201,7 @@ impl KeyPinStore {
 			.transpose()
 	}
 
-	/// Resolve a listed address without allowing a locally observed key to
+	/// Resolve a non-anonymous address without allowing a locally observed key to
 	/// supersede an unrelated nodelist key.
 	pub fn resolve(
 		&self,
@@ -1025,7 +1025,7 @@ mod tests {
 	use super::*;
 
 	#[test]
-	fn listed_key_pins_advance_only_from_the_effective_predecessor() {
+	fn non_anonymous_key_pins_advance_only_from_the_effective_predecessor() {
 		let path = std::env::temp_dir().join(format!(
 			"tith-store-{}.redb",
 			random_identifier('T').unwrap()

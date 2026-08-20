@@ -3,7 +3,7 @@ TITH                                              THIS ISN'T THAT HARD
 **********************************************************************
 
 Publication:  TTS‑0005
-Revision:     9
+Revision:     10
 Title:        Bundle Format
 Author(s):    Stephen Hurd
 Date:         2026‑08‑20
@@ -63,16 +63,16 @@ Contents
 
   The first item MUST be an Origin as defined in TTS‑0003.  This Origin
   is applicable to the SignedTLV values that follow.  If it is the
-  unlisted address defined in TTS‑0004, it MUST be immediately
+  anonymous address defined in TTS‑0004, it MUST be immediately
   followed by a PublicKey as defined in TTS‑0003.  Otherwise it MUST
   NOT be followed by a PublicKey, except in the PublicKeyRequest reply
-  defined below.  For the unlisted address, this
+  defined below.  For the anonymous address, this
   PublicKey is the key applicable to the SignedTLV values that follow.
   For any other Origin, the applicable key is obtained from the
   nodelist or the trust state defined by TSP‑0015, and a supplied
   PublicKey MUST NOT override it.
 
-  A reply to a PublicKeyRequest is the sole exception for a listed
+  A reply to a PublicKeyRequest is the sole exception for a non‐anonymous
   Origin.  Its Origin MUST be immediately followed by the PublicKey
   whose private key signs that reply.  The receiver MUST accept that
   key only when it is the key requested in the original Header, or
@@ -81,16 +81,16 @@ Contents
   Ignoring permitted unknown values, the next item MUST be a SignedTLV
   as defined in TTS‑0003.  This is the Header SignedTLV and MUST NOT
   contain an Origin.  Its SignedData MUST contain one Destination,
-  followed by a PublicKey if the Destination is the unlisted address
-  or the Bundle requests continuity from a listed predecessor key,
+  followed by a PublicKey if the Destination is the anonymous address
+  or the Bundle requests continuity from a non‐anonymous predecessor key,
   followed by one Timestamp, all as defined in
   TTS‑0003.  A required PublicKey MUST be the encoded child immediately
   after its Destination.  The PublicKey identifies the particular
-  unlisted system to which the Bundle is addressed.  For a listed
+  anonymous system to which the Bundle is addressed.  For a non‐anonymous
   Destination it identifies the already trusted predecessor key from
-  which a PublicKeyRequest asks for continuity.  A listed Destination
-  PublicKey is permitted only in a Bundle whose only request is one
-  PublicKeyRequest.  The Timestamp
+  which a PublicKeyRequest asks for continuity.  A non‐anonymous
+  Destination PublicKey is permitted only when the Bundle's sole
+  request is one PublicKeyRequest.  The Timestamp
   indicates when the bundling process started and is not updated when
   another item is added to the Bundle.
 
@@ -150,7 +150,7 @@ Contents
   O indicating Optional, N indicating Manditory for NetMail, E
   indicating Manditory for EchoMail, C indicating Optional for
   EchoMail and prohibited for NetMail, and A indicating Manditory if
-  the immediately preceding address is the unlisted address and
+  the immediately preceding address is the anonymous address and
   prohibited otherwise.  If a + is listed after the mandatory or
   optional character, multiple values of that type may be included.
 
@@ -195,8 +195,8 @@ Contents
   itself are not signed.  Origin is the system where the Message
   originated and is the address used to construct a reply.  Its
   immediately following PublicKey is present if and only if Origin is
-  the unlisted address.  For another Origin, its key is obtained from
-  the nodelist when a Signature is present.
+  the anonymous address.  For another Origin, its effective key is
+  resolved according to TSP‑0015 when a Signature is present.
 
   SignedOrigin is permitted only when Signature is present.  If a
   public key is available for Origin, that key is applicable to the
@@ -204,9 +204,10 @@ Contents
   Signature MUST NOT then be retried with SignedOrigin.  If no key is
   available for Origin, SignedOrigin MUST be present and its key is
   applicable.  Its immediately following PublicKey is present if and
-  only if SignedOrigin is the unlisted address; otherwise its key is
-  obtained from the nodelist.  The applicable address and key form the
-  effective signer.  SignedOrigin does not replace Origin for a reply,
+  only if SignedOrigin is the anonymous address; otherwise its
+  effective key is resolved according to TSP‑0015.  The applicable
+  address and key form the effective signer.  SignedOrigin does not
+  replace Origin for a reply,
   MessageID, or routing to the Message's Destination.
 
   An absent Signature means that the Message has no end‐to‐end item
@@ -231,7 +232,7 @@ Contents
   O indicating Optional, A indicating manditory for a File inside of a
   Message, T indicating manditory for a File not inside of a Message,
   directly inside of a SignedTLV, K indicating manditory if the
-  immediately preceding Origin or SignedOrigin is the unlisted address
+  immediately preceding Origin or SignedOrigin is the anonymous address
   and prohibited otherwise, and F for a file that is part of a
   distribution network.
   O  Filename (Section 4)
@@ -371,15 +372,16 @@ Contents
   72. PublicKeyRequest
   ────────────────────
   A PublicKeyRequest contains one manditory RequestIdentifier and no
-  other child.  It asks the listed Destination for its current public
-  key.  It MUST be the only request in the Bundle, MUST be in the only
-  payload SignedTLV, and that SignedTLV MUST contain only its leading
-  Header TLVHash and the PublicKeyRequest.  It MUST NOT be combined
+  other child.  It asks the non‐anonymous Destination for its current
+  public key.  It MUST be the only request in the Bundle and MUST be in
+  the only payload SignedTLV.  That SignedTLV MUST contain only its
+  leading Header TLVHash and the PublicKeyRequest.  It MUST NOT be
+  combined
   with operational work or a Poll.
 
-  When the listed Destination PublicKey is present in the Header, the
-  Server MUST sign the reply with that exact key.  It MAY use a
-  retained private key for this reply even though that key is no
+  When the non‐anonymous Destination PublicKey is present in the
+  Header, the Server MUST sign the reply with that exact key.  It MAY
+  use a retained private key for this reply even though that key is no
   longer current.  When it is absent, the request is a first‑contact
   probe and the Server signs with its current key.
 
@@ -397,13 +399,13 @@ Contents
   only part of the otherwise available matching set.
 
   A held value matches only when it is held for the authenticated
-  identity represented by the Bundle Origin.  For an unlisted Origin
+  identity represented by the Bundle Origin.  For an anonymous Origin
   this identity includes the top‐level PublicKey.
 
-  A node that holds a Message, File, or FileRequest for the unlisted
+  A node that holds a Message, File, or FileRequest for the anonymous
   address MUST retain the associated PublicKey as local delivery
   metadata.  When a Message is held for its ultimate Destination, this
-  is its Destination PublicKey.  When it is held for an unlisted next
+  is its Destination PublicKey.  When it is held for an anonymous next
   hop, this is the next hop's PublicKey.  This local association is not
   added to or substituted for any PublicKey in the held value.
 
@@ -564,12 +566,12 @@ Contents
   113. Via
   ────────
   A Via value contains a required Address, followed by a PublicKey if
-  and only if the Address is the unlisted address, followed by a
+  and only if the Address is the anonymous address, followed by a
   required Timestamp and a required UTF‑8 string.  The string MAY
   contain the program name and version separated by a space.
 
-  The PublicKey identifies the particular unlisted system represented
-  by the Via.  It is path metadata and does not override a nodelist key
+  The PublicKey identifies the particular anonymous system represented
+  by the Via.  It is path metadata and does not override an effective key
   or authenticate any other value.
 
   The system originating a Message or distribution File MUST append a
@@ -661,9 +663,9 @@ Contents
   Its top‐level Origin MUST be the Destination from the Header of the
   Bundle to which it replies.  The Destination in its Header MUST be
   the top‐level Origin of that Bundle.  When the Reply Bundle's Origin
-  is the unlisted address, it MUST be followed by the same PublicKey
+  is the anonymous address, it MUST be followed by the same PublicKey
   that followed the Destination in the original Bundle's Header.  When
-  the Reply Bundle's Destination is the unlisted address, it MUST be
+  the Reply Bundle's Destination is the anonymous address, it MUST be
   followed by the same PublicKey that followed the top‐level Origin of
   the original Bundle.
 
@@ -672,8 +674,8 @@ Contents
   exactly one Accepted or Rejected value is included in the same order
   as in the original Bundle.
 
-  A PublicKeyRequest reply MUST use the listed Origin PublicKey rule
-  in section 2 and MUST contain exactly one payload SignedTLV.  Its
+  A PublicKeyRequest reply MUST use the non‐anonymous Origin PublicKey
+  rule in section 2 and MUST contain exactly one payload SignedTLV.  Its
   Accepted value MUST contain the Server's current PublicKey.  Thus a
   reply signed by the requested predecessor certifies the successor
   carried inside its authenticated SignedData.  This proof establishes
@@ -702,8 +704,9 @@ Contents
   signed‐item identity.  This identity consists of the item type, its
   effective signer address and PublicKey, and its end‐to‐end Signature.
   The effective signer is Origin when its key is available and
-  SignedOrigin otherwise.  A listed effective signer uses its nodelist
-  key; an unlisted effective signer uses its accompanying PublicKey.
+  SignedOrigin otherwise.  A non‐anonymous effective signer uses its
+  effective key resolved according to TSP‑0015; an anonymous effective
+  signer uses its accompanying PublicKey.
 
   The RequestIdentifier, Via, SeenBy, and AdditionalKludgeLine values
   following the Signature MUST NOT be part of the duplicate identity.
@@ -755,13 +758,13 @@ A. References
 
   [TTS‑0002] "Type Length Value Encoding", TITH, 2026‑08‑16.
 
-  [TTS‑0003] "Common TLV Types", TITH, 2026‑08‑18.
+  [TTS‑0003] "Common TLV Types", TITH, 2026‑08‑20.
 
-  [TTS‑0004] "Node Addresses", TITH, 2026‑08‑17.
+  [TTS‑0004] "Node Addresses", TITH, 2026‑08‑20.
 
   [TTS‑0007] "Signed Integer Encoding", TITH, 2026‑08‑16.
 
-  [TTS‑5000] "The Distribution Nodelist", TITH, 2026‑08‑19.
+  [TTS‑5000] "The Distribution Nodelist", TITH, 2026‑08‑20.
 
 
 B. History
@@ -769,7 +772,7 @@ B. History
 
    Rev.1, 2025‑11‑15: Initial Release.
 
-   Rev.2, 2026‑08‑17: Added exact unlisted identities to Via and
+   Rev.2, 2026‑08‑17: Added exact anonymous identities to Via and
    idempotent acceptance of duplicate signed items.
 
    Rev.3, 2026‑08‑17: Defined complete atomic poll snapshots and
@@ -797,7 +800,11 @@ B. History
 
    Rev.9, 2026‑08‑20: Restricted LegacyAttributes to stable signed
    facts, and added the dedicated PublicKeyRequest and its
-   predecessor‑signed current‑key response for listed key discovery
+   predecessor‐signed current‐key response for non‐anonymous key discovery
    and rotation continuity.
+
+   Rev.10, 2026‑08‑20: Distinguished anonymous address grammar from
+   listing status and applied the TSP‑0015 effective key to all item
+   signatures and duplicate identities.
 
 **********************************************************************

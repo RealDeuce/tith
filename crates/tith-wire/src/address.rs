@@ -71,7 +71,7 @@ impl Address {
 		})
 	}
 
-	pub fn unlisted(domain: String) -> Result<Self, AddressError> {
+	pub fn anonymous(domain: String) -> Result<Self, AddressError> {
 		Self::new(domain, -1, -1, -1, 0)
 	}
 
@@ -101,7 +101,7 @@ impl Address {
 	}
 
 	#[must_use]
-	pub const fn is_unlisted(&self) -> bool {
+	pub const fn is_anonymous(&self) -> bool {
 		self.zone == -1
 	}
 }
@@ -611,7 +611,7 @@ mod tests {
 	}
 
 	#[test]
-	fn rejects_explicit_defaults_and_invalid_unlisted_suffixes() {
+	fn rejects_explicit_defaults_and_invalid_anonymous_suffixes() {
 		for text in ["fidonet#1:1", "fidonet#1/0", "fidonet#1.0", "fidonet#-1/1"] {
 			assert!(text.parse::<Address>().is_err(), "{text}");
 		}

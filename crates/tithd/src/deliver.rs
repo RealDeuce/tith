@@ -7,7 +7,7 @@
 //! TSP-0002 section 9 sets the grouping rule: compatible copies share the same
 //! local AKA and the same exact next-hop identity, and "A connection MUST NOT
 //! combine delivery copies from different local AKAs". The next-hop identity
-//! includes the unlisted `PublicKey` when there is one, because two unlisted
+//! includes the anonymous `PublicKey` when there is one, because two anonymous
 //! peers share the address `p2p#-1`.
 
 use std::error::Error;
@@ -208,15 +208,15 @@ impl Outbound {
 			.peers
 			.get(name)
 			.ok_or("schedule polls an undefined Peer")?;
-		let public_key = if peer.address.is_unlisted() {
-			peer.public_key.ok_or("unlisted Peer has no public key")?
+		let public_key = if peer.address.is_anonymous() {
+			peer.public_key.ok_or("anonymous Peer has no public key")?
 		} else {
 			match self.public_key(&peer.address) {
 				Some(key) => key,
 				None if peer.trust_on_first_use => {
 					self.discover_key(local, &peer.address, None, now)?
 				}
-				None => return Err("listed Peer has no trusted key".into()),
+				None => return Err("non-anonymous Peer has no trusted key".into()),
 			}
 		};
 		let destination = Identity {
@@ -249,7 +249,7 @@ impl Outbound {
 		let exchange = match self.converse(&mut stream, &encoded, &mut session, local, &destination)
 		{
 			Ok(exchange) => exchange,
-			Err(error) if !destination.address.is_unlisted() && is_signature_failure(&*error) => {
+			Err(error) if !destination.address.is_anonymous() && is_signature_failure(&*error) => {
 				let key = self.discover_key(
 					local,
 					&destination.address,
@@ -337,11 +337,11 @@ impl Outbound {
 
 	/// The full identity of a copy's next hop.
 	///
-	/// An unlisted next hop carries its key on the copy, because its address
-	/// does not identify it; a listed one is resolved from the nodelist.
+	/// An anonymous next hop carries its key on the copy, because its address
+	/// does not identify it; a non-anonymous one is resolved from the nodelist.
 	fn next_hop(&self, copy: &DeliveryRecord) -> Option<Identity> {
 		let address: tith_wire::address::Address = copy.next_hop.parse().ok()?;
-		let public_key = if address.is_unlisted() {
+		let public_key = if address.is_anonymous() {
 			copy.next_hop_key?
 		} else {
 			self.public_key(&address)?
@@ -362,7 +362,7 @@ impl Outbound {
 		key: Option<PublicKey>,
 	) -> Vec<(String, u16)> {
 		let configured = self.configuration.peers.values().find(|peer| {
-			peer.address == *address && (!address.is_unlisted() || peer.public_key == key)
+			peer.address == *address && (!address.is_anonymous() || peer.public_key == key)
 		});
 		if let Some(peer) = configured
 			&& !peer.endpoints.is_empty()
@@ -395,8 +395,8 @@ impl Outbound {
 		expected: Option<PublicKey>,
 		now: u64,
 	) -> Result<PublicKey, Box<dyn Error>> {
-		if address.is_unlisted() {
-			return Err("PublicKeyRequest is only used for listed addresses".into());
+		if address.is_anonymous() {
+			return Err("PublicKeyRequest is only used for non-anonymous addresses".into());
 		}
 		if expected.is_none()
 			&& !self
@@ -551,7 +551,7 @@ impl Outbound {
 		let exchange = match self.converse(&mut stream, &encoded, &mut session, local, &destination)
 		{
 			Ok(exchange) => exchange,
-			Err(error) if !destination.address.is_unlisted() && is_signature_failure(&*error) => {
+			Err(error) if !destination.address.is_anonymous() && is_signature_failure(&*error) => {
 				let key = self.discover_key(
 					local,
 					&destination.address,
@@ -898,17 +898,17 @@ mod tests {
 	}
 
 	#[test]
-	fn an_unlisted_next_hop_is_compared_by_address_and_key() {
+	fn an_anonymous_next_hop_is_compared_by_address_and_key() {
 		let origin_keys = SigningKeyPair::from_seed(&[71; 32]).unwrap();
 		let destination_keys = SigningKeyPair::from_seed(&[72; 32]).unwrap();
 		let other_keys = SigningKeyPair::from_seed(&[73; 32]).unwrap();
-		let unlisted = Address::unlisted("p2p".to_owned()).unwrap();
+		let anonymous = Address::anonymous("p2p".to_owned()).unwrap();
 		let origin = Identity {
-			address: unlisted.clone(),
+			address: anonymous.clone(),
 			public_key: origin_keys.public,
 		};
 		let destination = Identity {
-			address: unlisted,
+			address: anonymous,
 			public_key: destination_keys.public,
 		};
 		let message = build_originated_message(

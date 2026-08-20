@@ -115,10 +115,10 @@ impl Default for FailurePolicy {
 pub struct NewDelivery {
 	pub local_identity: String,
 	pub next_hop: String,
-	/// The next hop's `PublicKey` when its address is the unlisted one.
+	/// The next hop's `PublicKey` when its address is the anonymous one.
 	///
 	/// TSP-0002 section 9 requires a copy record "its exact next-hop address and
-	/// unlisted `PublicKey`, if any". Two unlisted peers share the address
+	/// anonymous `PublicKey`, if any". Two anonymous peers share the address
 	/// `p2p#-1`, so without this the address alone cannot tell them apart and a
 	/// Poll from one would collect the other's mail.
 	pub next_hop_key: Option<PublicKey>,
@@ -739,7 +739,7 @@ impl OutboundStore {
 	/// takes all of them in one transaction or none.
 	///
 	/// A held value matches only when it is held for the identity the Bundle
-	/// Origin represents, which for an unlisted Origin includes its `PublicKey`.
+	/// Origin represents, which for an anonymous Origin includes its `PublicKey`.
 	/// TSP-0002 section 8 adds that an inbound Poll "is not constrained by
 	/// schedules, delivery class, passive status, or a retry Timestamp", so
 	/// neither the mode nor `retry_at` is consulted here.
@@ -1793,7 +1793,7 @@ mod tests {
 
 	#[test]
 	fn a_snapshot_is_scoped_to_the_authenticated_identity_not_just_the_address() {
-		// Two unlisted peers share the address p2p#-1, so the PublicKey is the
+		// Two anonymous peers share the address p2p#-1, so the PublicKey is the
 		// only thing telling them apart. Without it one would collect the
 		// other's mail.
 		let (path, inbound) = temporary_store();

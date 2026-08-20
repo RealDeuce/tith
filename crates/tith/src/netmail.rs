@@ -494,13 +494,13 @@ fn submit(
 	Ok(())
 }
 
-/// Renders a listed TTS-0004 address in the legacy 3D or 4D form MSGID uses.
+/// Renders a non-anonymous TTS-0004 address in the legacy 3D or 4D form MSGID uses.
 ///
 /// MSGID carries a legacy address, so recognising our own messages means
 /// comparing in that space rather than against the native text.
 pub(crate) fn legacy_form(origin: &str) -> Option<String> {
 	let address: Address = origin.parse().ok()?;
-	if address.is_unlisted() {
+	if address.is_anonymous() {
 		return None;
 	}
 	let base = format!("{}:{}/{}", address.zone(), address.net(), address.node());
@@ -607,7 +607,7 @@ mod tests {
 		assert_eq!(legacy_form("fidonet#1:2/3.4").as_deref(), Some("1:2/3.4"));
 		// A Zone entry's net and node default, so it still renders in full.
 		assert_eq!(legacy_form("fidonet#1").as_deref(), Some("1:1/0"));
-		// An unlisted address has no legacy rendering to compare against.
+		// An anonymous address has no legacy rendering to compare against.
 		assert_eq!(legacy_form("p2p#-1"), None);
 		assert_eq!(legacy_form("not an address"), None);
 	}

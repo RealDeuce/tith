@@ -107,7 +107,7 @@ particular:
 
 - Prefer a small, explicit protocol that is easy to implement correctly.
 - Public-key authentication and server authentication are fundamental.
-- Anonymous enrollment and replies to anonymous nodes use the unlisted
+- Anonymous enrollment and replies to anonymous nodes use the anonymous
   address and applicant public key defined by TTS-0004 and TTS-0005.
 - Do not introduce passwords, abort/resume, multiple addresses per connection,
   optional security, or compatibility machinery.
@@ -127,20 +127,24 @@ need to guess.
   integers in terms of it, and TTS-0003 defines the common TLV types and
   signed containers.
 - A Bundle begins with an Origin, a PublicKey when that Origin is the
-  unlisted address, and a Header SignedTLV containing Destination, a
-  PublicKey when that Destination is the unlisted address, and Timestamp.
+  anonymous address, and a Header SignedTLV containing Destination, a
+  PublicKey when that Destination is the anonymous address, and Timestamp.
   Every payload SignedTLV begins with the hash of that exact Header SignedTLV,
   followed by request data as specified by TTS-0005.
-- The unlisted address is not unauthenticated.  Its supplied key proves
-  possession and identifies the system but cannot override the nodelist key
-  for a listed address.  Held values for an unlisted next hop are selected by
+- The anonymous address is not unauthenticated.  Its supplied key proves
+  possession and identifies the system but cannot override the effective key
+  for a non-anonymous address.  Held values for an anonymous next hop are selected by
   their local PublicKey association, which does not change an enclosed
   Message's ultimate Destination PublicKey.
+- Anonymous and listed are independent properties. `domain#-1` is the
+  anonymous address; an identity is listed for an implementation when its
+  address is in the current nodelist or its exact identity has an effective
+  local pin. An anonymous identity may therefore be listed or unlisted.
 - Enrollment uses ordinary signed Messages and PollMessages.  Transport
   Accepted means the application Message was stored, not that membership was
   approved.  Approval is the publication of a nodelist entry containing the
   same public key, as described nonnormatively in TRD-0002.
-- The reserved `p2p` domain uses the unlisted address permanently and has no
+- The reserved `p2p` domain uses the anonymous address permanently and has no
   nodelist.  TRD-0003 describes one possible peer-network organization;
   bootstrap and routing algorithms remain separate concerns.
 - The Client drives the exchange and performs the active close.  The Server
@@ -352,7 +356,7 @@ lengths and outstanding-response accounting cannot resolve.
   civil offset and treating local time as UTC would move every schedule.
   `deliver` owns the outbound connection. A connection carries only compatible
   copies — the same local AKA and the same exact next-hop identity, including
-  the `PublicKey` when unlisted — and must never combine copies from different
+  the `PublicKey` when anonymous — and must never combine copies from different
   local AKAs. Every claimed copy gets an outcome on every exit path, and a
   connection which fails leaves its copies eligible rather than invoking
   permanent failure policy; losing a claim is worse than sending twice. A poll

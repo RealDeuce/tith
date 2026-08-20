@@ -35,8 +35,8 @@ TITH is designed around a few firm constraints:
 - canonical TLV framing and integer encodings;
 - mandatory public-key authentication for nodes and bundles, with explicit
   end-to-end item authentication states;
-- authenticated unlisted identities for enrollment and peer-to-peer use;
-- a nodelist-backed trust path for listed nodes;
+- authenticated anonymous identities for enrollment and peer-to-peer use;
+- observer-relative identity listing through a nodelist or local key pin;
 - explicit routing, durable acceptance, polling, and local IPC semantics;
 - no arbitrary protocol limits; and
 - no passwords, optional security, transport negotiation, or native legacy
@@ -45,6 +45,11 @@ TITH is designed around a few firm constraints:
 Legacy FTN formats still matter, but they belong in adapters. Native TITH
 producers and consumers should not need to guess which accidental wire format
 another implementation meant.
+
+“Anonymous” describes the `domain#-1` address form; “listed” describes
+observer‐relative trust through a nodelist entry or local key pin. The states
+are independent, so an exact `(domain#-1, PublicKey)` identity may be listed or
+unlisted without changing its address or wire representation.
 
 ## Project status
 
@@ -328,7 +333,7 @@ generated key and is reported, since an interrupted run could send it twice.
 write.
 
 To exercise native TTS-0006 receipt, generate a dedicated node signing key and
-place its printed public key in the applicable nodelist IIH entry or unlisted
+place its printed public key in the applicable nodelist IIH entry or anonymous
 Peer configuration:
 
 ```sh
@@ -336,7 +341,7 @@ cargo run -p tithd -- generate-node-key /secure/path/node.secret
 ```
 
 `serve-mail` loads the normal four-file configuration set and one TTS-5000
-domain nodelist. `LOCAL-IDENTITY` is a listed canonical address or an unlisted
+domain nodelist. `LOCAL-IDENTITY` is a non-anonymous canonical address or an anonymous
 Peer reference such as `@point`:
 
 ```sh
@@ -353,11 +358,11 @@ continuity replies:
     --retired-node-secret /secure/path/previous-node.secret
 ```
 
-When a listed reply fails against the currently trusted key, the outbound
+When a non-anonymous reply fails against the currently trusted key, the outbound
 driver makes one dedicated `PublicKeyRequest`. A predecessor-signed response
 can advance the service-owned durable pin and the original exchange is retried
 once in the same schedule activation. This proves continuity, not revocation.
-For a listed contact with no nodelist key or existing pin, a `Peer` may opt in
+For an unlisted non-anonymous contact with no nodelist key or existing pin, a `Peer` may opt in
 to first-contact pinning by combining a configured `Endpoint` with the
 `Trust-On-First-Use` directive. That trust decision is never enabled by
 default.
@@ -400,7 +405,7 @@ locally and answered to the peer, which keeps responsibility with the sender so
 the origin can dead-letter and notify its user.
 
 Loop detection compares the selected next hop against every Via the message
-carries, including the `PublicKey` of an unlisted one, and refuses rather than
+carries, including the `PublicKey` of an anonymous one, and refuses rather than
 falling through to a later method that would conceal it.
 
 Only the routing suffix is rebuilt. The signed region is carried through byte
@@ -422,7 +427,7 @@ never has two activations at once.
 
 One connection carries the copies TSP-0002 section 9 calls compatible: the same
 local AKA and the same exact next-hop identity, including the `PublicKey` when
-that identity is unlisted. Copies for different local AKAs are never combined.
+that identity is anonymous. Copies for different local AKAs are never combined.
 Endpoints come from the next hop's configured `Endpoint` lines in file order,
 falling back to the usable TITH endpoints in its nodelist entry.
 

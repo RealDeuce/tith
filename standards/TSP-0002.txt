@@ -3,7 +3,7 @@ TITH                                              THIS ISN'T THAT HARD
 **********************************************************************
 
 Publication:  TSP‑0002
-Revision:     9
+Revision:     10
 Title:        Routing and Distribution Configuration
 Author(s):    Stephen Hurd
 Date:         2026‑08‑20
@@ -126,12 +126,13 @@ Contents
   Public-Key contains the 43‑character base 64 representation of a
   32‑byte libhydrogen signing public key with its trailing Equals Sign
   (U+003D) removed.  It MUST occur exactly once when Address is the
-  unlisted address and MUST NOT occur otherwise.  A configured key
-  MUST NOT override a nodelist key for a listed address.
+  anonymous address and MUST NOT occur otherwise.  A configured key
+  MUST NOT override the effective key for a non‐anonymous address.
 
-  No two Peer blocks may describe the same exact identity.  A listed
-  address therefore occurs in at most one Peer block.  Peer blocks may
-  share an unlisted address only when their Public-Key values differ.
+  No two Peer blocks may describe the same exact identity.  A
+  non‐anonymous address therefore occurs in at most one Peer block.
+  Peer blocks may share an anonymous address only when their
+  Public-Key values differ.
 
   Endpoint identifies a TITH server.  The server address is a nonempty
   UTF‑8 field containing no Space, Horizontal Tab, or control code
@@ -141,15 +142,16 @@ Contents
   nodelist.
 
   Trust-On-First-Use contains no field and MUST occur at most once.
-  It is permitted only for a listed Address having at least one
+  It is permitted only for a non‐anonymous Address having at least one
   configured Endpoint.  It authorizes an initial PublicKeyRequest to
-  that configured contact when no nodelist key or local pin exists.
-  The returned self‑signed key becomes the pin specified by TSP‑0015.
+  that configured contact only while the identity is unlisted and no
+  nodelist key or local pin exists.  The returned self‐signed key
+  becomes the pin specified by TSP‑0015.
   This directive deliberately accepts the risk that an attacker at
   first contact can become pinned; it MUST NOT be enabled by default.
 
   Boss and Hub each contain one peer reference and MAY each occur at
-  most once.  They are permitted only for an unlisted Peer.  They
+  most once.  They are permitted only for an anonymous Peer.  They
   provide the corresponding candidates for the Boss and Hub route
   methods.  Peer relationships MUST NOT contain a cycle.
 
@@ -157,10 +159,10 @@ Contents
   next hop and collect held traffic by polling.
 
   Where this document requires a local identity, its syntax is a
-  canonical listed address or a peer reference naming an unlisted
+  canonical non‐anonymous address or a peer reference naming an anonymous
   Peer.  The host MUST have the corresponding secret signing key.  For
-  a listed address, its public half MUST equal the current trusted key
-  resolved according to TSP‑0015.  For an unlisted Peer, it MUST equal
+  a non‐anonymous address, its public half MUST equal the effective key
+  resolved according to TSP‑0015.  For an anonymous Peer, it MUST equal
   that Peer's Public-Key.
 
 
@@ -179,16 +181,16 @@ Contents
     Independent Zone <address>
     Independent Region <address>
 
-  All matches every listed and unlisted identity.
+  All matches every identity.
 
   Address contains a canonical address or wildcard as specified in
   TTS‑0004.  Its matching behaviour is exactly that of TTS‑0004.  In
   particular, an Asterisk (U+002A) component does not match negative
-  one (−1).  A particular unlisted identity is selected with Peer;
-  an Address selector containing a domain's unlisted address selects
-  every identity using that unlisted address.
+  one (−1).  A particular anonymous identity is selected with Peer;
+  an Address selector containing a domain's anonymous address selects
+  every identity using that anonymous address.
 
-  Peer matches the exact address and, for an unlisted Peer, public key
+  Peer matches the exact address and, for an anonymous Peer, public key
   identified by the reference.
 
   Branch uses the administrative branch structure defined by
@@ -242,21 +244,22 @@ Contents
   Via commits the item to the named Peer.  It is eligible even if the
   Peer is passive.
 
-  Direct commits the item to its ultimate Destination.  For a listed
-  Destination it is eligible only when a Peer with the same address or
-  the nodelist provides a usable TITH server endpoint, the nodelist
-  entry is not Pvt, Hold, or Down, and its caller restrictions permit
-  the local AKA.  In particular, an LO node is not eligible for a
-  direct call from an unlisted AKA.  For an unlisted Destination,
+  Direct commits the item to its ultimate Destination.  For a
+  non‐anonymous Destination it is eligible only when a Peer with the
+  same address or the nodelist provides a usable TITH server endpoint.
+  That nodelist entry is not Pvt, Hold, or Down, and its caller
+  restrictions permit the local AKA.  In particular, an LO node is not
+  eligible for a direct call from an anonymous AKA.  For an anonymous
+  Destination,
   Direct is eligible only when a Peer with the same address and public
   key provides an Endpoint.
 
   Boss, Hub, Host, Region, and Zone commit the item to the respective
-  ancestor of the ultimate Destination.  For a listed Destination the
-  ancestor is obtained from the nodelist or applicable point
-  relationship.  Boss and Hub for an unlisted Destination are obtained
-  from its Peer.  A candidate is eligible when its Peer or nodelist
-  entry provides a usable TITH server endpoint, or when it is
+  ancestor of the ultimate Destination.  For a non‐anonymous
+  Destination the ancestor is obtained from the nodelist or applicable
+  point relationship.  Boss and Hub for an anonymous Destination are
+  obtained from its Peer.  A candidate is eligible when its Peer or
+  nodelist entry provides a usable TITH server endpoint, or when it is
   explicitly configured as a passive Peer.
 
   Hold commits the item to its ultimate Destination and marks the
@@ -268,19 +271,19 @@ Contents
   method.  Pvt and Hold nodelist entries make Direct ineligible but do
   not disable other methods.
 
-  If no Route line matches, the default method list for a listed
+  If no Route line matches, the default method list for a non‐anonymous
   Destination is:
 
     Direct Boss Hub Host Region Zone Hold
 
-  The default method list for an unlisted Destination is:
+  The default method list for an anonymous Destination is:
 
     Boss Hub Direct Hold
 
   If no method is eligible, routing fails as Unroutable.
 
   Once a method selects a next hop, the router compares its exact
-  identity with every Via in the NetMail Message.  For an unlisted Via
+  identity with every Via in the NetMail Message.  For an anonymous Via
   the identity includes its PublicKey as specified by TTS‑0005.  A
   match fails as Loop.  The router MUST NOT conceal the loop by trying
   a later method.
@@ -408,7 +411,7 @@ Contents
   Rejected reason 1 from an intermediate next hop fails as
   Relay-Denied; reason 1 from the ultimate Destination fails as
   Rejected.  Exact identity comparison includes the PublicKey of an
-  unlisted address.  Reason 2 fails as Authentication.  Reason 3
+  anonymous address.  Reason 2 fails as Authentication.  Reason 3
   completes a conditional request and is not a failure.  Reason 4
   retains the item for retry no earlier than its Timestamp, or for the
   next applicable schedule when no Timestamp is present.  A request
@@ -459,23 +462,24 @@ Contents
   imported, or distributed.
 
   When distributing an accepted item, no copy is created for the
-  immediate incoming Peer.  A copy is also omitted for a listed Peer
-  represented by SeenBy.  Address‐only SeenBy cannot distinguish
-  unlisted Peers, so duplicate acceptance and exact immediate‐peer
-  exclusion provide the corresponding protection for them.  Omitting
-  a copy is normal distribution pruning, not a failure.
+  immediate incoming Peer.  A copy is also omitted for a
+  non‐anonymous Peer represented by SeenBy.  Address‐only SeenBy cannot
+  distinguish anonymous Peers, so duplicate acceptance and exact
+  immediate‐peer exclusion provide the corresponding protection for
+  them.  Omitting a copy is normal distribution pruning, not a failure.
 
   Before the resulting copy set is committed, a locally originated
   item has its initial Via and a received item has one Via for the
   forwarding local identity appended as required by TTS‑0005.  The
   distributor retains every existing SeenBy address and adds each
-  listed identity which is known to have or to receive the item: its
-  local identity, the immediate incoming Peer when any, and every
-  listed Send-To Peer for which it creates a copy.  Unlisted identities
-  are not representable in SeenBy and are omitted.  The resulting item
-  contains exactly one SeenBy whose TTS‑0004 Trimmed Collection may be
-  empty when no listed identity is representable.  Every copy in the
-  set carries the same resulting Via and SeenBy values.
+  non‐anonymous identity which is known to have or to receive the item:
+  its local identity, the immediate incoming Peer when any, and every
+  non‐anonymous Send-To Peer for which it creates a copy.  Anonymous
+  identities are not representable in SeenBy and are omitted.  The
+  resulting item contains exactly one SeenBy whose TTS‑0004 Trimmed
+  Collection may be empty when no non‐anonymous identity is
+  representable.  Every copy in the set carries the same resulting Via
+  and SeenBy values.
 
   EchoMail and file distribution MUST NOT use a NetMail Route method,
   even when a configured Peer cannot be contacted.  The copy remains
@@ -593,7 +597,7 @@ Contents
   durably recorded with:
 
     • its local AKA;
-    • its exact next‐hop address and unlisted PublicKey, if any;
+    • its exact next‐hop address and anonymous PublicKey, if any;
     • its delivery class;
     • its retry Timestamp, if any; and
     • its resolved permanent failure policies.
@@ -632,11 +636,12 @@ Contents
 
   Routing, area, and failure policy changes apply only to delivery
   copies created after the new configuration takes effect.  Existing
-  copies keep their AKA, next hop, unlisted key, class, and resolved
+  copies keep their AKA, next hop, anonymous key, class, and resolved
   policies.  Current schedules determine when their classes run, and
-  current Endpoints determine how their Peer is contacted.  A listed
-  next hop uses the current trusted key resolved according to
-  TSP‑0015.  A configured key cannot override a listed trust anchor.
+  current Endpoints determine how their Peer is contacted.  A
+  non‐anonymous next hop uses the current trusted key resolved
+  according to TSP‑0015.  A configured key cannot override that
+  effective key.
 
   An implementation recovering after a failed connection MUST treat
   any request without a durably known complete response as
@@ -651,8 +656,8 @@ Contents
   The following defaults apply when the corresponding directive or
   rule is absent:
 
-    Listed route:   Direct Boss Hub Host Region Zone Hold
-    Unlisted route: Boss Hub Direct Hold
+    Non‐anonymous route: Direct Boss Hub Host Region Zone Hold
+    Anonymous route: Boss Hub Direct Hold
     Delivery class: Normal
     Failure policy: Dead-Letter Notify None
     Schedule class: Normal
@@ -669,7 +674,7 @@ Contents
   Complete blocks below which use the same name or local identity are
   alternatives.  Later blocks use the Peer definitions shown first.
 
-  These peers name a Network Coordinator and an unlisted point:
+  These peers name a Network Coordinator and an anonymous point:
 
     Peer nc
     Address fidonet#1:123
@@ -704,7 +709,7 @@ Contents
     Route Independent Region fidonet#1:10 Using Direct Hold
     End
 
-  A Boss Node can authorize its unlisted point to submit NetMail:
+  A Boss Node can authorize its anonymous point to submit NetMail:
 
     Routes fidonet#1:123
     Allow-Relay From Peer @point Origin Peer @point Destination All
@@ -776,15 +781,15 @@ A. References
 
   [TSP‑0015] "Public Key Trust and Continuity", TITH, 2026‑08‑20.
 
-  [TTS‑0003] "Common TLV Types", TITH, 2026‑08‑18.
+  [TTS‑0003] "Common TLV Types", TITH, 2026‑08‑20.
 
-  [TTS‑0004] "Node Addresses", TITH, 2026‑08‑17.
+  [TTS‑0004] "Node Addresses", TITH, 2026‑08‑20.
 
   [TTS‑0005] "Bundle Format", TITH, 2026‑08‑20.
 
   [TTS‑0006] "Bundle Exchange Protocol", TITH, 2026‑08‑20.
 
-  [TTS‑5000] "The Distribution Nodelist", TITH, 2026‑08‑19.
+  [TTS‑5000] "The Distribution Nodelist", TITH, 2026‑08‑20.
 
   [FSC‑0003.001] "FidoNet Route Files Explained", Ben Barker,
   1986‑03‑23.
@@ -825,10 +830,14 @@ B. History
    relayed, and named what each Poll value returns.
 
    Rev.8, 2026‑08‑20: Added explicit trusted‑contact TOFU and resolved
-   listed keys through durable pins and continuity proofs.
+   non‐anonymous keys through durable pins and continuity proofs.
 
    Rev.9, 2026‑08‑20: Assigned pre‐commit failures to the caller,
    restricted delivery‐copy policy to three remote response kinds,
    and made relay acceptance the durable responsibility boundary.
+
+   Rev.10, 2026‑08‑20: Distinguished anonymous address grammar from
+   listing status and used the TSP‑0015 effective key throughout
+   identity, routing, and authorization decisions.
 
 **********************************************************************

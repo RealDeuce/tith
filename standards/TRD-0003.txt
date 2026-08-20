@@ -3,10 +3,10 @@ TITH                                              THIS ISN'T THAT HARD
 **********************************************************************
 
 Publication:  TRD‑0003
-Revision:     2
+Revision:     3
 Title:        A Nodelist‐Free Peer Network
 Author(s):    Stephen Hurd
-Date:         2026‑08‑17
+Date:         2026‑08‑20
 ══════════════════════════════════════════════════════════════════════
 
 Status of this document
@@ -55,7 +55,7 @@ Contents
 
   The "p2p" Domain reserved by TTS‑0004 describes a network with no
   assigned addresses, nodelist, coordinator, or administrative
-  hierarchy.  Every peer has the same unlisted address and is
+  hierarchy.  Every peer has the same anonymous address and is
   distinguished by its public key.  Peers exchange the same Bundles
   and Messages used by nodelisted networks.
 
@@ -78,8 +78,8 @@ Contents
   relationship between the keys.
 
   Since there is no nodelist, the public key accompanying every
-  unlisted Origin is the only key available for verifying its
-  signature.  Every unlisted Destination is likewise accompanied by
+  anonymous Origin is the only key available for verifying its
+  signature.  Every anonymous Destination is likewise accompanied by
   the public key of the intended recipient.
 
 
@@ -92,6 +92,10 @@ Contents
   TITH does not mistake endpoint discovery for authentication: a peer
   verifies that a connection uses the expected public key before it
   acts upon data received through that connection.
+
+  A peer may locally pin an exact `(p2p#-1, PublicKey)` identity.  That
+  makes the identity listed for that peer without making its address
+  non‐anonymous or changing the PublicKey carried on the wire.
 
   Accepting a key presented for the first time by an otherwise unknown
   endpoint would authenticate the resulting exchange as that key, but
@@ -142,7 +146,7 @@ Contents
   A routing decision is local.  It does not authorize modification of
   the signed portion of a Message.  RequestIdentifier, Via, SeenBy, and
   AdditionalKludgeLine retain the per‐hop rules specified by TTS‑0005.
-  A Via for an unlisted peer includes its PublicKey, so the path can
+  A Via for an anonymous peer includes its PublicKey, so the path can
   distinguish peers which all use the address "p2p#-1".
 
   A File attached to a Message travels with that Message.  A standalone
@@ -224,10 +228,12 @@ Contents
   which neighbours it will exchange traffic with and which origin keys
   it trusts for local purposes.
 
-  Removing the nodelist does not make peers anonymous to one another:
-  their public keys are persistent pseudonymous identities and their
-  signatures remain verifiable.  It removes the central assertion that
-  an identity is a recognized network member with an assigned address.
+  Sharing an anonymous address does not make peers indistinguishable or
+  unauthenticated: their public keys are persistent pseudonymous
+  identities and their signatures remain verifiable.  Removing the
+  nodelist removes the central assertion that an identity is a
+  recognized network member with an assigned address; each peer may
+  still list identities through its own local pins.
 
   Admission controls, abuse handling, key revocation, endpoint
   advertisements, and reputation can be built above this model.  If
@@ -242,11 +248,11 @@ A. References
   [TRD‑0001] "FidoNet Technology Network Basics", TITH, 2026‑08‑16.
 
   [TRD‑0002] "Joining a FidoNet Technology Network", TITH,
-  2026‑08‑17.
+  2026‑08‑20.
 
-  [TTS‑0003] "Common TLV Types", TITH, 2026‑08‑18.
+  [TTS‑0003] "Common TLV Types", TITH, 2026‑08‑20.
 
-  [TTS‑0004] "Node Addresses", TITH, 2026‑08‑17.
+  [TTS‑0004] "Node Addresses", TITH, 2026‑08‑20.
 
   [TTS‑0005] "Bundle Format", TITH, 2026‑08‑20.
 
@@ -260,5 +266,8 @@ B. History
 
    Rev.2, 2026‑08‑17: Updated Via identity and duplicate suppression to
    follow TTS‑0005 revision 2.
+
+   Rev.3, 2026‑08‑20: Distinguished the permanent anonymous address
+   from each peer's observer‐relative listed or unlisted trust state.
 
 **********************************************************************

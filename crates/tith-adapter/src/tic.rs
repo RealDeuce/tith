@@ -151,9 +151,9 @@ pub fn to_tic(
 	for via in &file.vias {
 		// Each Path maps exactly to one Via: address, decimal POSIX timestamp,
 		// then the software string.
-		if via.address.is_unlisted() {
+		if via.address.is_anonymous() {
 			return Err(ConvertError::Unrepresentable(
-				"a Via whose unlisted address cannot carry its required PublicKey",
+				"a Via whose anonymous address cannot carry its required PublicKey",
 			));
 		}
 		push(

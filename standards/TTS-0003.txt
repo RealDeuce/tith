@@ -3,10 +3,10 @@ TITH                                              THIS ISN'T THAT HARD
 **********************************************************************
 
 Publication:  TTS‑0003
-Revision:     3
+Revision:     4
 Title:        Common TLV Types
 Author(s):    Stephen Hurd
-Date:         2026‑08‑18
+Date:         2026‑08‑20
 ══════════════════════════════════════════════════════════════════════
 
 Status of this document
@@ -70,11 +70,12 @@ Contents
   1.  Origin
       This type contains the 5D address as specified by TTS‑0004.
       The enclosing standard defines what originated at that address
-      and whether it is also a reply address.  When Origin selects a
-      signing key, its nodelist key is used.  The unlisted address is
-      the sole exception: where an enclosing standard permits it, an
-      accompanying PublicKey identifies its key.  A supplied PublicKey
-      MUST NOT override the nodelist key of any other Origin.
+      and whether it is also a reply address.  For an anonymous Origin,
+      where an enclosing standard permits it, an accompanying
+      PublicKey identifies its key.  For a non‐anonymous Origin, the
+      effective key is resolved according to TSP‑0015.  A supplied
+      PublicKey MUST NOT override that effective key except in the
+      dedicated continuity exchange defined by TTS‑0005.
 
       When an enclosing standard permits SignedOrigin and no public
       key is available for Origin, SignedOrigin selects the signing
@@ -131,7 +132,7 @@ Contents
       The Value is a sequence of child TLV values containing one
       SignedData followed by one Signature.  An Origin is optional.
       When present, it MUST be the first encoded child.  If that
-      Origin is the unlisted address, it MUST be immediately followed
+      Origin is the anonymous address, it MUST be immediately followed
       by one PublicKey.  For any other Origin, a PublicKey at this
       position is prohibited.  When Origin is absent, PublicKey is
       prohibited and an Origin established at a higher level applies.
@@ -198,11 +199,11 @@ Contents
       defines its placement and signature coverage.  It does not
       replace Origin as the originating or reply address.
 
-      If SignedOrigin is the unlisted address, it MUST be immediately
+      If SignedOrigin is the anonymous address, it MUST be immediately
       followed by one PublicKey.  For any other SignedOrigin, a
-      PublicKey at that position is prohibited and its key is obtained
-      from the nodelist.  SignedOrigin never overrides an available
-      Origin key.
+      PublicKey at that position is prohibited and its effective key is
+      resolved according to TSP‑0015.  SignedOrigin never overrides an
+      available effective Origin key.
 
 
 A. References
@@ -210,9 +211,11 @@ A. References
 
   [TTS‑0002] "Type Length Value Encoding" TITH, 2026‑08‑16.
 
-  [TTS‑0004] "Node Addresses", TITH, 2026‑08‑17.
+  [TTS‑0004] "Node Addresses", TITH, 2026‑08‑20.
 
   [TTS‑0005] "Bundle Format", TITH, 2026‑08‑20.
+
+  [TSP‑0015] "Public Key Trust and Continuity", TITH, 2026‑08‑20.
 
   [FTA‑1006.002] "Key words to indicate requirement levels" FTSC,
   1998‑01‑17.
@@ -232,10 +235,13 @@ B. History
 
    Rev.1, 2025‑11‑15: Initial Release.
 
-   Rev.2, 2026‑08‑17: Defined PublicKey placement for an unlisted
+   Rev.2, 2026‑08‑17: Defined PublicKey placement for an anonymous
    SignedTLV Origin and made the child grammar explicit.
 
    Rev.3, 2026‑08‑18: Added SignedOrigin as the fallback signing‐key
    identity when an Origin has no available public key.
+
+   Rev.4, 2026‑08‑20: Applied the TSP‑0015 effective key consistently
+   to non‐anonymous Origin and SignedOrigin values.
 
 **********************************************************************

@@ -3,7 +3,7 @@ TITH                                              THIS ISN'T THAT HARD
 **********************************************************************
 
 Publication:  TSP‑0014
-Revision:     1
+Revision:     2
 Title:        Signed Mail From Legacy‐Only Systems
 Author(s):    Stephen Hurd
 Date:         2026‑08‑20
@@ -82,7 +82,8 @@ Contents
 
   This document applies to a system that:
 
-    • has an address in a legacy FTN domain, listed or not;
+    • has a non‐anonymous address in a legacy FTN domain, whether
+      listed or unlisted for the verifier;
     • exchanges mail using legacy transports and file formats only; and
     • holds a TITH signing key pair as defined by TTS‑0005.
 
@@ -92,6 +93,11 @@ Contents
   implementation.  That is a library, not a mailer.  It does not need
   TTS‑0006 Bundle Exchange, a Bundle, a TITH listener, an assigned
   service port, or a nodelist entry.
+
+  The anonymous address defined by TTS‑0004 is not representable in the
+  legacy address fields used here.  This document therefore does not
+  apply to an anonymous identity, whether that identity is locally
+  listed or unlisted.
 
   A system that publishes a nodelist entry carrying the TTS‑5000 IIH
   flag already has the strongest available key binding and SHOULD use
@@ -373,7 +379,7 @@ Contents
   An address the verifier can never call, and which has no nodelist
   entry, has no directed channel available and cannot be pinned at all.
   That is the intended outcome rather than a gap.  A system which cannot
-  be reached and has not been listed has published nothing that a
+  be reached and is not listed has published nothing that a
   verifier is able to check.
 
   Directed legacy discovery is weaker than the nodelist and this
@@ -436,8 +442,10 @@ Contents
   as TSP‑0003 section 3.1 specifies.  This document adds only the key
   selection rule and the resulting authentication state.
 
-  The key applicable to Origin is the effective listed key resolved
-  under TSP‑0015, including its nodelist precedence rules.
+  The key applicable to Origin is the effective key resolved under
+  TSP‑0015, including its nodelist precedence rules.  A successful
+  initial pin makes an otherwise unlisted Origin listed for that
+  verifier.
 
   When neither exists, reconstruction is not attempted.  The Message is
   processed by the ordinary gateway‐signed import in TSP‑0003 section 2
@@ -558,20 +566,24 @@ A. References
 
   [TTS‑0002] "Type Length Value Encoding", TITH, 2026‑08‑16.
 
-  [TTS‑0003] "Common TLV Types", TITH, 2026‑08‑18.
+  [TTS‑0003] "Common TLV Types", TITH, 2026‑08‑20.
 
-  [TTS‑0004] "Node Addresses", TITH, 2026‑08‑17.
+  [TTS‑0004] "Node Addresses", TITH, 2026‑08‑20.
 
   [TTS‑0005] "Bundle Format", TITH, 2026‑08‑20.
 
   [TTS‑0006] "Bundle Exchange Protocol", TITH, 2026‑08‑20.
 
-  [TTS‑5000] "The Distribution Nodelist", TITH, 2026‑08‑19.
+  [TTS‑5000] "The Distribution Nodelist", TITH, 2026‑08‑20.
 
 
 B. History
 ──────────
 
    Rev.1, 2026‑08‑20: Initial Release.
+
+   Rev.2, 2026‑08‑20: Distinguished anonymous addresses from
+   observer‐relative listing and required the shared TSP‑0015 effective
+   key for legacy signature verification.
 
 **********************************************************************

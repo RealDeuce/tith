@@ -3,7 +3,7 @@ TITH                                              THIS ISN'T THAT HARD
 **********************************************************************
 
 Publication:  TSP‑0003
-Revision:     7
+Revision:     8
 Title:        Legacy Data Formats and TITH
 Author(s):    Stephen Hurd
 Date:         2026‑08‑20
@@ -108,7 +108,7 @@ Contents
 
   TTS‑0005 gives an available Origin key precedence over SignedOrigin.
   Therefore an unsigned legacy message whose remote Origin currently
-  has a TITH nodelist key cannot be signed on that node's behalf by a
+  has an effective TITH key cannot be signed on that node's behalf by a
   gateway which does not own that key.  It is retained as unsupported
   input unless its original TITH Signature can be reconstructed under
   section 3.1.  SignedOrigin is the effective signer for authentication
@@ -134,9 +134,9 @@ Contents
   Revision 1 permits and reconstructs signed Message children in exactly
   this order:
 
-    Origin, which must not be the unlisted address
-    SignedOrigin, when present, followed by its PublicKey when unlisted
-    Destination, for NetMail, which must be listed
+    Origin, which must not be the anonymous address
+    SignedOrigin, when present, followed by its PublicKey when anonymous
+    Destination, for NetMail, which must be non‐anonymous
     Timestamp
     ToUserName
     FromUserName
@@ -173,7 +173,7 @@ Contents
 
   Origin PublicKey
       Legacy to TITH: no legacy source.  TITH to legacy: no legacy
-      field.  Revision 1 therefore prohibits the unlisted Origin.
+      field.  Revision 1 therefore prohibits the anonymous Origin.
       Packet passwords are not keys.
 
   SignedOrigin
@@ -200,9 +200,9 @@ Contents
 
   Destination PublicKey
       Legacy to TITH: no legacy source.  A legacy address cannot select
-      the key for a native unlisted Destination.
+      the key for a native anonymous Destination.
       TITH to legacy: no legacy field.  Revision 1 therefore requires a
-      listed NetMail Destination.
+      non‐anonymous NetMail Destination.
 
   Timestamp
       Legacy to TITH: stored or packed DateTime interpreted with TZUTC
@@ -391,7 +391,7 @@ Contents
     • Origin maps TIC Origin in both directions;
     • Origin PublicKey has no TIC source;
     • SignedOrigin is the importing gateway when distinct from Origin;
-    • its PublicKey is configured when SignedOrigin is unlisted;
+    • its PublicKey is configured when SignedOrigin is anonymous;
     • Filename maps TIC Lfile when present and otherwise File;
     • Timestamp maps TIC Date;
     • Contents maps the companion file and is verified by Size and Crc;
@@ -757,7 +757,7 @@ Contents
 
   The decoded bytes MUST be exactly one canonical SignedOrigin TLV,
   followed by one canonical PublicKey TLV if and only if SignedOrigin
-  is unlisted.  No other or trailing byte is permitted.  A Message
+  is anonymous.  No other or trailing byte is permitted.  A Message
   without SignedOrigin has no TITHSIGN control.  A missing, additional,
   nonconsecutive, differently versioned, or malformed control makes
   reconstruction fail.  Every TITHSIGN version MUST equal both
@@ -825,7 +825,7 @@ Contents
   On import, the presence of TITHSIG selects revision 1 reconstruction
   instead of ordinary gateway signing in section 2.  The resolved
   legacy author becomes Origin.  TITHSIGN reconstructs SignedOrigin and
-  its conditional PublicKey when they were present.  An unlisted Origin
+  its conditional PublicKey when they were present.  An anonymous Origin
   or Destination is not representable by this revision.  Every other
   signed child is reconstructed through the field mappings in this
   document.  Parallel legacy representations of Origin or Destination
@@ -1262,7 +1262,7 @@ Contents
   its unsigned decimal POSIX value supplies Via Timestamp, and all text
   after that timestamp, excluding one separating Space, supplies the
   Via software string.  Canonical output uses the same fields and order.
-  A Path address which is unlisted cannot carry its required PublicKey
+  A Path address which is anonymous cannot carry its required PublicKey
   and is not representable.  Repeated Seenby maps the File SeenBy
   collection using the trusted legacy domain where a line is only 4D.
 
@@ -1352,7 +1352,7 @@ Contents
   Attached FileSpecs and every generated or received pathname are
   subject to the race‑resistant ownership and validation rules in
   TSP‑0013.  No legacy field selects SignedOrigin, overrides an existing
-  Origin nodelist key, or grants native routing policy.
+  effective Origin key, or grants native routing policy.
 
   10.1 Final Delivery Authentication
   ────────────────────────────────────
@@ -1505,7 +1505,7 @@ A. References
 
   [TTS‑0002] "Type Length Value Encoding", TITH, 2026‑08‑16.
 
-  [TTS‑0004] "Node Addresses", TITH, 2026‑08‑17.
+  [TTS‑0004] "Node Addresses", TITH, 2026‑08‑20.
 
   [TTS‑0005] "Bundle Format", TITH, 2026‑08‑20.
 
@@ -1549,5 +1549,9 @@ B. History
    File‐child fact and mutable bits legacy state, and reconciled the
    field map with the absent‐zero rules for LegacyAttributes and
    TimestampOffset.
+
+   Rev.8, 2026‑08‑20: Distinguished anonymous address grammar from
+   listing status and applied the shared effective Origin key to legacy
+   import and retained signature reconstruction.
 
 **********************************************************************

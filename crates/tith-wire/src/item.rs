@@ -366,14 +366,14 @@ fn finish_message(
 		crate::integer::encode_u64(suffix.request_identifier),
 	)?);
 	for via in suffix.existing_vias {
-		let public_key = if via.address.is_unlisted() {
+		let public_key = if via.address.is_anonymous() {
 			Some(
 				via.public_key
-					.ok_or(BundleError::Missing("unlisted Via PublicKey"))?,
+					.ok_or(BundleError::Missing("anonymous Via PublicKey"))?,
 			)
 		} else {
 			if via.public_key.is_some() {
-				return Err(BundleError::Unexpected("listed Via PublicKey"));
+				return Err(BundleError::Unexpected("non-anonymous Via PublicKey"));
 			}
 			None
 		};
@@ -568,7 +568,7 @@ fn push_identity(
 		type_code,
 		identity.address.to_string().into_bytes(),
 	)?);
-	if identity.address.is_unlisted() {
+	if identity.address.is_anonymous() {
 		output.push(OwnedTlv::new(
 			types::PUBLIC_KEY,
 			identity.public_key.as_bytes().to_vec(),
@@ -588,9 +588,9 @@ fn push_provenance(
 	if provenance.origin == signer.address {
 		return push_identity(output, types::ORIGIN, signer);
 	}
-	if provenance.origin.is_unlisted() {
+	if provenance.origin.is_anonymous() {
 		return Err(BundleError::Unexpected(
-			"unlisted Origin without its own PublicKey",
+			"anonymous Origin without its own PublicKey",
 		));
 	}
 	output.push(OwnedTlv::new(
@@ -630,7 +630,7 @@ fn via_value(identity: &Identity, timestamp: u64, software: &str) -> Result<Owne
 		types::ADDRESS,
 		identity.address.to_string().into_bytes(),
 	)?);
-	if identity.address.is_unlisted() {
+	if identity.address.is_anonymous() {
 		children.push(OwnedTlv::new(
 			types::PUBLIC_KEY,
 			identity.public_key.as_bytes().to_vec(),
@@ -759,11 +759,11 @@ fn parse_identity(
 	resolver: &impl KeyResolver,
 ) -> Result<Identity, BundleError> {
 	let address = parse_address(origin)?;
-	let public_key = if address.is_unlisted() {
-		parse_public_key(public_key.ok_or(BundleError::Missing("unlisted PublicKey"))?)?
+	let public_key = if address.is_anonymous() {
+		parse_public_key(public_key.ok_or(BundleError::Missing("anonymous PublicKey"))?)?
 	} else {
 		if public_key.is_some() {
-			return Err(BundleError::Unexpected("listed PublicKey"));
+			return Err(BundleError::Unexpected("non-anonymous PublicKey"));
 		}
 		resolver
 			.public_key(&address)
@@ -782,13 +782,13 @@ fn parse_provenance(
 	resolver: &impl KeyResolver,
 ) -> Result<ItemProvenance, BundleError> {
 	let origin_address = parse_address(origin)?;
-	let origin_public_key = if origin_address.is_unlisted() {
-		Some(parse_public_key(
-			origin_key.ok_or(BundleError::Missing("unlisted Origin PublicKey"))?,
-		)?)
+	let origin_public_key = if origin_address.is_anonymous() {
+		Some(parse_public_key(origin_key.ok_or(
+			BundleError::Missing("anonymous Origin PublicKey"),
+		)?)?)
 	} else {
 		if origin_key.is_some() {
-			return Err(BundleError::Unexpected("listed Origin PublicKey"));
+			return Err(BundleError::Unexpected("non-anonymous Origin PublicKey"));
 		}
 		resolver.public_key(&origin_address)
 	};
@@ -839,10 +839,12 @@ fn conditional_public_key<'a>(
 	if value.is_some() {
 		cursor.index += 1;
 	}
-	if address.is_unlisted() && value.is_none() {
-		Err(BundleError::Missing("PublicKey after unlisted address"))
-	} else if !address.is_unlisted() && value.is_some() {
-		Err(BundleError::Unexpected("PublicKey after listed address"))
+	if address.is_anonymous() && value.is_none() {
+		Err(BundleError::Missing("PublicKey after anonymous address"))
+	} else if !address.is_anonymous() && value.is_some() {
+		Err(BundleError::Unexpected(
+			"PublicKey after non-anonymous address",
+		))
 	} else {
 		Ok(value)
 	}
@@ -888,18 +890,20 @@ fn read_via(value: &OwnedTlv) -> Result<ViaData, BundleError> {
 	let mut offset = address_bytes;
 	let (next, next_bytes) = take_encoded_tlv(&value.value[offset..])?;
 	let mut public_key = None;
-	if address.is_unlisted() {
+	if address.is_anonymous() {
 		if next.type_code != types::PUBLIC_KEY {
-			return Err(BundleError::Missing("PublicKey after unlisted Via Address"));
+			return Err(BundleError::Missing(
+				"PublicKey after anonymous Via Address",
+			));
 		}
 		public_key = Some(parse_public_key(&next)?);
 		offset += next_bytes;
 	} else if next.type_code == types::PUBLIC_KEY {
 		return Err(BundleError::Unexpected(
-			"PublicKey after listed Via Address",
+			"PublicKey after non-anonymous Via Address",
 		));
 	}
-	let (timestamp, timestamp_bytes) = if address.is_unlisted() {
+	let (timestamp, timestamp_bytes) = if address.is_anonymous() {
 		take_encoded_tlv(&value.value[offset..])?
 	} else {
 		(next, next_bytes)
@@ -1598,7 +1602,7 @@ pub struct ReadFileRequest {
 /// `ItemAuthentication` from the record which delivered it; [`ItemSigning`]
 /// carries the exact bytes and Signature needed to check it again, which
 /// TSP-0003 section 3.1 requires an exporter to do. The resolver is only for
-/// the Destination key, which a listed address does not carry inline.
+/// the Destination key, which a non-anonymous address does not carry inline.
 pub fn read_message(
 	value: &OwnedTlv,
 	resolver: &impl KeyResolver,
@@ -2067,7 +2071,7 @@ mod tests {
 
 	#[test]
 	fn unknown_value_cannot_separate_message_origin_and_key() {
-		let origin = Address::unlisted("p2p".into()).unwrap();
+		let origin = Address::anonymous("p2p".into()).unwrap();
 		let message = container(
 			types::MESSAGE,
 			&[
@@ -2078,7 +2082,7 @@ mod tests {
 		);
 		assert!(matches!(
 			validate_message(&message, &|_: &Address| None),
-			Err(BundleError::Missing("PublicKey after unlisted address"))
+			Err(BundleError::Missing("PublicKey after anonymous address"))
 		));
 	}
 
@@ -2112,8 +2116,8 @@ mod tests {
 	}
 
 	#[test]
-	fn unlisted_via_requires_its_public_key_before_the_raw_suffix() {
-		let address = Address::unlisted("p2p".to_owned()).unwrap();
+	fn anonymous_via_requires_its_public_key_before_the_raw_suffix() {
+		let address = Address::anonymous("p2p".to_owned()).unwrap();
 		let mut value = Vec::new();
 		for child in [
 			OwnedTlv::new(types::ADDRESS, address.to_string().into_bytes()).unwrap(),
@@ -2133,7 +2137,7 @@ mod tests {
 		let provenance = ItemProvenance {
 			origin: "fidonet#1/100".parse().unwrap(),
 			signer: Some(Identity {
-				address: Address::unlisted("p2p".to_owned()).unwrap(),
+				address: Address::anonymous("p2p".to_owned()).unwrap(),
 				public_key: signer_keys.public,
 			}),
 		};
@@ -2214,7 +2218,7 @@ mod tests {
 			&ItemProvenance {
 				origin: origin.clone(),
 				signer: Some(Identity {
-					address: Address::unlisted("p2p".to_owned()).unwrap(),
+					address: Address::anonymous("p2p".to_owned()).unwrap(),
 					public_key: signer_keys.public,
 				}),
 			},
@@ -2314,7 +2318,7 @@ mod tests {
 		let provenance = ItemProvenance {
 			origin: "fidonet#1/300".parse().unwrap(),
 			signer: Some(Identity {
-				address: Address::unlisted("p2p".to_owned()).unwrap(),
+				address: Address::anonymous("p2p".to_owned()).unwrap(),
 				public_key: signer_keys.public,
 			}),
 		};
@@ -2541,7 +2545,7 @@ mod tests {
 		let destination_keys = SigningKeyPair::from_seed(&[83; 32]).unwrap();
 		let origin: Address = "fidonet#1:104/36".parse().unwrap();
 		let signer = Identity {
-			address: Address::unlisted("p2p".to_owned()).unwrap(),
+			address: Address::anonymous("p2p".to_owned()).unwrap(),
 			public_key: signer_keys.public,
 		};
 		let destination = Identity {
@@ -2586,7 +2590,7 @@ mod tests {
 		assert_eq!(read.signing.signed_origin_key, Some(signer_keys.public));
 
 		// TITHSIGN carries exactly one SignedOrigin TLV followed by one
-		// PublicKey TLV, because SignedOrigin here is the unlisted address.
+		// PublicKey TLV, because SignedOrigin here is the anonymous address.
 		let mut expected = OwnedTlv::new(
 			types::SIGNED_ORIGIN,
 			signer.address.to_string().into_bytes(),
@@ -2789,8 +2793,8 @@ mod tests {
 	}
 
 	#[test]
-	fn an_unlisted_identity_is_omitted_from_seen_by() {
-		// TSP-0002 section 7: "Unlisted identities are not representable in
+	fn an_anonymous_identity_is_omitted_from_seen_by() {
+		// TSP-0002 section 7: "Anonymous identities are not representable in
 		// SeenBy and are omitted." The resulting item still contains exactly one
 		// SeenBy, whose collection may be empty.
 		let signer_keys = SigningKeyPair::from_seed(&[71; 32]).unwrap();

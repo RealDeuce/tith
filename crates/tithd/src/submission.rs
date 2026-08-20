@@ -67,41 +67,42 @@ impl SubmissionEngine {
 		store: &OutboundStore,
 	) -> Result<BatchCommit, StoreError> {
 		let pins = store.key_pins();
-		let mut retained_keys = BTreeMap::new();
+		let mut effective_keys = BTreeMap::new();
 		for peer in self
 			.configuration
 			.peers
 			.values()
-			.filter(|peer| !peer.address.is_unlisted())
+			.filter(|peer| !peer.address.is_anonymous())
 		{
 			if let Some(key) = pins.resolve(
 				&peer.address.to_string(),
 				self.nodelist.public_key(&peer.address),
 			)? {
-				retained_keys.insert(peer.address.clone(), key);
+				effective_keys.insert(peer.address.clone(), key);
 			}
 		}
 		for job in &request.jobs {
-			let SubmissionBody::Message(message) = &job.body else {
-				continue;
+			let values = match &job.body {
+				SubmissionBody::Message(message) => vec![
+					Some(message.origin.as_str()),
+					message.signed_origin.as_deref(),
+					(message.kind == MessageKind::NetMail)
+						.then_some(message.destination_or_area.as_str()),
+				],
+				SubmissionBody::File(file) => {
+					vec![Some(file.origin.as_str()), file.signed_origin.as_deref()]
+				}
+				_ => continue,
 			};
-			for value in [
-				Some(message.origin.as_str()),
-				message.signed_origin.as_deref(),
-				(message.kind == MessageKind::NetMail)
-					.then_some(message.destination_or_area.as_str()),
-			]
-			.into_iter()
-			.flatten()
-			{
+			for value in values.into_iter().flatten() {
 				let Ok(address) = value.parse::<Address>() else {
 					continue;
 				};
-				if !address.is_unlisted()
+				if !address.is_anonymous()
 					&& let Some(key) =
 						pins.resolve(&address.to_string(), self.nodelist.public_key(&address))?
 				{
-					retained_keys.insert(address, key);
+					effective_keys.insert(address, key);
 				}
 			}
 		}
@@ -129,7 +130,7 @@ impl SubmissionEngine {
 					continue;
 				};
 				let job = self
-					.build_job(job_id, request_job, identity, context, &retained_keys)
+					.build_job(job_id, request_job, identity, context, &effective_keys)
 					.map_err(|failure| StoreError::JobBuild {
 						position: position + 1,
 						kind: failure.kind,
@@ -236,7 +237,7 @@ impl SubmissionEngine {
 		Ok(NewDelivery {
 			local_identity: signer.identity.address.to_string(),
 			next_hop: target.address.to_string(),
-			next_hop_key: unlisted_key(&target),
+			next_hop_key: anonymous_key(&target),
 			mode,
 			class: job.deliveries[0].class.clone(),
 			retry_at: None,
@@ -250,7 +251,7 @@ impl SubmissionEngine {
 		job: &tith_ipc::SubmissionJob,
 		identity: &SubmissionIdentity,
 		context: &tith_store::BatchContext<'_>,
-		retained_keys: &BTreeMap<Address, PublicKey>,
+		effective_keys: &BTreeMap<Address, PublicKey>,
 	) -> Result<NewOutboundJob, BuildFailure> {
 		if job.application.is_empty() || job.idempotency_key.is_empty() {
 			return Err(BuildFailure::invalid(
@@ -259,13 +260,13 @@ impl SubmissionEngine {
 		}
 		match &job.body {
 			SubmissionBody::Message(message) => {
-				self.build_message_job(job_id, identity.clone(), message, retained_keys)
+				self.build_message_job(job_id, identity.clone(), message, effective_keys)
 			}
 			SubmissionBody::File(file) => {
-				self.build_file_job(identity.clone(), file, retained_keys)
+				self.build_file_job(identity.clone(), file, effective_keys)
 			}
 			SubmissionBody::FileRequest(request) => {
-				self.build_file_request_job(identity.clone(), request, retained_keys)
+				self.build_file_request_job(identity.clone(), request, effective_keys)
 			}
 			SubmissionBody::Forward {
 				inbound_id,
@@ -275,7 +276,7 @@ impl SubmissionEngine {
 				inbound_id,
 				claim_token,
 				context,
-				retained_keys,
+				effective_keys,
 			),
 		}
 	}
@@ -285,12 +286,12 @@ impl SubmissionEngine {
 		job_id: &str,
 		identity: SubmissionIdentity,
 		message: &MessageSubmission,
-		retained_keys: &BTreeMap<Address, PublicKey>,
+		effective_keys: &BTreeMap<Address, PublicKey>,
 	) -> Result<NewOutboundJob, BuildFailure> {
 		let retained = message.signature.is_some();
 		let (signer, provenance) = if retained {
-			let signer = self.message_local_signer(message, retained_keys)?;
-			(signer, Self::retained_provenance(message, retained_keys)?)
+			let signer = self.message_local_signer(message, effective_keys)?;
+			(signer, Self::retained_provenance(message, effective_keys)?)
 		} else {
 			if message.signed_origin_public_key.is_some()
 				|| !message.vias.is_empty()
@@ -300,8 +301,11 @@ impl SubmissionEngine {
 					"retained Message fields require Signature",
 				));
 			}
-			let resolved =
-				self.item_provenance(&message.origin, message.signed_origin.as_deref())?;
+			let resolved = self.item_provenance(
+				&message.origin,
+				message.signed_origin.as_deref(),
+				effective_keys,
+			)?;
 			if let Some(local) = message.local_identity.as_deref()
 				&& !std::ptr::eq(self.signer(local)?, resolved.0)
 			{
@@ -315,7 +319,7 @@ impl SubmissionEngine {
 			validate_area_name(&message.destination_or_area)?;
 		}
 		let key_lookup = |address: &Address| {
-			retained_keys
+			effective_keys
 				.get(address)
 				.copied()
 				.or_else(|| self.nodelist.public_key(address))
@@ -346,7 +350,7 @@ impl SubmissionEngine {
 		let (kind, target, destination, seen_by, deliveries) = match message.kind {
 			MessageKind::NetMail => {
 				let destination =
-					self.resolve_identity_with(&message.destination_or_area, retained_keys)?;
+					self.resolve_identity_with(&message.destination_or_area, effective_keys)?;
 				let routes =
 					routes_for(&self.configuration, &signer.reference).ok_or_else(|| {
 						BuildFailure::permanent("local signing identity has no Routes block")
@@ -380,13 +384,13 @@ impl SubmissionEngine {
 								));
 							}
 							(
-								self.resolve_identity_with(value, retained_keys)?,
+								self.resolve_identity_with(value, effective_keys)?,
 								DeliveryMode::Active,
 								None,
 							)
 						}
 						NextHop::Passive(value) => (
-							self.resolve_identity_with(value, retained_keys)?,
+							self.resolve_identity_with(value, effective_keys)?,
 							DeliveryMode::Passive,
 							None,
 						),
@@ -403,7 +407,7 @@ impl SubmissionEngine {
 				let delivery = NewDelivery {
 					local_identity: signer.identity.address.to_string(),
 					next_hop: next_hop.address.to_string(),
-					next_hop_key: unlisted_key(&next_hop),
+					next_hop_key: anonymous_key(&next_hop),
 					mode,
 					class: message.class.clone().unwrap_or_else(|| "Normal".to_owned()),
 					retry_at: None,
@@ -423,14 +427,14 @@ impl SubmissionEngine {
 					&signer.identity,
 					&message.destination_or_area,
 					false,
-					retained_keys,
+					effective_keys,
 				)?;
 				(
 					JobKind::EchoMail,
 					JobTarget::Area(message.destination_or_area.clone()),
 					None,
-					// An unlisted local identity is not representable in SeenBy.
-					if signer.identity.address.is_unlisted() {
+					// An anonymous local identity is not representable in SeenBy.
+					if signer.identity.address.is_anonymous() {
 						Vec::new()
 					} else {
 						vec![signer.identity.address.clone()]
@@ -524,7 +528,7 @@ impl SubmissionEngine {
 		}
 		.map_err(|error| BuildFailure::invalid(error.to_string()))?;
 		let key_lookup = |address: &Address| {
-			retained_keys
+			effective_keys
 				.get(address)
 				.copied()
 				.or_else(|| self.nodelist.public_key(address))
@@ -553,7 +557,7 @@ impl SubmissionEngine {
 		resolved: &BTreeMap<Address, PublicKey>,
 	) -> Result<NewOutboundJob, BuildFailure> {
 		let (signer, provenance) =
-			self.item_provenance(&file.origin, file.signed_origin.as_deref())?;
+			self.item_provenance(&file.origin, file.signed_origin.as_deref(), resolved)?;
 		let area = match &file.target {
 			FileTarget::Area(area) => {
 				validate_area_name(area)?;
@@ -575,9 +579,9 @@ impl SubmissionEngine {
 		};
 		let created = now();
 		let source_record = ingested.record(SourceKind::File, 1);
-		// A distribution File repeats SeenBy, but an unlisted identity is still
+		// A distribution File repeats SeenBy, but an anonymous identity is still
 		// omitted. A peer-addressed File has no SeenBy at all.
-		let seen_by: &[Address] = if area.is_none() || signer.identity.address.is_unlisted() {
+		let seen_by: &[Address] = if area.is_none() || signer.identity.address.is_anonymous() {
 			&[]
 		} else {
 			std::slice::from_ref(&signer.identity.address)
@@ -702,7 +706,7 @@ impl SubmissionEngine {
 			NewDelivery {
 				local_identity: signer.identity.address.to_string(),
 				next_hop: destination.address.to_string(),
-				next_hop_key: unlisted_key(&destination),
+				next_hop_key: anonymous_key(&destination),
 				mode,
 				class: peer.class.clone().unwrap_or_else(|| "Normal".to_owned()),
 				retry_at: None,
@@ -791,12 +795,12 @@ impl SubmissionEngine {
 					.parse::<Address>()
 					.is_ok_and(|address| seen_by.contains(&address))
 		});
-		// TSP-0002 section 7: the distributor adds each listed identity known to
+		// TSP-0002 section 7: the distributor adds each representable identity known to
 		// have or to receive the item -- its local identity, the immediate
-		// incoming Peer, and every Send-To Peer it creates a copy for. Unlisted
+		// incoming Peer, and every Send-To Peer it creates a copy for. Anonymous
 		// identities are not representable and are omitted.
 		let mut record_seen = |address: Address| {
-			if !address.is_unlisted() {
+			if !address.is_anonymous() {
 				seen_by.insert(address);
 			}
 		};
@@ -846,7 +850,7 @@ impl SubmissionEngine {
 	fn message_local_signer<'a>(
 		&'a self,
 		message: &MessageSubmission,
-		retained_keys: &BTreeMap<Address, PublicKey>,
+		effective_keys: &BTreeMap<Address, PublicKey>,
 	) -> Result<&'a LocalSigner, BuildFailure> {
 		if let Some(local) = message.local_identity.as_deref() {
 			return self.signer(local);
@@ -858,9 +862,9 @@ impl SubmissionEngine {
 		let candidates: Vec<_> = match message.kind {
 			MessageKind::NetMail => {
 				let destination =
-					self.resolve_identity_with(&message.destination_or_area, retained_keys)?;
+					self.resolve_identity_with(&message.destination_or_area, effective_keys)?;
 				let resolver = |address: &Address| {
-					retained_keys
+					effective_keys
 						.get(address)
 						.copied()
 						.or_else(|| self.nodelist.public_key(address))
@@ -905,15 +909,15 @@ impl SubmissionEngine {
 
 	fn retained_provenance(
 		message: &MessageSubmission,
-		retained_keys: &BTreeMap<Address, PublicKey>,
+		effective_keys: &BTreeMap<Address, PublicKey>,
 	) -> Result<ItemProvenance, BuildFailure> {
 		let origin = message
 			.origin
 			.parse::<Address>()
 			.map_err(|_| BuildFailure::invalid("retained Message Origin is not an address"))?;
-		if origin.is_unlisted() {
+		if origin.is_anonymous() {
 			return Err(BuildFailure::invalid(
-				"TITHSIG revision 1 cannot reconstruct an unlisted Origin",
+				"TITHSIG revision 1 cannot reconstruct an anonymous Origin",
 			));
 		}
 		let signer = match message.signed_origin.as_deref() {
@@ -925,35 +929,35 @@ impl SubmissionEngine {
 				}
 				Identity {
 					address: origin.clone(),
-					public_key: retained_keys.get(&origin).copied().ok_or_else(|| {
+					public_key: effective_keys.get(&origin).copied().ok_or_else(|| {
 						BuildFailure::permanent("retained Message Origin key is unavailable")
 					})?,
 				}
 			}
 			Some(value) => {
-				if retained_keys.contains_key(&origin) {
+				if effective_keys.contains_key(&origin) {
 					return Err(BuildFailure::invalid(
-						"Signed-Origin cannot override the Origin nodelist key",
+						"Signed-Origin cannot override the effective Origin key",
 					));
 				}
 				let address = value.parse::<Address>().map_err(|_| {
 					BuildFailure::invalid("retained Signed-Origin is not an address")
 				})?;
-				let public_key = if address.is_unlisted() {
+				let public_key = if address.is_anonymous() {
 					decode_public_key(message.signed_origin_public_key.as_deref().ok_or_else(
 						|| {
 							BuildFailure::invalid(
-								"unlisted Signed-Origin requires Signed-Origin-Public-Key",
+								"anonymous Signed-Origin requires Signed-Origin-Public-Key",
 							)
 						},
 					)?)?
 				} else {
 					if message.signed_origin_public_key.is_some() {
 						return Err(BuildFailure::invalid(
-							"listed Signed-Origin prohibits Signed-Origin-Public-Key",
+							"non-anonymous Signed-Origin prohibits Signed-Origin-Public-Key",
 						));
 					}
-					retained_keys.get(&address).copied().ok_or_else(|| {
+					effective_keys.get(&address).copied().ok_or_else(|| {
 						BuildFailure::permanent("retained Signed-Origin key is unavailable")
 					})?
 				};
@@ -973,6 +977,7 @@ impl SubmissionEngine {
 		&'a self,
 		origin: &str,
 		signed_origin: Option<&str>,
+		resolved: &BTreeMap<Address, PublicKey>,
 	) -> Result<(&'a LocalSigner, ItemProvenance), BuildFailure> {
 		let Some(signed_origin) = signed_origin else {
 			let signer = self.signer(origin)?;
@@ -987,14 +992,14 @@ impl SubmissionEngine {
 		let origin = origin
 			.parse::<Address>()
 			.map_err(|_| BuildFailure::invalid("invalid Origin address"))?;
-		if origin.is_unlisted() {
+		if origin.is_anonymous() {
 			return Err(BuildFailure::invalid(
-				"Signed-Origin requires a listed Origin address",
+				"Signed-Origin requires a non-anonymous Origin address",
 			));
 		}
-		if self.nodelist.public_key(&origin).is_some() {
+		if resolved.contains_key(&origin) {
 			return Err(BuildFailure::invalid(
-				"Signed-Origin cannot override the Origin nodelist key",
+				"Signed-Origin cannot override the effective Origin key",
 			));
 		}
 		let signer = self
@@ -1025,15 +1030,17 @@ impl SubmissionEngine {
 				.peers
 				.get(name)
 				.ok_or_else(|| BuildFailure::invalid("unknown Peer reference"))?;
-			let public_key = if peer.address.is_unlisted() {
+			let public_key = if peer.address.is_anonymous() {
 				peer.public_key
-					.ok_or_else(|| BuildFailure::invalid("unlisted Peer has no public key"))?
+					.ok_or_else(|| BuildFailure::invalid("anonymous Peer has no public key"))?
 			} else {
 				resolved
 					.get(&peer.address)
 					.copied()
 					.or_else(|| self.nodelist.public_key(&peer.address))
-					.ok_or_else(|| BuildFailure::permanent("listed Peer has no trusted key"))?
+					.ok_or_else(|| {
+						BuildFailure::permanent("non-anonymous Peer has no trusted key")
+					})?
 			};
 			return Ok(Identity {
 				address: peer.address.clone(),
@@ -1043,9 +1050,9 @@ impl SubmissionEngine {
 		let address: Address = value
 			.parse()
 			.map_err(|_| BuildFailure::invalid("invalid identity"))?;
-		if address.is_unlisted() {
+		if address.is_anonymous() {
 			return Err(BuildFailure::invalid(
-				"unlisted identities require a Peer reference",
+				"anonymous identities require a Peer reference",
 			));
 		}
 		let public_key = resolved
@@ -1122,7 +1129,7 @@ impl SubmissionEngine {
 				Ok(NewDelivery {
 					local_identity: local_identity.address.to_string(),
 					next_hop: identity.address.to_string(),
-					next_hop_key: unlisted_key(&identity),
+					next_hop_key: anonymous_key(&identity),
 					mode: if peer.endpoints.is_empty() {
 						DeliveryMode::Passive
 					} else {
@@ -1179,7 +1186,7 @@ fn decode_via(value: &tith_ipc::MessageVia) -> Result<ViaData, BuildFailure> {
 		.as_deref()
 		.map(decode_public_key)
 		.transpose()?;
-	if address.is_unlisted() != public_key.is_some() {
+	if address.is_anonymous() != public_key.is_some() {
 		return Err(BuildFailure::invalid(
 			"Via PublicKey presence does not match its address",
 		));
@@ -1374,15 +1381,15 @@ fn validate_area_name(value: &str) -> Result<(), BuildFailure> {
 	}
 }
 
-/// The next hop's key, recorded only when its address is the unlisted one.
+/// The next hop's key, recorded only when its address is the anonymous one.
 ///
 /// TSP-0002 section 9 requires a copy record "its exact next-hop address and
-/// unlisted `PublicKey`, if any". A listed address takes its key from the current
-/// nodelist, which a stored copy must not override.
-fn unlisted_key(identity: &Identity) -> Option<tith_crypto::PublicKey> {
+/// anonymous `PublicKey`, if any". A non-anonymous address takes its key from current
+/// trust state, which a stored copy must not override.
+fn anonymous_key(identity: &Identity) -> Option<tith_crypto::PublicKey> {
 	identity
 		.address
-		.is_unlisted()
+		.is_anonymous()
 		.then_some(identity.public_key)
 }
 
@@ -1467,7 +1474,7 @@ mod tests {
 			.unwrap(),
 		);
 		let origin = Identity {
-			address: Address::unlisted("p2p".to_owned()).unwrap(),
+			address: Address::anonymous("p2p".to_owned()).unwrap(),
 			public_key: origin_keys.public,
 		};
 		let engine = SubmissionEngine::new(
@@ -1540,7 +1547,7 @@ mod tests {
 		assert_eq!(provenance.origin, "fidonet#1/100".parse().unwrap());
 		assert_eq!(
 			provenance.signer.unwrap().address,
-			Address::unlisted("p2p".to_owned()).unwrap()
+			Address::anonymous("p2p".to_owned()).unwrap()
 		);
 
 		// TTS-0005 section 3 type 64 makes TearLine EchoMail control information,
@@ -1559,6 +1566,68 @@ mod tests {
 			}
 			other => panic!("expected an Invalid job build, got {other:?}"),
 		}
+		drop(store);
+		drop(inbound);
+		std::fs::remove_file(path).unwrap();
+	}
+
+	#[test]
+	fn effective_origin_pin_blocks_signed_origin_for_messages_and_files() {
+		let local_keys = SigningKeyPair::from_seed(&[21; 32]).unwrap();
+		let pinned_keys = SigningKeyPair::from_seed(&[22; 32]).unwrap();
+		let peers = format!(
+			"Peer local\nAddress p2p#-1\nPublic-Key {}\nEnd\n",
+			STANDARD_NO_PAD.encode(local_keys.public.as_bytes())
+		);
+		let configuration = Arc::new(
+			ConfigurationSet::parse(&peers, "Routes @local\nRoute All Using Hold\nEnd\n", "", "")
+				.unwrap(),
+		);
+		let engine = SubmissionEngine::new(
+			configuration,
+			Arc::new(Nodelist::default()),
+			[(
+				"@local".to_owned(),
+				LocalSigner {
+					reference: IdentityRef::Peer("local".to_owned()),
+					identity: Identity {
+						address: Address::anonymous("p2p".to_owned()).unwrap(),
+						public_key: local_keys.public,
+					},
+					secret: Arc::new(local_keys.secret),
+				},
+			)],
+		);
+		let unique = SystemTime::now()
+			.duration_since(UNIX_EPOCH)
+			.unwrap()
+			.as_nanos();
+		let path = std::env::temp_dir().join(format!("tith-origin-pin-{unique}.redb"));
+		let inbound = InboundStore::create(&path).unwrap();
+		let store = inbound.outbound().unwrap();
+		store
+			.key_pins()
+			.trust_on_first_use("fidonet#1/100", pinned_keys.public, 1)
+			.unwrap();
+
+		for request in [
+			b"TITH-IPC 1\nSubmit\nJob\nApplication \"mailer\"\nIdempotency-Key \"message-pin\"\nOrigin \"fidonet#1/100\"\nSigned-Origin \"@local\"\nDestination \"fidonet#1/200\"\nTo-User \"You\"\nFrom-User \"Legacy\"\nEnd\nEnd\n"
+				.as_slice(),
+			b"TITH-IPC 1\nSubmit-Items\nJob File\nApplication \"mailer\"\nIdempotency-Key \"file-pin\"\nOrigin \"fidonet#1/100\"\nSigned-Origin \"@local\"\nArea \"FILES\"\nFile\nSource-Path \"/does/not/exist\"\nWire-Filename \"test.bin\"\nEnd\nEnd\nEnd\n"
+				.as_slice(),
+		] {
+			let request = SubmissionRequest::parse(request).unwrap();
+			match engine.submit(&request, &store) {
+				Err(StoreError::JobBuild {
+					kind, description, ..
+				}) => {
+					assert_eq!(kind, JobBuildFailure::Invalid);
+					assert!(description.contains("effective Origin key"), "{description}");
+				}
+				other => panic!("expected effective-key rejection, got {other:?}"),
+			}
+		}
+
 		drop(store);
 		drop(inbound);
 		std::fs::remove_file(path).unwrap();
@@ -1605,7 +1674,7 @@ mod tests {
 			[(
 				local.to_string(),
 				LocalSigner {
-					reference: IdentityRef::Listed(local.clone()),
+					reference: IdentityRef::Address(local.clone()),
 					identity: Identity {
 						address: local.clone(),
 						public_key: local_keys.public,
@@ -1697,10 +1766,10 @@ mod tests {
 	}
 
 	#[test]
-	fn forwarding_records_every_listed_identity_in_one_seen_by() {
+	fn forwarding_records_every_non_anonymous_identity_in_one_seen_by() {
 		// TSP-0002 section 7: the distributor adds its local identity, the
-		// immediate incoming Peer, and every listed Send-To Peer it creates a
-		// copy for, in exactly one SeenBy, omitting unlisted identities.
+		// immediate incoming Peer, and every non-anonymous Send-To Peer it creates a
+		// copy for, in exactly one SeenBy, omitting anonymous identities.
 		let local_keys = SigningKeyPair::from_seed(&[40; 32]).unwrap();
 		let author_keys = SigningKeyPair::from_seed(&[41; 32]).unwrap();
 		let incoming_keys = SigningKeyPair::from_seed(&[42; 32]).unwrap();
@@ -1729,7 +1798,7 @@ mod tests {
 			)
 			.unwrap(),
 		);
-		// Every listed address resolves from the nodelist; the unlisted Peer
+		// Every non-anonymous address resolves from the nodelist; the anonymous Peer
 		// carries its own key in configuration.
 		let entry = |number: u16, keys: &SigningKeyPair| {
 			format!(
@@ -1815,7 +1884,7 @@ mod tests {
 			[(
 				local.to_string(),
 				LocalSigner {
-					reference: IdentityRef::Listed(local.clone()),
+					reference: IdentityRef::Address(local.clone()),
 					identity: Identity {
 						address: local.clone(),
 						public_key: local_keys.public,
@@ -1859,12 +1928,12 @@ mod tests {
 			addresses.contains(&incoming),
 			"the incoming peer is missing: {addresses:?}"
 		);
-		// A listed Send-To Peer which receives a copy.
+		// A non-anonymous Send-To Peer which receives a copy.
 		assert!(addresses.contains(&downstream), "{addresses:?}");
-		// The unlisted Send-To Peer is not representable and is omitted.
+		// The anonymous Send-To Peer is not representable and is omitted.
 		assert!(
-			!addresses.iter().any(Address::is_unlisted),
-			"an unlisted identity reached SeenBy: {addresses:?}"
+			!addresses.iter().any(Address::is_anonymous),
+			"an anonymous identity reached SeenBy: {addresses:?}"
 		);
 
 		// No copy is created for the immediate incoming Peer.
@@ -1883,8 +1952,8 @@ mod tests {
 		let local_keys = SigningKeyPair::from_seed(&[50; 32]).unwrap();
 		let reachable_keys = SigningKeyPair::from_seed(&[51; 32]).unwrap();
 		let unreachable_keys = SigningKeyPair::from_seed(&[52; 32]).unwrap();
-		let local = Address::unlisted("p2p".to_owned()).unwrap();
-		// Every identity is unlisted, so no nodelist is needed: each carries its
+		let local = Address::anonymous("p2p".to_owned()).unwrap();
+		// Every identity is anonymous, so no nodelist is needed: each carries its
 		// own key, which is exactly what tells two peers sharing `p2p#-1` apart
 		// and what a held copy has to record.
 		let peers = format!(

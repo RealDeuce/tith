@@ -120,9 +120,9 @@ fn retained_origin_from_controls(
 		.rsplit_once(' ')
 		.ok_or_else(|| BuildError::Retained("TITHSIG MSGID has no origin".to_owned()))?;
 	if let Ok(address) = origin.parse::<tith_wire::Address>() {
-		if address.is_unlisted() {
+		if address.is_anonymous() {
 			return Err(BuildError::Retained(
-				"TITHSIG revision 1 cannot carry an unlisted Origin".to_owned(),
+				"TITHSIG revision 1 cannot carry an anonymous Origin".to_owned(),
 			));
 		}
 		return Ok(address.to_string());
@@ -157,7 +157,7 @@ pub struct Context<'a> {
 	pub application: &'a str,
 	pub origin: &'a str,
 	/// The legacy 3D or 4D rendering of `origin`, used to recognise our own
-	/// MSGID values. Absent when `origin` is not a listed TTS-0004 address.
+	/// MSGID values. Absent when `origin` is not a non-anonymous TTS-0004 address.
 	pub legacy_origin: Option<String>,
 	/// Trusted domain used to complete fixed, INTL, and TOPT addresses.
 	pub domain: Option<&'a str>,

@@ -3,7 +3,7 @@ TITH                                              THIS ISN'T THAT HARD
 **********************************************************************
 
 Publication:  TSP‑0015
-Revision:     1
+Revision:     2
 Title:        Public Key Trust and Continuity
 Author(s):    Stephen Hurd
 Date:         2026‑08‑20
@@ -23,8 +23,8 @@ Abstract
 ────────
 
   This document defines durable public key pins, first contact, and
-  authenticated key continuity for listed TITH identities.  It is
-  shared by native TITH exchange and legacy discovery gateways.
+  authenticated key continuity for non‐anonymous TITH identities.  It
+  is shared by native TITH exchange and legacy discovery gateways.
 
 Contents
 ────────
@@ -46,10 +46,13 @@ Contents
 1. Introduction
 ───────────────
 
-  A listed address identifies one system only when its signing public
-  key is known.  A current nodelist supplies that trust anchor in the
-  ordinary case, but private networks, delayed nodelists, first contact,
-  and planned rotation also require durable local trust state.
+  A non‐anonymous address identifies one system, but its signatures can
+  be authenticated only when its signing public key is known.  A
+  current nodelist supplies that trust anchor in the ordinary case, but
+  private networks, delayed nodelists, first contact, and planned
+  rotation also require durable local trust state.  As defined by
+  TTS‑0004, either a nodelist entry or an effective local pin makes the
+  identity listed for that implementation.
 
   This proposal defines that state once.  Native TITH obtains a key or
   continuity proof with the PublicKeyRequest in TTS‑0005.  A legacy
@@ -60,10 +63,11 @@ Contents
 2. Trust Records
 ────────────────
 
-  A conforming implementation which retains a key for a listed address
-  MUST store it in service‑owned durable state.  A record contains:
+  A conforming implementation which retains a key for a non‐anonymous
+  address MUST store it in service‐owned durable state.  A record
+  contains:
 
-  • the canonical listed address;
+  • the canonical non‐anonymous address;
   • the current pinned PublicKey;
   • the nodelist PublicKey which anchored its continuity chain, if any;
   • the predecessor PublicKey for the latest authenticated advance, if
@@ -82,7 +86,8 @@ Contents
 ─────────────────────────────────────
 
   A current nodelist PublicKey is the external trust anchor for its
-  listed address.  With no continuity record, it is the effective key.
+  non‐anonymous address.  With no continuity record, it is the effective
+  key.
 
   A continuity record anchored by that exact nodelist key makes its
   current pinned key effective.  This permits an old published key to
@@ -94,10 +99,25 @@ Contents
   If the nodelist publishes a key unrelated to the record's anchor, the
   nodelist key takes precedence.  A local observation MUST NOT override
   that new external trust decision.  With no nodelist key, an existing
-  local pin is effective.
+  local pin is effective.  When neither exists, the identity has no
+  effective key.
 
-  An unlisted identity is already the address and PublicKey pair
-  defined by TTS‑0004 and does not use a listed‑address pin.
+  This resolution produces at most one effective key.  Every TITH
+  operation which needs the key of a non‐anonymous identity MUST use
+  that result.  This includes Bundle Origin and Destination
+  authentication, Message and standalone File Origin or SignedOrigin
+  signatures, retained legacy signatures, signed‐item duplicate
+  identity, and authorization policy.  After verification fails with
+  the effective key, an implementation MUST NOT retry another key or
+  fall back from Origin to SignedOrigin.
+
+  An anonymous identity is the exact address and PublicKey pair defined
+  by TTS‑0004.  Local policy may pin that exact identity and thereby
+  list it, but this document does not prescribe how such a pin is
+  represented.  Its accompanying PublicKey remains required on the
+  wire.  A different PublicKey denotes a different anonymous identity,
+  not a continuity advance, so the record and resolution rules above
+  do not apply to anonymous identities.
 
 
 4. First Contact and Observations
@@ -105,12 +125,15 @@ Contents
 
   A self‑signed key observed at a contacted endpoint proves possession
   of that key but does not prove that the endpoint belongs to the
-  intended listed address.  An implementation MUST NOT create or
+  intended non‐anonymous address.  An implementation MUST NOT create or
   replace a pin from such an observation by default.
 
   First contact MAY establish a pin only when the operator explicitly
   designates that exact contact as trusted.  TSP‑0002 does this with
-  Trust-On-First-Use on a listed Peer having a configured Endpoint.
+  Trust-On-First-Use on a non‐anonymous Peer having a configured
+  Endpoint.  The exchange is authorized only while the identity is
+  unlisted.  Establishing the pin makes that identity listed for the
+  implementation.
   The implementation MUST log that a new trust decision was made.
   Repeating first contact MUST NOT replace an existing pin.
 
@@ -125,9 +148,10 @@ Contents
 ──────────────────────────
 
   TTS‑0005 defines a PublicKeyRequest which names an already trusted
-  predecessor in the listed Destination's following PublicKey.  The
-  Server repeats that predecessor after its listed reply Origin, signs
-  the reply using the predecessor's retained private key, and carries
+  predecessor in the non‐anonymous Destination's following PublicKey.
+  The Server repeats that predecessor after its non‐anonymous reply
+  Origin, signs the reply using the predecessor's retained private key,
+  and carries
   its current PublicKey inside the authenticated Accepted value.
 
   The Client MUST verify the complete reply using the exact requested
@@ -174,16 +198,20 @@ A. References
   [TSP‑0014] "Signed Mail From Legacy‐Only Systems", TITH,
   2026‑08‑20.
 
-  [TTS‑0004] "Node Addresses", TITH, 2026‑08‑17.
+  [TTS‑0004] "Node Addresses", TITH, 2026‑08‑20.
 
   [TTS‑0005] "Bundle Format", TITH, 2026‑08‑20.
 
-  [TTS‑5000] "The Distribution Nodelist", TITH, 2026‑08‑19.
+  [TTS‑5000] "The Distribution Nodelist", TITH, 2026‑08‑20.
 
 
 B. History
 ──────────
 
    Rev.1, 2026‑08‑20: Initial release.
+
+   Rev.2, 2026‑08‑20: Distinguished anonymous address grammar from
+   listing status and made one effective key govern all authentication
+   and identity decisions for a non‐anonymous identity.
 
 **********************************************************************

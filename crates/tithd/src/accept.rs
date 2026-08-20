@@ -313,7 +313,7 @@ impl Acceptance<'_> {
 					next_hop_key: commitment
 						.next_hop
 						.address
-						.is_unlisted()
+						.is_anonymous()
 						.then_some(commitment.next_hop.public_key),
 					mode: if commitment.passive {
 						DeliveryMode::Passive
@@ -365,7 +365,7 @@ impl Acceptance<'_> {
 
 	/// The identities an item's Vias name, for loop detection.
 	///
-	/// A listed Via absent from the nodelist is skipped rather than failing the
+	/// A non-anonymous Via absent from the nodelist is skipped rather than failing the
 	/// relay. The router can only select a next hop backed by a nodelist entry
 	/// or a configured Peer, so such a Via can never be the hop it picks and
 	/// dropping it cannot conceal a loop.
@@ -373,7 +373,7 @@ impl Acceptance<'_> {
 		Ok(item_vias(item)?
 			.into_iter()
 			.filter_map(|via| {
-				let public_key = if via.address.is_unlisted() {
+				let public_key = if via.address.is_anonymous() {
 					via.public_key?
 				} else {
 					self.nodelist.public_key(&via.address)?
@@ -400,7 +400,7 @@ impl Acceptance<'_> {
 			.iter()
 			.find_map(|(name, configured)| {
 				(configured.address == peer.address
-					&& (!peer.address.is_unlisted()
+					&& (!peer.address.is_anonymous()
 						|| configured.public_key == Some(peer.public_key)))
 				.then_some(name.as_str())
 			})
@@ -600,7 +600,7 @@ mod tests {
 		item: &OwnedTlv,
 	) -> (OwnedTlv, Vec<tith_store::OutboundJob>) {
 		let validated = validate_item(item, world.resolver()).unwrap().unwrap();
-		let local_ref = IdentityRef::Listed(world.local().address.clone());
+		let local_ref = IdentityRef::Address(world.local().address.clone());
 		let acceptance = Acceptance {
 			store: &world.store,
 			application: "tosser",

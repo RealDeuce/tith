@@ -3,10 +3,10 @@ TITH                                              THIS ISN'T THAT HARD
 **********************************************************************
 
 Publication:  TTS‑0004
-Revision:     2
+Revision:     3
 Title:        Node Addresses
 Author(s):    Stephen Hurd
-Date:         2026‑08‑17
+Date:         2026‑08‑20
 ══════════════════════════════════════════════════════════════════════
 
 Status of this document
@@ -78,7 +78,7 @@ Contents
 
   The literal Domain "p2p" is reserved for the nodelist‐free
   peer‐to‐peer network described in TRD‑0003.  It MUST NOT be used as
-  the Domain of a network which assigns listed addresses.
+  the Domain of a network which assigns non‐anonymous addresses.
 
   Example domains "fidonet", "БорМер"
 
@@ -162,13 +162,35 @@ Contents
   "fidonet#1.5" would represent fidonet, Z1, N1, O0, P5
   "fidonet#-1" would represent fidonet, Z−1, N−1, O−1, P0.
 
-  The address whose Zone is negative one (−1) is the unlisted address
+  The address whose Zone is negative one (−1) is the anonymous address
   for its Domain and MUST NOT appear in a nodelist.  Since it does not
   uniquely identify a system, protocols using it MUST associate it
   with a public key as specified in TTS‑0003 and TTS‑0005.  A
-  prospective node may use the unlisted address while applying for a
-  listed address.  In the "p2p" Domain it is instead the permanent
-  address of every system.
+  prospective node may use the anonymous address while applying for a
+  non‐anonymous address.  In the "p2p" Domain it is instead the
+  permanent address of every system.
+
+  An address is anonymous or non‐anonymous solely according to this
+  encoding.  A non‐anonymous identity is identified by its address.
+  An anonymous identity is the exact pair of its anonymous address and
+  associated PublicKey.  Different PublicKeys at the same anonymous
+  address identify different systems.
+
+  Listing is a separate, observer‐relative trust state.  An identity is
+  listed for an implementation when its address appears in the current
+  nodelist or its exact identity has an effective local key pin
+  established by explicit trust policy.  It is unlisted otherwise.  A
+  nodelist entry lists its identity whether or not the entry contains a
+  PublicKey.  Merely receiving an accompanying PublicKey MUST NOT by
+  itself establish a pin.  Consequently an anonymous identity may be
+  either listed or unlisted, and a non‐anonymous identity absent from a
+  nodelist may likewise be listed by a pin.
+
+  Protocol grammar which depends on the address encoding MUST use the
+  terms anonymous and non‐anonymous, not listed and unlisted.  A
+  protocol MAY use listing status for local trust or policy decisions.
+  The representation of a local pin is implementation‐private unless
+  another standard specifies its required behaviour.
 
 
 5. Trimmed Collections
@@ -265,13 +287,13 @@ A. References
   [FTA‑1006.002] "Key words to indicate requirement levels" FTSC,
   1998‑01‑17.
 
-  [TTS‑0003] "Common TLV Types", TITH, 2026‑08‑18.
+  [TTS‑0003] "Common TLV Types", TITH, 2026‑08‑20.
 
   [TTS‑0005] "Bundle Format", TITH, 2026‑08‑20.
 
-  [TTS‑5000] "The Distribution Nodelist", TITH, 2026‑08‑19.
+  [TTS‑5000] "The Distribution Nodelist", TITH, 2026‑08‑20.
 
-  [TRD‑0003] "A Nodelist‐Free Peer Network", TITH, 2026‑08‑17.
+  [TRD‑0003] "A Nodelist‐Free Peer Network", TITH, 2026‑08‑20.
 
 
 B. History
@@ -282,5 +304,8 @@ B. History
    Rev.2, 2026‑08‑17: Defined collection duplicate removal and numeric
    sorting, corrected the collection and list examples, and corrected
    the wildcard example terminology.
+
+   Rev.3, 2026‑08‑20: Distinguished the anonymous address encoding from
+   observer‐relative listed and unlisted identity trust states.
 
 **********************************************************************

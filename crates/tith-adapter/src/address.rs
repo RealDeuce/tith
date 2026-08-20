@@ -12,9 +12,9 @@ use tith_wire::Address;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum AddressError {
-	/// The unlisted address has no legacy representation at all: its zone, net,
+	/// The anonymous address has no legacy representation at all: its zone, net,
 	/// and node are all -1, which no legacy field can hold.
-	Unlisted,
+	Anonymous,
 	/// A component does not fit the unsigned 16-bit legacy field.
 	OutOfRange,
 	/// Not a legacy address.
@@ -28,7 +28,7 @@ pub enum AddressError {
 impl fmt::Display for AddressError {
 	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
 		f.write_str(match self {
-			Self::Unlisted => "the unlisted address has no legacy representation",
+			Self::Anonymous => "the anonymous address has no legacy representation",
 			Self::OutOfRange => "an address component does not fit its legacy field",
 			Self::Malformed => "not a legacy address",
 			Self::MissingDomain => "a legacy address has no trusted domain context",
@@ -71,8 +71,8 @@ pub fn endpoint(address: &Address) -> Result<Endpoint, AddressError> {
 }
 
 fn components(address: &Address) -> Result<Endpoint, AddressError> {
-	if address.is_unlisted() {
-		return Err(AddressError::Unlisted);
+	if address.is_anonymous() {
+		return Err(AddressError::Anonymous);
 	}
 	let field = |value: i32| u16::try_from(value).map_err(|_| AddressError::OutOfRange);
 	Ok(Endpoint {
@@ -157,8 +157,8 @@ pub fn resolve_destination(
 	let msgto = singleton("MSGTO")?
 		.map(|control| {
 			let address: Address = control.value.parse().map_err(|_| AddressError::Malformed)?;
-			if address.is_unlisted() {
-				return Err(AddressError::Unlisted);
+			if address.is_anonymous() {
+				return Err(AddressError::Anonymous);
 			}
 			Ok(address)
 		})
@@ -268,7 +268,7 @@ mod tests {
 	}
 
 	#[test]
-	fn every_listed_address_round_trips() {
+	fn every_non_anonymous_address_round_trips() {
 		for text in [
 			"fidonet#1:104/36",
 			"fidonet#1:104/36.45",
@@ -290,11 +290,11 @@ mod tests {
 	}
 
 	#[test]
-	fn the_unlisted_address_has_no_legacy_form() {
-		let unlisted = Address::unlisted("p2p".to_owned()).unwrap();
-		assert_eq!(five_dimensional(&unlisted), Err(AddressError::Unlisted));
-		assert_eq!(three_dimensional(&unlisted), Err(AddressError::Unlisted));
-		assert_eq!(endpoint(&unlisted), Err(AddressError::Unlisted));
+	fn the_anonymous_address_has_no_legacy_form() {
+		let anonymous = Address::anonymous("p2p".to_owned()).unwrap();
+		assert_eq!(five_dimensional(&anonymous), Err(AddressError::Anonymous));
+		assert_eq!(three_dimensional(&anonymous), Err(AddressError::Anonymous));
+		assert_eq!(endpoint(&anonymous), Err(AddressError::Anonymous));
 	}
 
 	#[test]

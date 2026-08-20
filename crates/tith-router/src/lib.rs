@@ -40,7 +40,7 @@ pub fn route_netmail(
 	let selected = routes.routes.iter().enumerate().find(|(_, rule)| {
 		selector_matches(&rule.destination, destination, config, nodelist, resolver)
 	});
-	let listed_defaults = [
+	let non_anonymous_defaults = [
 		RouteMethod::Direct,
 		RouteMethod::Boss,
 		RouteMethod::Hub,
@@ -49,7 +49,7 @@ pub fn route_netmail(
 		RouteMethod::Zone,
 		RouteMethod::Hold,
 	];
-	let unlisted_defaults = [
+	let anonymous_defaults = [
 		RouteMethod::Boss,
 		RouteMethod::Hub,
 		RouteMethod::Direct,
@@ -59,10 +59,10 @@ pub fn route_netmail(
 		|| {
 			(
 				None,
-				if destination.address.is_unlisted() {
-					unlisted_defaults.as_slice()
+				if destination.address.is_anonymous() {
+					anonymous_defaults.as_slice()
 				} else {
-					listed_defaults.as_slice()
+					non_anonymous_defaults.as_slice()
 				},
 			)
 		},
@@ -87,7 +87,7 @@ pub fn route_netmail(
 }
 
 fn peer_identity(peer: &Peer, resolver: &impl KeyResolver) -> Option<Identity> {
-	let public_key = if peer.address.is_unlisted() {
+	let public_key = if peer.address.is_anonymous() {
 		peer.public_key?
 	} else {
 		resolver.public_key(&peer.address)?
@@ -146,7 +146,7 @@ fn candidate(
 	match method {
 		RouteMethod::Via(name) => Some((named_peer(name, config, resolver)?, false)),
 		RouteMethod::Direct => {
-			if destination.address.is_unlisted() {
+			if destination.address.is_anonymous() {
 				let peer = exact_peer(destination, config, resolver)?;
 				(!peer.endpoints.is_empty()).then(|| (destination.clone(), false))
 			} else {
@@ -164,7 +164,7 @@ fn candidate(
 			.get(&destination.address)
 			.is_some_and(|entry| entry.keyword == Keyword::Down))
 		.then(|| (destination.clone(), true)),
-		RouteMethod::Boss | RouteMethod::Hub if destination.address.is_unlisted() => {
+		RouteMethod::Boss | RouteMethod::Hub if destination.address.is_anonymous() => {
 			let peer = exact_peer(destination, config, resolver)?;
 			let name = match method {
 				RouteMethod::Boss => peer.boss.as_ref()?,
@@ -352,7 +352,7 @@ mod tests {
 		.unwrap();
 		let routes = &config.routes[0];
 		let destination = Identity {
-			address: Address::unlisted("p2p".to_owned()).unwrap(),
+			address: Address::anonymous("p2p".to_owned()).unwrap(),
 			public_key: PublicKey::from_bytes([0; 32]),
 		};
 		let nodelist = Nodelist::default();

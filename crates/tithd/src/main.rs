@@ -318,12 +318,12 @@ fn resolve_local(
 ) -> Result<(IdentityRef, Identity), Box<dyn Error>> {
 	if let Some(name) = value.strip_prefix('@') {
 		let peer = configuration.peers.get(name).ok_or("unknown local Peer")?;
-		if !peer.address.is_unlisted() {
-			return Err("a local Peer reference must identify an unlisted address".into());
+		if !peer.address.is_anonymous() {
+			return Err("a local Peer reference must identify an anonymous address".into());
 		}
 		let public_key = peer
 			.public_key
-			.ok_or("unlisted local Peer has no public key")?;
+			.ok_or("anonymous local Peer has no public key")?;
 		return Ok((
 			IdentityRef::Peer(name.to_owned()),
 			Identity {
@@ -333,14 +333,14 @@ fn resolve_local(
 		));
 	}
 	let address: Address = value.parse()?;
-	if address.is_unlisted() {
-		return Err("an unlisted local identity must use a Peer reference".into());
+	if address.is_anonymous() {
+		return Err("an anonymous local identity must use a Peer reference".into());
 	}
 	let public_key = nodelist
 		.public_key(&address)
-		.ok_or("local listed identity has no nodelist TITH public key")?;
+		.ok_or("local non-anonymous identity has no nodelist TITH public key")?;
 	Ok((
-		IdentityRef::Listed(address.clone()),
+		IdentityRef::Address(address.clone()),
 		Identity {
 			address,
 			public_key,

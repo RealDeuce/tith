@@ -3,7 +3,7 @@ TITH                                              THIS ISN'T THAT HARD
 **********************************************************************
 
 Publication:  TSP‑0006
-Revision:     9
+Revision:     10
 Title:        Outbound Job Submission
 Author(s):    Stephen Hurd
 Date:         2026‑08‑20
@@ -333,11 +333,11 @@ Contents
   so its Origin line identifies only the local identity whose Bundle
   carries the request.  Signed-Origin is prohibited for that Kind.
 
-  With Signed-Origin, Origin is a canonical listed TTS‑0004 address
+  With Signed-Origin, Origin is a canonical non‐anonymous TTS‑0004 address
   used as the item's originating and reply address.  No public key may
-  be available for it in the current nodelist.  Signed-Origin identifies
+  be available under TSP‑0015.  Signed-Origin identifies
   the local identity whose key signs the item and MUST have a Routes
-  block.  If Origin later has an applicable key, TTS‑0005 ignores
+  block.  If Origin has an effective key, TTS‑0005 ignores
   SignedOrigin rather than allowing it to override that key.
 
   Local-Identity identifies the one local identity whose Routes or
@@ -380,12 +380,12 @@ Contents
   or administrative work, and a Job Forward request naming one is
   Invalid.
 
-  Destination is a canonical listed TTS‑0004 address or a peer
-  reference naming an exact unlisted identity in the TSP‑0002 peers
+  Destination is a canonical non‐anonymous TTS‑0004 address or a peer
+  reference naming an exact anonymous identity in the TSP‑0002 peers
   file.  A wildcard is prohibited.  A peer reference is local syntax;
-  the Message contains the unlisted address and that peer's PublicKey.
+  the Message contains the anonymous address and that peer's PublicKey.
   Without Signed-Origin, the Message likewise contains the Origin
-  PublicKey when its resolved Origin is unlisted.  Signed-Origin itself
+  PublicKey when its resolved Origin is anonymous.  Signed-Origin itself
   has the conditional PublicKey required by TTS‑0005.
 
   Destination occurs for NetMail, Peer-File, and FileRequest.  For a
@@ -393,7 +393,7 @@ Contents
   recipient.  For a Peer-File or FileRequest the item contains no
   Destination value at all; the submitted Destination is the exact peer
   the enclosing Bundle addresses, and it is therefore also the next
-  hop.  When it is unlisted, the Service retains that peer's PublicKey
+  hop.  When it is anonymous, the Service retains that peer's PublicKey
   as the local delivery metadata TTS‑0005 section 3 requires for a held
   value.
 
@@ -445,11 +445,11 @@ Contents
   prohibited for every signed field.  Signed-Origin is then the actual
   signed TTS‑0005 address rather than a local identity reference.
   Signed-Origin-Public-Key occurs if and only if that address is the
-  unlisted address and contains its 43‑character unpadded RFC‑4648
+  anonymous address and contains its 43‑character unpadded RFC‑4648
   PublicKey.
 
   A retained Via line contains its Address, the conditional PublicKey
-  when that Address is unlisted, its Timestamp, and its software
+  when that Address is anonymous, its Timestamp, and its software
   string.  Seen-By lines supply the current unsigned addresses in
   processing order.  Signature, Via, and Seen-By are prohibited for a
   newly originated Message.  TITHSIGN and TITHSIG are structured
@@ -464,8 +464,9 @@ Contents
   different form for each group.
 
   For NetMail, absent or Route applies normal TSP‑0002 routing.  Active
-  or Passive explicitly commits the Job to the listed address or peer
-  reference in that line without applying a NetMail Route method.  The
+  or Passive explicitly commits the Job to the non‐anonymous address
+  or peer reference in that line without applying a NetMail Route
+  method.  The
   service MUST authorize an explicit next hop.  Loop detection, Down
   status, and failure handling still apply.
 
@@ -1235,9 +1236,11 @@ A. References
 
   [TSP‑0012] "Tosser Consumption IPC", TITH, 2026‑08‑18.
 
-  [TTS‑0003] "Common TLV Types", TITH, 2026‑08‑18.
+  [TSP‑0015] "Public Key Trust and Continuity", TITH, 2026‑08‑20.
 
-  [TTS‑0004] "Node Addresses", TITH, 2026‑08‑17.
+  [TTS‑0003] "Common TLV Types", TITH, 2026‑08‑20.
+
+  [TTS‑0004] "Node Addresses", TITH, 2026‑08‑20.
 
   [TTS‑0005] "Bundle Format", TITH, 2026‑08‑20.
 
@@ -1278,5 +1281,9 @@ B. History
    Rev.9, 2026‑08‑20: Made routing and loop failures caller‐owned
    pre‐commit results and limited delivery policy to permanent remote
    responses.
+
+   Rev.10, 2026‑08‑20: Distinguished anonymous address grammar from
+   listing status and used the TSP‑0015 effective key for Signed-Origin
+   fallback decisions.
 
 **********************************************************************

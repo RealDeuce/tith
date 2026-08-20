@@ -3,7 +3,7 @@ TITH                                              THIS ISN'T THAT HARD
 **********************************************************************
 
 Publication:  TTS‑0006
-Revision:     5
+Revision:     6
 Title:        Bundle Exchange Protocol
 Author(s):    Stephen Hurd
 Date:         2026‑08‑20
@@ -101,12 +101,12 @@ Contents
   • The Client must be able to send all of the bundles it has
     prepared, and never send another byte.
 
-  Authentication of the unlisted address proves possession of its
+  Authentication of the anonymous address proves possession of its
   private key.  It does not establish membership in a network which
   uses a nodelist.  Except for the dedicated PublicKeyRequest exchange
   defined by TTS‑0005, a supplied PublicKey MUST NOT be used in place
-  of the trusted key for any other Origin.  TSP‑0015 defines how a
-  listed key is pinned and advanced.
+  of the effective key for any non‐anonymous Origin.  TSP‑0015 defines
+  how that key is resolved, pinned, and advanced.
 
 
 4. Connection Flow
@@ -153,15 +153,16 @@ Contents
   receiving and authenticating the reply, the Client closes the
   connection before opening an operational connection.
 
-  When a listed peer's reply fails authentication with the currently
-  trusted key, the Client MAY make one PublicKeyRequest for that exact
+  When a non‐anonymous peer's reply fails authentication with the
+  currently trusted key, the Client MAY make one PublicKeyRequest for
+  that exact
   predecessor and then retry the original exchange once in the same
   schedule activation.  It MUST authenticate the key reply with the
   requested predecessor before persisting or using the returned key.
   Failure of either the probe or the one retry ends that attempt; this
   rule does not create an unbounded retry loop.
 
-  A first‑contact PublicKeyRequest omits the listed Destination
+  A first‐contact PublicKeyRequest omits the non‐anonymous Destination
   PublicKey.  A Client MUST do this only when its local configuration
   explicitly authorizes trust on first use for that contact and fixes
   the endpoint used.  Receipt of such a self‑signed response is not
@@ -187,7 +188,7 @@ Contents
   Header SignedTLV.
 
   After authenticating the Header SignedTLV, the receiver MUST verify
-  that its Destination identifies the receiver.  An unlisted address
+  that its Destination identifies the receiver.  An anonymous address
   identifies the receiver only when its PublicKey also matches the
   receiver's public key.  For a Reply Bundle, the receiver MUST
   also verify the Origin, Destination, and PublicKey relationship
@@ -243,13 +244,13 @@ A. References
 
   [TSP‑0015] "Public Key Trust and Continuity", TITH, 2026‑08‑20.
 
-  [TTS‑0003] "Common TLV Types", TITH, 2026‑08‑18.
+  [TTS‑0003] "Common TLV Types", TITH, 2026‑08‑20.
 
-  [TTS‑0004] "Node Addresses", TITH, 2026‑08‑17.
+  [TTS‑0004] "Node Addresses", TITH, 2026‑08‑20.
 
   [TTS‑0005] "Bundle Format", TITH, 2026‑08‑20.
 
-  [TTS‑5000] "The Distribution Nodelist", TITH, 2026‑08‑19.
+  [TTS‑5000] "The Distribution Nodelist", TITH, 2026‑08‑20.
 
 
 B. History
@@ -267,7 +268,11 @@ B. History
    SignedTLV authentication from optional end‐to‐end Message and File
    signatures.
 
-   Rev.5, 2026‑08‑20: Defined the dedicated listed‑key discovery
-   exchange and a single same‑activation continuity retry.
+   Rev.5, 2026‑08‑20: Defined the dedicated non‐anonymous‐key discovery
+   exchange and a single same‐activation continuity retry.
+
+   Rev.6, 2026‑08‑20: Distinguished anonymous address grammar from
+   listing status and required the TSP‑0015 effective key for every
+   non‐anonymous transport identity.
 
 **********************************************************************

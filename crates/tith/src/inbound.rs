@@ -512,7 +512,7 @@ fn serve(
 			// The Bundle signature authenticated the peer, which is strictly more
 			// than an FTN session password ever proved.
 			protected: true,
-			listed: !link.peer.is_unlisted(),
+			listed: !link.peer.is_anonymous(),
 		},
 		std::slice::from_ref(filename),
 		fnv(&claim.inbound_id),

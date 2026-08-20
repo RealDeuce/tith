@@ -214,7 +214,7 @@ pub fn retained_signing(controls: &[Control]) -> Result<Option<RetainedSigning>,
 			.map_err(|_| ConvertError::Unrepresentable("a TITHSIGN SignedOrigin"))?
 			.parse::<Address>()
 			.map_err(|_| ConvertError::Unrepresentable("a TITHSIGN SignedOrigin"))?;
-		let key = if address.is_unlisted() {
+		let key = if address.is_anonymous() {
 			if values.len() != 2 || values[1].type_code != types::PUBLIC_KEY {
 				return Err(ConvertError::Unrepresentable("a TITHSIGN PublicKey"));
 			}
@@ -226,7 +226,9 @@ pub fn retained_signing(controls: &[Control]) -> Result<Option<RetainedSigning>,
 			Some(PublicKey::from_bytes(bytes))
 		} else {
 			if values.len() != 1 {
-				return Err(ConvertError::Unrepresentable("a listed TITHSIGN value"));
+				return Err(ConvertError::Unrepresentable(
+					"a non-anonymous TITHSIGN value",
+				));
 			}
 			None
 		};
@@ -706,9 +708,9 @@ fn self_check(
 		.signing
 		.signature
 		.ok_or_else(|| "no Signature to verify".to_owned())?;
-	// The effective signer is SignedOrigin when present, else Origin. A listed
-	// address carries no inline key, so it comes from the nodelist exactly as
-	// validation would obtain it.
+	// The effective signer is SignedOrigin when present, else Origin. A
+	// non-anonymous address carries no inline key, so it comes from the resolver
+	// exactly as validation would obtain it.
 	let effective = read
 		.signing
 		.signed_origin
@@ -1077,7 +1079,7 @@ mod tests {
 		(read, keys, origin)
 	}
 
-	/// The nodelist a listed Origin's key would come from.
+	/// The nodelist a non-anonymous Origin's key would come from.
 	fn resolver(keys: &SigningKeyPair) -> impl KeyResolver {
 		let public = keys.public;
 		move |address: &Address| {

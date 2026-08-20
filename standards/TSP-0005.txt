@@ -3,7 +3,7 @@ TITH                                              THIS ISN'T THAT HARD
 **********************************************************************
 
 Publication:  TSP‑0005
-Revision:     5
+Revision:     6
 Title:        Durable Outbound Jobs
 Author(s):    Stephen Hurd
 Date:         2026‑08‑20
@@ -132,7 +132,7 @@ Contents
 
     • the selected local signing identity as the local AKA;
     • the Job Kind and ultimate Destination or Area;
-    • the exact next‐hop address and unlisted PublicKey, if any;
+    • the exact next‐hop address and anonymous PublicKey, if any;
     • Active or Passive delivery mode;
     • delivery Class;
     • a retry Timestamp, if any; and
@@ -331,8 +331,9 @@ Contents
   it can be delivered, so neither has another next hop to select.
 
   Reroute Route applies the current TSP‑0002 NetMail Route methods.
-  Reroute Active or Passive instead commits the exact listed address or
-  peer reference in the request.  An explicit target requires the same
+  Reroute Active or Passive instead commits the exact non‐anonymous
+  address or peer reference in the request.  An explicit target
+  requires the same
   authorization and validation as at submission.  Active requires a
   usable endpoint and satisfaction of caller restrictions when
   committed; Passive does not require an endpoint.
@@ -662,7 +663,7 @@ A. References
 
   [TSP‑0011] "Durable Inbound Delivery Items", TITH, 2026‑08‑20.
 
-  [TTS‑0003] "Common TLV Types", TITH, 2026‑08‑18.
+  [TTS‑0003] "Common TLV Types", TITH, 2026‑08‑20.
 
   [TTS‑0005] "Bundle Format", TITH, 2026‑08‑20.
 
@@ -685,5 +686,8 @@ B. History
    Rev.5, 2026‑08‑20: Removed pre‐commit routing results from durable
    copy policy and distinguished remote rejection policy kinds from
    the Rejected Job state.
+
+   Rev.6, 2026‑08‑20: Replaced address‐shape uses of listed and unlisted
+   with non‐anonymous and anonymous identity terminology.
 
 **********************************************************************

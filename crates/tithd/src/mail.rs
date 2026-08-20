@@ -534,9 +534,9 @@ fn poll_snapshot(
 		return Ok(Vec::new());
 	}
 	let origin = &request.bundle.origin;
-	// An unlisted Origin is only identified together with its PublicKey, so the
+	// An anonymous Origin is only identified together with its PublicKey, so the
 	// key is part of the match rather than the address alone.
-	let key = origin.address.is_unlisted().then_some(&origin.public_key);
+	let key = origin.address.is_anonymous().then_some(&origin.public_key);
 	Ok(mailer.store.outbound()?.claim_poll_snapshot(
 		&origin.address.to_string(),
 		key,
@@ -822,7 +822,7 @@ mod tests {
 				local.public_key.as_bytes(),
 				peer.public_key.as_bytes(),
 			)),
-			local_ref: IdentityRef::Listed(local.address.clone()),
+			local_ref: IdentityRef::Address(local.address.clone()),
 			local: local.clone(),
 			local_secret: Arc::new(local_keys.secret),
 			retired_secrets: Vec::new(),
@@ -1176,7 +1176,7 @@ mod tests {
 
 		let other_keys = SigningKeyPair::from_seed(&[43; 32]).unwrap();
 		let other = Identity {
-			address: Address::unlisted("p2p".to_owned()).unwrap(),
+			address: Address::anonymous("p2p".to_owned()).unwrap(),
 			public_key: other_keys.public,
 		};
 		let request = build_bundle(&peer, &peer_keys.secret, &other, 1, Vec::new()).unwrap();
@@ -1222,7 +1222,7 @@ mod tests {
 			application: "tosser".to_owned(),
 			configuration: Arc::new(ConfigurationSet::parse(peers, routes, "", "").unwrap()),
 			nodelist: Arc::clone(nodelist),
-			local_ref: IdentityRef::Listed(address.clone()),
+			local_ref: IdentityRef::Address(address.clone()),
 			local: Identity {
 				address,
 				public_key: keys.public,
