@@ -211,25 +211,62 @@ fn abandoned_claims(directory: &Path, older_than: Duration) -> io::Result<Vec<Pa
 
 /// Atomically takes exclusive ownership of a message.
 ///
-/// Exactly one racer can rename a given file away; the loser sees `NotFound`.
+/// The claim name is derived from the message name rather than random, because
+/// the gate is the claim already existing: exactly one racer can create it, and
+/// the losers see `AlreadyExists`.
+///
+/// A rename cannot be that gate. POSIX `rename(2)` is name based, so exactly one
+/// racer moves a given name away and the rest get `ENOENT`, but Rust's Windows
+/// `fs::rename` opens a handle to the path and then renames the file *object*
+/// through `SetFileInformationByHandle`. Eight racers there open eight handles
+/// to one file and every rename succeeds, so every racer believes it holds an
+/// exclusive claim. An exclusive create has the semantics we actually want and
+/// has them on both platforms.
 fn claim(path: &Path) -> io::Result<Option<PathBuf>> {
-	let mut suffix = [0_u8; 8];
-	random_bytes(&mut suffix).map_err(io::Error::other)?;
 	let name = path
 		.file_name()
 		.and_then(|name| name.to_str())
 		.ok_or_else(|| io::Error::other("message has no usable file name"))?;
-	let mut encoded = String::with_capacity(16);
-	for byte in suffix {
-		use std::fmt::Write as _;
-		write!(encoded, "{byte:02x}").expect("String writes cannot fail");
+	let target = path.with_file_name(format!("{name}{CLAIM_PREFIX}"));
+	match fs::hard_link(path, &target) {
+		Ok(()) => {
+			// The link is the claim. Dropping the original leaves exactly one
+			// name, and a crash between the two leaves both pointing at the same
+			// contents, which the next pass recovers rather than duplicates.
+			fs::remove_file(path)?;
+			return Ok(Some(target));
+		}
+		// Another scanner holds the claim, or took the message away entirely.
+		Err(error) if error.kind() == io::ErrorKind::AlreadyExists => return Ok(None),
+		Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+		// A filesystem without hard links still gets an exclusive create below.
+		Err(_) => {}
 	}
-	let target = path.with_file_name(format!("{name}{CLAIM_PREFIX}{encoded}"));
-	match fs::rename(path, &target) {
-		Ok(()) => Ok(Some(target)),
-		Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
-		Err(error) => Err(error),
-	}
+	let mut file = match fs::OpenOptions::new()
+		.create_new(true)
+		.write(true)
+		.open(&target)
+	{
+		Ok(file) => file,
+		Err(error) if error.kind() == io::ErrorKind::AlreadyExists => return Ok(None),
+		Err(error) => return Err(error),
+	};
+	// The name is reserved, so only this racer copies. If the message vanished
+	// first the reservation is released again rather than left behind empty.
+	let bytes = match fs::read(path) {
+		Ok(bytes) => bytes,
+		Err(error) if error.kind() == io::ErrorKind::NotFound => {
+			drop(file);
+			fs::remove_file(&target)?;
+			return Ok(None);
+		}
+		Err(error) => return Err(error),
+	};
+	io::Write::write_all(&mut file, &bytes)?;
+	file.sync_all()?;
+	drop(file);
+	fs::remove_file(path)?;
+	Ok(Some(target))
 }
 
 /// Publishes claimed bytes back under a `###.msg` name.
@@ -572,6 +609,37 @@ mod tests {
 			.collect();
 		// Numeric order, not lexical: 1 < 7 < 23, so "007.Msg" sits in the middle.
 		assert_eq!(found, ["1.msg", "007.Msg", "23.MSG"]);
+		fs::remove_dir_all(directory).expect("cleanup");
+	}
+
+	/// The gate must be the claim name already existing, not the message name
+	/// having moved. A rename is the second of those and is name based only on
+	/// POSIX, so this pins the property the Windows failure exposed.
+	#[test]
+	fn the_claim_name_is_the_gate() {
+		let directory = temp_dir("gate");
+		let path = directory.join("1.msg");
+		fs::write(&path, stored("1a2b3c4d", 0)).expect("fixture");
+
+		let claimed = claim(&path).expect("claim").expect("claimed");
+		assert_eq!(
+			claimed.file_name().unwrap().to_string_lossy(),
+			format!("1.msg{CLAIM_PREFIX}")
+		);
+		assert!(claimed.is_file());
+		assert!(!path.exists(), "the message keeps exactly one name");
+
+		// The claim exists, so a second racer loses even after the message is
+		// restored under its original name.
+		fs::write(&path, stored("1a2b3c4d", 0)).expect("restore");
+		assert!(claim(&path).expect("claim").is_none());
+		assert!(path.is_file(), "a losing racer leaves the message alone");
+
+		// A message another racer already took away is not an error either.
+		fs::remove_file(&path).expect("remove");
+		fs::remove_file(&claimed).expect("remove");
+		assert!(claim(&path).expect("claim").is_none());
+		assert!(!claimed.exists(), "a lost race reserves nothing");
 		fs::remove_dir_all(directory).expect("cleanup");
 	}
 

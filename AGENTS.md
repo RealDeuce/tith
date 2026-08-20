@@ -264,11 +264,13 @@ lengths and outstanding-response accounting cannot resolve.
   so the file stem of `argv[0]` may select the submit client directly; keep
   dispatch an exact match with no abbreviations or aliases.
   `tith netmail scan` is safe to run concurrently with itself and must stay
-  that way. It claims each message by an atomic rename, restores or publishes
-  through a create that fails when the name is taken, and never checks
-  existence before creating. It must not retire a legacy object before a
-  Committed result, and treats a duplicate submission as preferable to a lost
-  or corrupted message.
+  that way. Every gate is a create that fails when the name is taken — the
+  claim, the restore, and the publish alike — and it never checks existence
+  before creating. A rename cannot be one of those gates: POSIX `rename(2)` is
+  name based, but Rust's Windows `fs::rename` opens a handle and renames the
+  file object, so every racer succeeds and every racer believes it won. It must
+  not retire a legacy object before a Committed result, and treats a duplicate
+  submission as preferable to a lost or corrupted message.
   `tith bso scan` holds the same invariant through the `.bsy` lock, which is
   taken with an exclusive create and released on every exit path. It reads an
   outbound and submits from it; it never lays one down. It deletes a packet and
