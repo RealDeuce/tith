@@ -9,6 +9,15 @@
 //! Each platform gets its own mechanism rather than one getting nothing, which
 //! is why every function here is implemented twice instead of being skipped
 //! under a `cfg`.
+//!
+//! Both mechanisms need a filesystem which has one. FAT and exFAT have neither,
+//! and a network mount may have neither, so the state directory, the endpoint
+//! roots, the exports, and the key files all have to live somewhere which does.
+//! That is a real restriction and it is enforced rather than assumed: every
+//! function here reads back what it applied, because a filesystem without
+//! access control accepts the request and ignores it instead of refusing it.
+//! The legacy inbound and outbound directories, which are the ones an operator
+//! is likely to put on a share, are not restricted by anything here.
 
 use std::fs::File;
 use std::io;
@@ -24,10 +33,31 @@ pub fn create_file(path: &Path) -> io::Result<File> {
 /// The create fails when the file already exists, so a key is never replaced by
 /// accident.
 pub fn write_file(path: &Path, bytes: &[u8]) -> io::Result<()> {
+	write_verified(path, bytes, platform::check)
+}
+
+/// A filesystem with no access control of its own accepts the request and
+/// ignores it rather than refusing it — FAT and exFAT do, and so do some
+/// network mounts. Asking is therefore not the same as having asked
+/// successfully, and only a read back says which happened.
+///
+/// The written key is removed when it did not take. Reporting the failure while
+/// leaving an unprotected copy of a secret on disk would be the worst of both
+/// answers.
+fn write_verified(
+	path: &Path,
+	bytes: &[u8],
+	verify: impl Fn(&Path) -> io::Result<()>,
+) -> io::Result<()> {
 	use io::Write as _;
 	let mut file = create_file(path)?;
 	file.write_all(bytes)?;
 	file.sync_all()?;
+	drop(file);
+	if let Err(error) = verify(path) {
+		let _ = std::fs::remove_file(path);
+		return Err(error);
+	}
 	Ok(())
 }
 
@@ -44,7 +74,12 @@ pub fn read_file(path: &Path) -> io::Result<Vec<u8>> {
 /// needs it.
 pub fn create_directory(path: &Path) -> io::Result<()> {
 	std::fs::create_dir_all(path)?;
-	platform::restrict_directory(path)
+	platform::restrict_directory(path)?;
+	// Confirmed for the same reason `write_verified` confirms: a filesystem
+	// without access control ignores the request instead of refusing it, and a
+	// service which believes it restricted this directory would be wrong about
+	// every item it later puts here.
+	platform::check(path)
 }
 
 /// Leaves an existing file readable by its owner and writable by nobody.
@@ -55,7 +90,8 @@ pub fn create_directory(path: &Path) -> io::Result<()> {
 /// spelling grants the owner DELETE rather than setting the read-only attribute,
 /// which would make the service unable to clean up after itself.
 pub fn seal(path: &Path) -> io::Result<()> {
-	platform::seal_file(path)
+	platform::seal_file(path)?;
+	platform::check(path)
 }
 
 #[cfg(unix)]
@@ -202,6 +238,31 @@ mod tests {
 		let error = read_file(&ordinary).unwrap_err();
 		assert_eq!(error.kind(), io::ErrorKind::PermissionDenied, "{error}");
 
+		std::fs::remove_dir_all(root).unwrap();
+	}
+
+	/// A host which ignores the request rather than refusing it leaves a secret
+	/// on disk unprotected. No ordinary filesystem here does that, so the
+	/// verifier is supplied directly; the behaviour it guards is the reason the
+	/// check exists at all.
+	#[test]
+	fn a_key_the_host_did_not_protect_is_not_left_behind() {
+		let root = directory("unprotected");
+		let key = root.join("node.secret");
+		let refused = |_: &std::path::Path| {
+			Err(io::Error::new(
+				io::ErrorKind::PermissionDenied,
+				"this filesystem has no access control",
+			))
+		};
+		let error = super::write_verified(&key, b"secret bytes", refused).unwrap_err();
+		assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+		assert!(!key.exists(), "an unprotected key was left on disk");
+
+		// The name is free again, so a retry on a filesystem which does support
+		// it is not blocked by the exclusive create.
+		write_file(&key, b"secret bytes").unwrap();
+		assert_eq!(read_file(&key).unwrap(), b"secret bytes");
 		std::fs::remove_dir_all(root).unwrap();
 	}
 

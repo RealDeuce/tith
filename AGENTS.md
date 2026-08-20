@@ -308,6 +308,13 @@ lengths and outstanding-response accounting cannot resolve.
   Windows-only. A sealed export grants its owner DELETE rather than carrying the
   read-only attribute, because Windows will not delete a file which has one and
   the service must be able to clean up after itself.
+  Everything it protects therefore has to live on a filesystem which has access
+  control; FAT, exFAT, and some network mounts do not. It reads back what it
+  applied rather than trusting the call, because such a filesystem ignores the
+  request instead of refusing it, and a key written under one is removed rather
+  than left lying there unprotected. Do not extend it to the legacy inbound and
+  outbound directories: those are an operator's to place, commonly on a share,
+  and they hold no secret of ours.
   Its native mail listener accepts only operations whose wire grammar and
   durable behavior are implemented; unsupported work receives an explicit
   response rather than being discarded.
