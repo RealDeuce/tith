@@ -11,7 +11,7 @@
 //! peers share the address `p2p#-1`.
 
 use std::error::Error;
-use std::io;
+use std::io::{self, Read};
 use std::net::{Shutdown, TcpStream, ToSocketAddrs};
 use std::sync::Arc;
 use std::time::Duration;
@@ -19,15 +19,17 @@ use std::time::Duration;
 use tith_config::{ConfigurationSet, IdentityRef, Schedule};
 use tith_crypto::{PublicKey, SecretKey, TlvHash, hash_tlv};
 use tith_exchange::{
-	ClientSession, CompletedResponse, ExchangeIo, ResponseKind, ResponseTracker, SessionState,
-	send_bundle,
+	ClientSession, CompletedResponse, ExchangeError, ExchangeIo, ResponseKind, ResponseTracker,
+	SessionState, send_bundle,
 };
 use tith_nodelist::Nodelist;
 use tith_router::selector_matches;
 use tith_store::{
 	DeliveryClaim, DeliveryOutcome, DeliveryRecord, InboundStore, OutboundStore, StoreError,
 };
-use tith_wire::bundle::{Bundle, Identity, KeyResolver, build_bundle};
+use tith_wire::bundle::{
+	Bundle, BundleError, Identity, KeyResolver, build_bundle, build_public_key_probe,
+};
 use tith_wire::integer::encode_u64;
 use tith_wire::item::{
 	ItemKind, Rejection, RejectionReason, set_request_identifier, validate_payload,
@@ -64,7 +66,12 @@ pub struct Outbound {
 
 impl KeyResolver for Outbound {
 	fn public_key(&self, address: &tith_wire::address::Address) -> Option<PublicKey> {
-		self.nodelist.public_key(address)
+		let nodelist_key = self.nodelist.public_key(address);
+		self.inbound
+			.key_pins()
+			.resolve(&address.to_string(), nodelist_key)
+			.ok()
+			.flatten()
 	}
 }
 
@@ -203,9 +210,13 @@ impl Outbound {
 		let public_key = if peer.address.is_unlisted() {
 			peer.public_key.ok_or("unlisted Peer has no public key")?
 		} else {
-			self.nodelist
-				.public_key(&peer.address)
-				.ok_or("listed Peer has no nodelist key")?
+			match self.public_key(&peer.address) {
+				Some(key) => key,
+				None if peer.trust_on_first_use => {
+					self.discover_key(local, &peer.address, None, now)?
+				}
+				None => return Err("listed Peer has no trusted key".into()),
+			}
 		};
 		let destination = Identity {
 			address: peer.address.clone(),
@@ -229,12 +240,39 @@ impl Outbound {
 			&local.secret,
 			&destination,
 			now,
-			vec![polls],
+			vec![polls.clone()],
 		)?;
 		let bundle = Bundle::parse(&encoded, self)?;
 		let mut session = ClientSession::new(ResponseTracker::for_bundle(&bundle, self)?);
 		let mut stream = self.connect(&destination)?;
-		let exchange = self.converse(&mut stream, &encoded, &mut session, local, &destination)?;
+		let exchange = match self.converse(&mut stream, &encoded, &mut session, local, &destination)
+		{
+			Ok(exchange) => exchange,
+			Err(error) if !destination.address.is_unlisted() && is_signature_failure(&*error) => {
+				let key = self.discover_key(
+					local,
+					&destination.address,
+					Some(destination.public_key),
+					now,
+				)?;
+				let destination = Identity {
+					address: destination.address.clone(),
+					public_key: key,
+				};
+				let encoded = build_bundle(
+					&local.identity,
+					&local.secret,
+					&destination,
+					now,
+					vec![polls],
+				)?;
+				let bundle = Bundle::parse(&encoded, self)?;
+				let mut retry = ClientSession::new(ResponseTracker::for_bundle(&bundle, self)?);
+				let mut stream = self.connect(&destination)?;
+				self.converse(&mut stream, &encoded, &mut retry, local, &destination)?
+			}
+			Err(error) => return Err(error),
+		};
 		Ok(exchange.returned)
 	}
 
@@ -279,7 +317,13 @@ impl Outbound {
 			&& schedule.classes.iter().any(|class| class == &copy.class)
 			&& self.next_hop(copy).is_some_and(|identity| {
 				schedule.next_hops.iter().any(|selector| {
-					selector_matches(selector, &identity, &self.configuration, &self.nodelist)
+					selector_matches(
+						selector,
+						&identity,
+						&self.configuration,
+						&self.nodelist,
+						self,
+					)
 				})
 			})
 	}
@@ -299,7 +343,7 @@ impl Outbound {
 		let public_key = if address.is_unlisted() {
 			copy.next_hop_key?
 		} else {
-			self.nodelist.public_key(&address)?
+			self.public_key(&address)?
 		};
 		Some(Identity {
 			address,
@@ -311,10 +355,13 @@ impl Outbound {
 	///
 	/// A configured Peer's Endpoint lines take precedence in file order; a peer
 	/// with none falls back to the nodelist entry's usable TITH endpoints.
-	fn endpoints(&self, identity: &Identity) -> Vec<(String, u16)> {
+	fn endpoints_for(
+		&self,
+		address: &tith_wire::address::Address,
+		key: Option<PublicKey>,
+	) -> Vec<(String, u16)> {
 		let configured = self.configuration.peers.values().find(|peer| {
-			peer.address == identity.address
-				&& (!identity.address.is_unlisted() || peer.public_key == Some(identity.public_key))
+			peer.address == *address && (!address.is_unlisted() || peer.public_key == key)
 		});
 		if let Some(peer) = configured
 			&& !peer.endpoints.is_empty()
@@ -326,7 +373,7 @@ impl Outbound {
 				.collect();
 		}
 		self.nodelist
-			.get(&identity.address)
+			.get(address)
 			.and_then(|entry| entry.tith.as_ref())
 			.map(|service| {
 				service
@@ -338,6 +385,68 @@ impl Outbound {
 					.collect()
 			})
 			.unwrap_or_default()
+	}
+
+	fn discover_key(
+		&self,
+		local: &LocalIdentity,
+		address: &tith_wire::address::Address,
+		expected: Option<PublicKey>,
+		now: u64,
+	) -> Result<PublicKey, Box<dyn Error>> {
+		if address.is_unlisted() {
+			return Err("PublicKeyRequest is only used for listed addresses".into());
+		}
+		if expected.is_none()
+			&& !self
+				.configuration
+				.peers
+				.values()
+				.any(|peer| peer.address == *address && peer.trust_on_first_use)
+		{
+			return Err("first-contact key discovery is not trusted for this Peer".into());
+		}
+		let request =
+			build_public_key_probe(&local.identity, &local.secret, address, expected, now, 1)?;
+		let request_values = parse_sequence(&request)?;
+		let response_to = hash_tlv(
+			&request_values
+				.last()
+				.ok_or("key probe has no payload")?
+				.encode(),
+		)?;
+		let mut stream = self.connect_address(address, expected)?;
+		let mut io = StreamIo(stream.try_clone()?);
+		send_bundle(&mut io, &request, false)?;
+		let mut response = Vec::new();
+		stream.read_to_end(&mut response)?;
+		let reply = Bundle::parse_public_key_reply(&response, self, expected)?;
+		if reply.origin.address != *address || reply.destination != local.identity {
+			return Err("PublicKeyRequest reply has the wrong identities".into());
+		}
+		let item = validate_payload(&reply.payloads[0], self)?
+			.into_iter()
+			.next()
+			.ok_or("PublicKeyRequest reply has no Accepted value")?;
+		if item.request_identifier != 1 || item.response_to != Some(response_to) {
+			return Err("PublicKeyRequest reply answers a different request".into());
+		}
+		let current = item
+			.response_public_key
+			.ok_or("PublicKeyRequest reply has no current key")?;
+		let pins = self.inbound.key_pins();
+		let accepted = if let Some(predecessor) = expected {
+			pins.advance(
+				&address.to_string(),
+				predecessor,
+				current,
+				self.nodelist.public_key(address),
+				now,
+			)?
+		} else {
+			pins.trust_on_first_use(&address.to_string(), current, now)?
+		};
+		Ok(accepted.current)
 	}
 
 	/// Sends one group and records an outcome for every copy in it.
@@ -425,18 +534,55 @@ impl Outbound {
 		} else {
 			vec![items]
 		};
-		let encoded = build_bundle(&local.identity, &local.secret, &destination, now, payloads)?;
+		let encoded = build_bundle(
+			&local.identity,
+			&local.secret,
+			&destination,
+			now,
+			payloads.clone(),
+		)?;
 		let bundle = Bundle::parse(&encoded, self)?;
 		let tracker = ResponseTracker::for_bundle(&bundle, self)?;
 		let mut session = ClientSession::new(tracker);
 		let mut stream = self.connect(&destination)?;
-		let exchange = self.converse(&mut stream, &encoded, &mut session, local, &destination)?;
+		let exchange = match self.converse(&mut stream, &encoded, &mut session, local, &destination)
+		{
+			Ok(exchange) => exchange,
+			Err(error) if !destination.address.is_unlisted() && is_signature_failure(&*error) => {
+				let key = self.discover_key(
+					local,
+					&destination.address,
+					Some(destination.public_key),
+					now,
+				)?;
+				let destination = Identity {
+					address: destination.address.clone(),
+					public_key: key,
+				};
+				let encoded =
+					build_bundle(&local.identity, &local.secret, &destination, now, payloads)?;
+				let bundle = Bundle::parse(&encoded, self)?;
+				let tracker = ResponseTracker::for_bundle(&bundle, self)?;
+				let mut retry = ClientSession::new(tracker);
+				let mut stream = self.connect(&destination)?;
+				self.converse(&mut stream, &encoded, &mut retry, local, &destination)?
+			}
+			Err(error) => return Err(error),
+		};
 		let sent: Vec<usize> = ordered.into_iter().map(|(index, _)| index).collect();
 		Ok(Self::outcomes(&sent, &exchange.responses, next_attempt))
 	}
 
 	fn connect(&self, destination: &Identity) -> Result<TcpStream, Box<dyn Error>> {
-		let endpoints = self.endpoints(destination);
+		self.connect_address(&destination.address, Some(destination.public_key))
+	}
+
+	fn connect_address(
+		&self,
+		address: &tith_wire::address::Address,
+		key: Option<PublicKey>,
+	) -> Result<TcpStream, Box<dyn Error>> {
+		let endpoints = self.endpoints_for(address, key);
 		if endpoints.is_empty() {
 			return Err("next hop has no usable endpoint".into());
 		}
@@ -598,6 +744,19 @@ impl Outbound {
 		}
 		outcomes
 	}
+}
+
+fn is_signature_failure(error: &(dyn Error + 'static)) -> bool {
+	if matches!(
+		error.downcast_ref::<BundleError>(),
+		Some(BundleError::InvalidSignature)
+	) {
+		return true;
+	}
+	matches!(
+		error.downcast_ref::<ExchangeError>(),
+		Some(ExchangeError::Bundle(BundleError::InvalidSignature))
+	)
 }
 
 /// The TSP-0002 section 6 rule for one completed response.

@@ -13,7 +13,8 @@ use tith_nodelist::Nodelist;
 use tith_store::{DeliveryClaim, DeliveryOutcome, InboundStore, JobKind, OutboundStore};
 use tith_wire::address::Address;
 use tith_wire::bundle::{
-	BundleError, Identity, KeyResolver, unauthenticated_signed_data, verify_signed_tlv,
+	Bundle, BundleError, Identity, KeyResolver, build_public_key_reply,
+	unauthenticated_signed_data, verify_signed_tlv,
 };
 
 use crate::accept::Acceptance;
@@ -43,6 +44,7 @@ pub struct LocalNode {
 	pub reference: IdentityRef,
 	pub identity: Identity,
 	pub secret: SecretKey,
+	pub retired_secrets: Vec<SecretKey>,
 }
 
 /// How outbound delivery behaves for this node.
@@ -73,6 +75,11 @@ pub fn serve(
 	let configuration = Arc::new(configuration);
 	let nodelist = Arc::new(nodelist);
 	let secret = Arc::new(local_node.secret);
+	let retired_secrets = local_node
+		.retired_secrets
+		.into_iter()
+		.map(Arc::new)
+		.collect();
 	if outbound.enabled {
 		start_outbound(
 			&store,
@@ -93,6 +100,7 @@ pub fn serve(
 		local_ref: local_node.reference,
 		local: local_node.identity,
 		local_secret: secret,
+		retired_secrets,
 	});
 	for connection in listener.incoming() {
 		match connection {
@@ -118,6 +126,7 @@ struct Mailer {
 	local_ref: IdentityRef,
 	local: Identity,
 	local_secret: Arc<SecretKey>,
+	retired_secrets: Vec<Arc<SecretKey>>,
 }
 
 impl Mailer {
@@ -135,7 +144,15 @@ impl Mailer {
 
 impl KeyResolver for Mailer {
 	fn public_key(&self, address: &Address) -> Option<tith_crypto::PublicKey> {
-		self.nodelist.public_key(address)
+		if address == &self.local.address {
+			return Some(self.local.public_key);
+		}
+		let nodelist_key = self.nodelist.public_key(address);
+		self.store
+			.key_pins()
+			.resolve(&address.to_string(), nodelist_key)
+			.ok()
+			.flatten()
 	}
 }
 
@@ -250,6 +267,33 @@ fn transaction(stream: TcpStream, mailer: &Mailer) -> Result<(), Box<dyn Error>>
 	let mut writer = stream.try_clone()?;
 	let mut reader = TlvReader::new(stream);
 	let request = read_header(&mut reader, None, mailer)?.ok_or("empty mail connection")?;
+	let first = reader
+		.read_next()?
+		.map(tith_wire::tlv::TlvValue::read_owned)
+		.transpose()?;
+	if let Some(value) = first.as_ref()
+		&& value.type_code == types::SIGNED_TLV
+		&& unauthenticated_signed_data(value).is_ok_and(|data| {
+			data.len() == 2
+				&& data[0].type_code == types::TLV_HASH
+				&& data[1].type_code == types::PUBLIC_KEY_REQUEST
+		}) {
+		let mut encoded = request.prefix.clone();
+		encoded.extend_from_slice(&value.encode());
+		let probe = Bundle::parse(&encoded, mailer)?;
+		if let Some((request_identifier, response_to)) = probe.public_key_request()? {
+			if reader.read_next()?.is_some() {
+				return Err("PublicKeyRequest must be the sole request in its Bundle".into());
+			}
+			return answer_public_key_request(
+				&mut writer,
+				&request,
+				request_identifier,
+				response_to,
+				mailer,
+			);
+		}
+	}
 	let reply =
 		ServerReply::for_request(&request.bundle, &mailer.local, &mailer.local_secret, now())?;
 	writer.write_all(reply.prefix())?;
@@ -263,12 +307,47 @@ fn transaction(stream: TcpStream, mailer: &Mailer) -> Result<(), Box<dyn Error>>
 		&reply,
 		mailer,
 		&mut holds,
+		first,
 	);
 	// Whatever happened, every copy this connection claimed needs an outcome.
 	// TSP-0002 section 6: a request with no complete response remains eligible
 	// and does not invoke permanent failure policy.
 	release_holds(&holds, mailer)?;
 	result?;
+	writer.shutdown(Shutdown::Write)?;
+	Ok(())
+}
+
+fn answer_public_key_request(
+	writer: &mut TcpStream,
+	request: &IncomingBundle,
+	request_identifier: u64,
+	response_to: TlvHash,
+	mailer: &Mailer,
+) -> Result<(), Box<dyn Error>> {
+	if request.bundle.destination.address != mailer.local.address {
+		return Err("PublicKeyRequest names a different local address".into());
+	}
+	let requested = request.bundle.destination.public_key;
+	let signing_secret = std::iter::once(&mailer.local_secret)
+		.chain(mailer.retired_secrets.iter())
+		.find(|secret| secret.public_key() == requested)
+		.ok_or("PublicKeyRequest names an unavailable predecessor key")?;
+	let signing_origin = Identity {
+		address: mailer.local.address.clone(),
+		public_key: requested,
+	};
+	let encoded = build_public_key_reply(
+		&signing_origin,
+		signing_secret,
+		&request.bundle.origin,
+		now(),
+		request_identifier,
+		response_to,
+		mailer.local_secret.public_key(),
+	)?;
+	writer.write_all(&encoded)?;
+	writer.flush()?;
 	writer.shutdown(Shutdown::Write)?;
 	Ok(())
 }
@@ -280,9 +359,17 @@ fn respond(
 	reply: &ServerReply,
 	mailer: &Mailer,
 	holds: &mut Vec<PollHold>,
+	mut first: Option<OwnedTlv>,
 ) -> Result<(), Box<dyn Error>> {
-	while let Some(value) = reader.read_next()? {
-		let value = value.read_owned()?;
+	loop {
+		let value = if let Some(value) = first.take() {
+			value
+		} else {
+			let Some(value) = reader.read_next()? else {
+				break;
+			};
+			value.read_owned()?
+		};
 		match value.type_code {
 			types::SIGNED_TLV => {
 				let first_hold = holds.len();
@@ -731,6 +818,7 @@ mod tests {
 			local_ref: IdentityRef::Listed(local.address.clone()),
 			local: local.clone(),
 			local_secret: Arc::new(local_keys.secret),
+			retired_secrets: Vec::new(),
 		});
 		(mailer, peer_keys, peer, local, database)
 	}
@@ -754,6 +842,37 @@ mod tests {
 	fn response_kind(response: &[u8], mailer: &Mailer) -> ItemKind {
 		let reply = Bundle::parse(response, mailer).unwrap();
 		validate_payload(&reply.payloads[0], mailer).unwrap()[0].kind
+	}
+
+	#[test]
+	fn retired_secret_certifies_the_current_key_for_a_dedicated_probe() {
+		let (mut mailer, peer_keys, peer, local, database) = setup();
+		let retired = SigningKeyPair::from_seed(&[44; 32]).unwrap();
+		let retired_public = retired.public;
+		Arc::get_mut(&mut mailer)
+			.unwrap()
+			.retired_secrets
+			.push(Arc::new(retired.secret));
+		let request = tith_wire::bundle::build_public_key_probe(
+			&peer,
+			&peer_keys.secret,
+			&local.address,
+			Some(retired_public),
+			1,
+			1,
+		)
+		.unwrap();
+		let (response, completed) = exchange(&request, &mailer);
+		assert!(completed);
+		let reply =
+			Bundle::parse_public_key_reply(&response, mailer.as_ref(), Some(retired_public))
+				.unwrap();
+		let accepted = validate_payload(&reply.payloads[0], mailer.as_ref())
+			.unwrap()
+			.remove(0);
+		assert_eq!(accepted.response_public_key, Some(local.public_key));
+		drop(mailer);
+		fs::remove_file(database).unwrap();
 	}
 
 	fn rejected_reason(response: &[u8], mailer: &Mailer) -> u64 {
@@ -1102,6 +1221,7 @@ mod tests {
 				public_key: keys.public,
 			},
 			local_secret: Arc::new(keys.secret),
+			retired_secrets: Vec::new(),
 		});
 		Node { mailer, database }
 	}
@@ -1256,6 +1376,127 @@ mod tests {
 		let stored = stored_item(&receiver, "check").expect("the peer stored the NetMail");
 		let values = parse_sequence(&stored).unwrap();
 		assert_eq!(values[0].type_code, types::MESSAGE);
+	}
+
+	#[test]
+	fn authentication_failure_probes_the_predecessor_and_retries_once() {
+		let sender_keys = SigningKeyPair::from_seed(&[53; 32]).unwrap();
+		let retired = SigningKeyPair::from_seed(&[54; 32]).unwrap();
+		let retired_public = retired.public;
+		let receiver_keys = SigningKeyPair::from_seed(&[55; 32]).unwrap();
+		let receiver_public = receiver_keys.public;
+		let list = Arc::new(nodelist(
+			sender_keys.public.as_bytes(),
+			retired_public.as_bytes(),
+		));
+		let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+		let port = listener.local_addr().unwrap().port();
+
+		let mut receiver = node(
+			"rotate-receiver",
+			"fidonet#1/2",
+			receiver_keys,
+			"Peer sender\nAddress fidonet#1\nEnd\n",
+			"Routes fidonet#1/2\nEnd\n",
+			&list,
+		);
+		Arc::get_mut(&mut receiver.mailer)
+			.unwrap()
+			.retired_secrets
+			.push(Arc::new(retired.secret));
+		let server = accept(listener, &receiver.mailer, 3);
+
+		let sender = node(
+			"rotate-sender",
+			"fidonet#1",
+			sender_keys,
+			&format!("Peer remote\nAddress fidonet#1/2\nEndpoint 127.0.0.1 {port}\nEnd\n"),
+			"Routes fidonet#1\nEnd\n",
+			&list,
+		);
+		let job = submit(&sender, "fidonet#1/2", "Active \"@remote\"", "rotated");
+		let summary = driver(&sender)
+			.run_pass(
+				&schedule(&sender.mailer.local_ref, Vec::new()),
+				now(),
+				now() + 3600,
+			)
+			.unwrap();
+		server.join().unwrap();
+
+		assert_eq!(summary.delivered, 1);
+		assert_eq!(job_state(&sender, &job), tith_store::JobState::Delivered);
+		assert_eq!(
+			sender
+				.mailer
+				.store
+				.key_pins()
+				.resolve("fidonet#1/2", Some(retired_public))
+				.unwrap(),
+			Some(receiver_public)
+		);
+	}
+
+	#[test]
+	fn trusted_first_contact_pins_then_routes_operational_mail() {
+		let sender_keys = SigningKeyPair::from_seed(&[56; 32]).unwrap();
+		let receiver_keys = SigningKeyPair::from_seed(&[57; 32]).unwrap();
+		let receiver_public = receiver_keys.public;
+		let list = Arc::new(
+			Nodelist::parse(
+				"fidonet",
+				&format!(
+					"Zone\t1\tNode\tLocation\tSysop\t\tCM\t\tIIH:sender.example:24555:{}\t\t\n",
+					STANDARD_NO_PAD.encode(sender_keys.public.as_bytes())
+				),
+			)
+			.unwrap(),
+		);
+		let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+		let port = listener.local_addr().unwrap().port();
+		let receiver = node(
+			"tofu-receiver",
+			"fidonet#1/2",
+			receiver_keys,
+			"Peer sender\nAddress fidonet#1\nEnd\n",
+			"Routes fidonet#1/2\nEnd\n",
+			&list,
+		);
+		let server = accept(listener, &receiver.mailer, 3);
+		let sender = node(
+			"tofu-sender",
+			"fidonet#1",
+			sender_keys,
+			&format!(
+				"Peer remote\nAddress fidonet#1/2\nEndpoint 127.0.0.1 {port}\nTrust-On-First-Use\nEnd\n"
+			),
+			"Routes fidonet#1\nRoute All Using Via @remote\nEnd\n",
+			&list,
+		);
+		let polling = schedule(&sender.mailer.local_ref, vec!["remote".to_owned()]);
+		let poll = driver(&sender).run_polls(&polling, now());
+		assert_eq!(poll.failed, 0);
+		assert_eq!(
+			sender
+				.mailer
+				.store
+				.key_pins()
+				.resolve("fidonet#1/2", None)
+				.unwrap(),
+			Some(receiver_public)
+		);
+
+		let job = submit(&sender, "fidonet#1/2", "Route", "after-tofu");
+		let sent = driver(&sender)
+			.run_pass(
+				&schedule(&sender.mailer.local_ref, Vec::new()),
+				now(),
+				now() + 60,
+			)
+			.unwrap();
+		server.join().unwrap();
+		assert_eq!(sent.delivered, 1);
+		assert_eq!(job_state(&sender, &job), tith_store::JobState::Delivered);
 	}
 
 	/// A three node line: mail transits the middle node without an application.

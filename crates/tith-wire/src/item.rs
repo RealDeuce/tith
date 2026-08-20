@@ -23,6 +23,7 @@ pub enum ItemKind {
 	PollMessages,
 	PollFiles,
 	PollFileRequests,
+	PublicKeyRequest,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -55,6 +56,8 @@ pub struct ValidatedItem {
 	pub duplicate_identity: Option<SignedItemIdentity>,
 	pub authentication: Option<ItemAuthentication>,
 	pub response_to: Option<TlvHash>,
+	/// The current key certified by an Accepted `PublicKeyRequest`.
+	pub response_public_key: Option<PublicKey>,
 	/// Present only for a Rejected response.
 	pub rejection: Option<Rejection>,
 	pub provenance: Option<ItemProvenance>,
@@ -113,6 +116,15 @@ pub struct AttachmentData {
 /// and this crate may not depend on them.
 pub const LEGACY_ATTRIBUTE_FILE_ATTACHED: u64 = 1 << 4;
 
+/// The FTS-0001.016 `AttributeWord` bits which survive packet carriage and
+/// therefore have a stable signed meaning after legacy normalization.
+///
+/// `FileAttached` (bit 4) is represented by `File` children. The other bits
+/// which FTS-0001 permits software to change before or after packeting are
+/// legacy bookkeeping or transport controls rather than Message data.
+pub const LEGACY_ATTRIBUTES_SIGNED_MASK: u64 =
+	(1 << 0) | (1 << 1) | (1 << 12) | (1 << 13) | (1 << 14);
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MessageData {
 	pub destination: Option<Identity>,
@@ -151,7 +163,7 @@ pub struct StandaloneFileData {
 }
 
 pub fn build_originated_message(
-	data: MessageData,
+	data: &MessageData,
 	provenance: &ItemProvenance,
 	secret: &SecretKey,
 	request_identifier: u64,
@@ -163,6 +175,71 @@ pub fn build_originated_message(
 		.signer
 		.as_ref()
 		.ok_or(BundleError::Missing("Message signing identity"))?;
+	validate_originated_message_data(data)?;
+	let mut signed = message_signed_children(data, provenance)?;
+	let signature = sign_tlv(&concatenate(&signed), secret)?;
+	signed.push(OwnedTlv::new(
+		types::SIGNATURE,
+		signature.as_bytes().to_vec(),
+	)?);
+	finish_message(
+		data,
+		signed,
+		&MessageSuffix {
+			existing_vias: &[],
+			local_via: effective_signer,
+			request_identifier,
+			via_timestamp,
+			software,
+			seen_by,
+		},
+	)
+}
+
+pub struct MessageSuffix<'a> {
+	pub existing_vias: &'a [ViaData],
+	pub local_via: &'a Identity,
+	pub request_identifier: u64,
+	pub via_timestamp: u64,
+	pub software: &'a str,
+	pub seen_by: &'a [Address],
+}
+
+/// Reconstructs a Message carrying an already authenticated end-to-end
+/// Signature, while replacing only its unsigned delivery suffix.
+///
+/// The signature is verified before any item is returned. `existing_vias` and
+/// `seen_by` are current unsigned legacy state; `local_via` is appended for the
+/// adapter which is committing the reconstructed item.
+pub fn build_retained_message(
+	data: &MessageData,
+	provenance: &ItemProvenance,
+	signature: Signature,
+	suffix: &MessageSuffix<'_>,
+) -> Result<OwnedTlv, BundleError> {
+	let effective_signer = provenance
+		.signer
+		.as_ref()
+		.ok_or(BundleError::Missing("Message signing identity"))?;
+	validate_originated_message_data(data)?;
+	let mut signed = message_signed_children(data, provenance)?;
+	if !verify_tlv(
+		&concatenate(&signed),
+		&signature,
+		&effective_signer.public_key,
+	)? {
+		return Err(BundleError::Unexpected(
+			"retained Message Signature does not verify",
+		));
+	}
+	signed.push(OwnedTlv::new(
+		types::SIGNATURE,
+		signature.as_bytes().to_vec(),
+	)?);
+	finish_message(data, signed, suffix)
+}
+
+fn validate_originated_message_data(data: &MessageData) -> Result<(), BundleError> {
 	if data.destination.is_some() == data.area.is_some() {
 		return Err(BundleError::Unexpected(
 			"Message Destination/Area combination",
@@ -188,6 +265,14 @@ pub fn build_originated_message(
 			"LegacyAttributes bit 4, which the File children carry",
 		));
 	}
+	if data
+		.legacy_attributes
+		.is_some_and(|value| value & !LEGACY_ATTRIBUTES_SIGNED_MASK != 0)
+	{
+		return Err(BundleError::Unexpected(
+			"non-persistent LegacyAttributes bits",
+		));
+	}
 	// TTS-0005 section 3 type 64: TearLine and OriginLine are EchoMail control
 	// information, so NetMail carries neither. A legacy NetMail which does carry
 	// such a line carries it as message text.
@@ -206,6 +291,13 @@ pub fn build_originated_message(
 			"a MessageText whose final paragraph is unterminated",
 		));
 	}
+	Ok(())
+}
+
+fn message_signed_children(
+	data: &MessageData,
+	provenance: &ItemProvenance,
+) -> Result<Vec<OwnedTlv>, BundleError> {
 	let mut signed = Vec::new();
 	push_provenance(&mut signed, provenance)?;
 	if let Some(destination) = &data.destination {
@@ -213,18 +305,18 @@ pub fn build_originated_message(
 	}
 	signed.extend([
 		OwnedTlv::new(types::TIMESTAMP, crate::integer::encode_u64(data.timestamp))?,
-		OwnedTlv::new(types::TO_USER_NAME, data.to_user.into_bytes())?,
-		OwnedTlv::new(types::FROM_USER_NAME, data.from_user.into_bytes())?,
-		OwnedTlv::new(types::SUBJECT, data.subject.into_bytes())?,
-		OwnedTlv::new(types::MESSAGE_TEXT, data.text.into_bytes())?,
+		OwnedTlv::new(types::TO_USER_NAME, data.to_user.as_bytes().to_vec())?,
+		OwnedTlv::new(types::FROM_USER_NAME, data.from_user.as_bytes().to_vec())?,
+		OwnedTlv::new(types::SUBJECT, data.subject.as_bytes().to_vec())?,
+		OwnedTlv::new(types::MESSAGE_TEXT, data.text.as_bytes().to_vec())?,
 	]);
-	if let Some(area) = data.area {
-		signed.push(area_value(&area)?);
+	if let Some(area) = &data.area {
+		signed.push(area_value(area)?);
 	}
-	for attachment in data.attachments {
+	for attachment in &data.attachments {
 		let mut children = vec![OwnedTlv::new(
 			types::FILENAME,
-			attachment.filename.into_bytes(),
+			attachment.filename.as_bytes().to_vec(),
 		)?];
 		if let Some(timestamp) = attachment.timestamp {
 			children.push(OwnedTlv::new(
@@ -232,7 +324,7 @@ pub fn build_originated_message(
 				crate::integer::encode_u64(timestamp),
 			)?);
 		}
-		children.push(OwnedTlv::new(types::CONTENTS, attachment.contents)?);
+		children.push(OwnedTlv::new(types::CONTENTS, attachment.contents.clone())?);
 		signed.push(OwnedTlv::new(types::FILE, concatenate(&children))?);
 	}
 	if let Some(value) = data.legacy_attributes {
@@ -248,38 +340,63 @@ pub fn build_originated_message(
 		)?);
 	}
 	for (type_code, value) in [
-		(types::TEAR_LINE, data.tear_line),
-		(types::ORIGIN_LINE, data.origin_line),
-		(types::MESSAGE_ID, data.message_id),
+		(types::TEAR_LINE, data.tear_line.as_ref()),
+		(types::ORIGIN_LINE, data.origin_line.as_ref()),
+		(types::MESSAGE_ID, data.message_id.as_ref()),
 	] {
 		if let Some(value) = value {
-			signed.push(OwnedTlv::new(type_code, value.into_bytes())?);
+			signed.push(OwnedTlv::new(type_code, value.as_bytes().to_vec())?);
 		}
 	}
-	if let Some((address, identifier)) = data.reply_to {
+	if let Some((address, identifier)) = &data.reply_to {
 		let mut value = OwnedTlv::new(types::ADDRESS, address.to_string().into_bytes())?.encode();
 		value.extend_from_slice(identifier.as_bytes());
 		signed.push(OwnedTlv::new(types::REPLY_TO, value)?);
 	}
-	let signature = sign_tlv(&concatenate(&signed), secret)?;
-	signed.push(OwnedTlv::new(
-		types::SIGNATURE,
-		signature.as_bytes().to_vec(),
-	)?);
+	Ok(signed)
+}
+
+fn finish_message(
+	data: &MessageData,
+	mut signed: Vec<OwnedTlv>,
+	suffix: &MessageSuffix<'_>,
+) -> Result<OwnedTlv, BundleError> {
 	signed.push(OwnedTlv::new(
 		types::REQUEST_IDENTIFIER,
-		crate::integer::encode_u64(request_identifier),
+		crate::integer::encode_u64(suffix.request_identifier),
 	)?);
-	signed.push(via_value(effective_signer, via_timestamp, software)?);
+	for via in suffix.existing_vias {
+		let public_key = if via.address.is_unlisted() {
+			Some(
+				via.public_key
+					.ok_or(BundleError::Missing("unlisted Via PublicKey"))?,
+			)
+		} else {
+			if via.public_key.is_some() {
+				return Err(BundleError::Unexpected("listed Via PublicKey"));
+			}
+			None
+		};
+		let identity = Identity {
+			address: via.address.clone(),
+			public_key: public_key.unwrap_or(suffix.local_via.public_key),
+		};
+		signed.push(via_value(&identity, via.timestamp, &via.software)?);
+	}
+	signed.push(via_value(
+		suffix.local_via,
+		suffix.via_timestamp,
+		suffix.software,
+	)?);
 	// TTS-0005 section 3 type 64 makes Message SeenBy an optional singleton,
 	// and type 112 makes its value one Trimmed Collection. A File repeats it.
-	if let Some(value) = seen_by_value(seen_by)? {
+	if let Some(value) = seen_by_value(suffix.seen_by)? {
 		signed.push(value);
 	}
-	for value in data.additional_kludge_lines {
+	for value in &data.additional_kludge_lines {
 		signed.push(OwnedTlv::new(
 			types::ADDITIONAL_KLUDGE_LINE,
-			value.into_bytes(),
+			value.as_bytes().to_vec(),
 		)?);
 	}
 	OwnedTlv::new(types::MESSAGE, concatenate(&signed)).map_err(Into::into)
@@ -967,6 +1084,7 @@ fn validate_message(
 		duplicate_identity,
 		authentication: Some(authentication),
 		response_to: None,
+		response_public_key: None,
 		rejection: None,
 		provenance: Some(provenance),
 		destination,
@@ -1113,6 +1231,7 @@ fn validate_file(
 		),
 		authentication,
 		response_to: None,
+		response_public_key: None,
 		rejection: None,
 		provenance,
 		destination: None,
@@ -1137,6 +1256,7 @@ fn simple_request(value: &OwnedTlv, kind: ItemKind) -> Result<ValidatedItem, Bun
 		duplicate_identity: None,
 		authentication: None,
 		response_to: None,
+		response_public_key: None,
 		rejection: None,
 		provenance: None,
 		destination: None,
@@ -1168,6 +1288,7 @@ fn validate_file_request(value: &OwnedTlv) -> Result<ValidatedItem, BundleError>
 		duplicate_identity: None,
 		authentication: Some(ItemAuthentication::Transport),
 		response_to: None,
+		response_public_key: None,
 		rejection: None,
 		provenance: None,
 		destination: None,
@@ -1198,6 +1319,10 @@ fn validate_response(value: &OwnedTlv, accepted: bool) -> Result<ValidatedItem, 
 				.try_into()
 				.expect("length checked above"),
 		);
+		let response_public_key = cursor
+			.optional(types::PUBLIC_KEY)
+			.map(|(_, value)| parse_public_key(value))
+			.transpose()?;
 		cursor.finish()?;
 		return Ok(ValidatedItem {
 			kind: ItemKind::Accepted,
@@ -1205,6 +1330,7 @@ fn validate_response(value: &OwnedTlv, accepted: bool) -> Result<ValidatedItem, 
 			duplicate_identity: None,
 			authentication: None,
 			response_to: Some(response_to),
+			response_public_key,
 			rejection: None,
 			provenance: None,
 			destination: None,
@@ -1251,6 +1377,7 @@ fn validate_response(value: &OwnedTlv, accepted: bool) -> Result<ValidatedItem, 
 		duplicate_identity: None,
 		authentication: None,
 		response_to: Some(response_to),
+		response_public_key: None,
 		rejection: Some(Rejection {
 			reason,
 			retry_after,
@@ -1289,6 +1416,33 @@ pub fn accepted(request_identifier: u64, response_to: TlvHash) -> Result<OwnedTl
 		OwnedTlv::new(types::TLV_HASH, response_to.as_bytes().to_vec())?,
 	];
 	OwnedTlv::new(types::ACCEPTED, encoded_prefix(&children, children.len())).map_err(Into::into)
+}
+
+/// Builds an Accepted response which certifies the server's current key for a
+/// `PublicKeyRequest`. The enclosing payload `SignedTLV` authenticates the key.
+pub fn accepted_public_key(
+	request_identifier: u64,
+	response_to: TlvHash,
+	public_key: PublicKey,
+) -> Result<OwnedTlv, BundleError> {
+	let children = [
+		OwnedTlv::new(
+			types::REQUEST_IDENTIFIER,
+			crate::integer::encode_u64(request_identifier),
+		)?,
+		OwnedTlv::new(types::TLV_HASH, response_to.as_bytes().to_vec())?,
+		OwnedTlv::new(types::PUBLIC_KEY, public_key.as_bytes().to_vec())?,
+	];
+	OwnedTlv::new(types::ACCEPTED, encoded_prefix(&children, children.len())).map_err(Into::into)
+}
+
+/// Builds the sole request in a native public-key discovery probe.
+pub fn public_key_request(request_identifier: u64) -> Result<OwnedTlv, BundleError> {
+	let child = OwnedTlv::new(
+		types::REQUEST_IDENTIFIER,
+		crate::integer::encode_u64(request_identifier),
+	)?;
+	OwnedTlv::new(types::PUBLIC_KEY_REQUEST, child.encode()).map_err(Into::into)
 }
 
 pub fn rejected(
@@ -1382,6 +1536,42 @@ pub struct ReadMessage {
 	pub request_identifier: u64,
 	pub vias: Vec<ViaData>,
 	pub seen_by: Vec<Address>,
+}
+
+/// An ordered, lossless native Message representation.
+///
+/// `ReadMessage` is the convenient semantic view used at the legacy boundary;
+/// this model owns every encoded child, including unknown extensions and their
+/// position. A well-formed native Message can therefore pass through the data
+/// model without changing either its signed or unsigned serialization.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MessageModel {
+	children: Vec<OwnedTlv>,
+}
+
+impl MessageModel {
+	/// Parses and structurally validates a Message while retaining every child.
+	pub fn parse(value: &OwnedTlv, resolver: &impl KeyResolver) -> Result<Self, BundleError> {
+		validate_message(value, resolver)?;
+		Ok(Self {
+			children: parse_sequence(&value.value)?,
+		})
+	}
+
+	#[must_use]
+	pub fn children(&self) -> &[OwnedTlv] {
+		&self.children
+	}
+
+	/// Re-encodes the exact ordered child model as one Message.
+	#[must_use]
+	pub fn to_tlv(&self) -> OwnedTlv {
+		OwnedTlv::new(
+			types::MESSAGE,
+			encoded_prefix(&self.children, self.children.len()),
+		)
+		.expect("already parsed Message children remain representable")
+	}
 }
 
 /// A standalone File decomposed the same way.
@@ -1731,6 +1921,7 @@ pub fn validate_item(
 		types::POLL_MESSAGES => simple_request(value, ItemKind::PollMessages).map(Some),
 		types::POLL_FILES => simple_request(value, ItemKind::PollFiles).map(Some),
 		types::POLL_FILE_REQUESTS => simple_request(value, ItemKind::PollFileRequests).map(Some),
+		types::PUBLIC_KEY_REQUEST => simple_request(value, ItemKind::PublicKeyRequest).map(Some),
 		_ => Ok(None),
 	}
 }
@@ -1951,7 +2142,7 @@ mod tests {
 			public_key: destination_keys.public,
 		};
 		let message = build_originated_message(
-			MessageData {
+			&MessageData {
 				destination: Some(destination.clone()),
 				timestamp: 1,
 				to_user: "You".to_owned(),
@@ -2003,7 +2194,7 @@ mod tests {
 			public_key: destination_keys.public,
 		};
 		let message = build_originated_message(
-			MessageData {
+			&MessageData {
 				destination: Some(destination.clone()),
 				timestamp: 1,
 				to_user: "You".to_owned(),
@@ -2072,7 +2263,7 @@ mod tests {
 			}),
 		};
 		let message = build_originated_message(
-			MessageData {
+			&MessageData {
 				destination: None,
 				timestamp: 1,
 				to_user: "All".to_owned(),
@@ -2195,7 +2386,7 @@ mod tests {
 			// Bit 4 is not representable here and TearLine and OriginLine are
 			// EchoMail's, so this covers the rest and the EchoMail case below
 			// covers those two.
-			legacy_attributes: Some(1 << 9),
+			legacy_attributes: Some(1 << 12),
 			timestamp_offset: Some(-25200),
 			tear_line: None,
 			origin_line: None,
@@ -2204,7 +2395,7 @@ mod tests {
 			additional_kludge_lines: vec!["FLAGS KFS".to_owned()],
 		};
 		let message = build_originated_message(
-			data.clone(),
+			&data,
 			&provenance,
 			&signer_keys.secret,
 			42,
@@ -2252,7 +2443,7 @@ mod tests {
 			..data
 		};
 		let message = build_originated_message(
-			echo.clone(),
+			&echo,
 			&provenance,
 			&signer_keys.secret,
 			43,
@@ -2262,6 +2453,86 @@ mod tests {
 		)
 		.unwrap();
 		assert_eq!(read_message(&message, &resolver).unwrap().data, echo);
+	}
+
+	#[test]
+	fn message_model_reencodes_unknown_children_byte_for_byte() {
+		let keys = SigningKeyPair::from_seed(&[83; 32]).unwrap();
+		let origin: Address = "fidonet#1:104/36".parse().unwrap();
+		let destination_keys = SigningKeyPair::from_seed(&[84; 32]).unwrap();
+		let destination = Identity {
+			address: "fidonet#1:104/1".parse().unwrap(),
+			public_key: destination_keys.public,
+		};
+		let provenance = ItemProvenance {
+			origin: origin.clone(),
+			signer: Some(Identity {
+				address: origin.clone(),
+				public_key: keys.public,
+			}),
+		};
+		let mut message = build_originated_message(
+			&MessageData {
+				destination: Some(destination.clone()),
+				timestamp: 1,
+				to_user: "To".to_owned(),
+				from_user: "From".to_owned(),
+				subject: String::new(),
+				text: "Body\n".to_owned(),
+				area: None,
+				attachments: Vec::new(),
+				legacy_attributes: None,
+				timestamp_offset: None,
+				tear_line: None,
+				origin_line: None,
+				message_id: None,
+				reply_to: None,
+				additional_kludge_lines: Vec::new(),
+			},
+			&provenance,
+			&keys.secret,
+			7,
+			2,
+			"test",
+			&[],
+		)
+		.unwrap();
+		let mut children = parse_sequence(&message.value).unwrap();
+		let signature_index = children
+			.iter()
+			.position(|child| child.type_code == types::SIGNATURE)
+			.unwrap();
+		children.insert(
+			signature_index,
+			OwnedTlv::new(200, b"signed unknown".to_vec()).unwrap(),
+		);
+		children.insert(
+			signature_index,
+			OwnedTlv::new(types::ORIGINAL_CHARACTER_SET, b"CP437 2".to_vec()).unwrap(),
+		);
+		let signature_index = signature_index + 2;
+		let signature =
+			sign_tlv(&encoded_prefix(&children, signature_index), &keys.secret).unwrap();
+		children[signature_index].value = signature.as_bytes().to_vec();
+		children.insert(
+			signature_index + 2,
+			OwnedTlv::new(201, b"unsigned unknown".to_vec()).unwrap(),
+		);
+		message.value = encoded_prefix(&children, children.len());
+
+		let resolver = |address: &Address| {
+			if address == &origin {
+				Some(keys.public)
+			} else if address == &destination.address {
+				Some(destination.public_key)
+			} else {
+				None
+			}
+		};
+		let model = MessageModel::parse(&message, &resolver).unwrap();
+		assert_eq!(model.to_tlv().encode(), message.encode());
+		assert_eq!(model.children()[signature_index - 1].type_code, 200);
+		assert_eq!(model.children()[signature_index + 2].type_code, 201);
 	}
 
 	#[test]
@@ -2278,7 +2549,7 @@ mod tests {
 			public_key: destination_keys.public,
 		};
 		let message = build_originated_message(
-			MessageData {
+			&MessageData {
 				destination: Some(destination.clone()),
 				timestamp: 1,
 				to_user: "You".to_owned(),
@@ -2465,7 +2736,7 @@ mod tests {
 		let signer_keys = SigningKeyPair::from_seed(&[85; 32]).unwrap();
 		let origin: Address = "fidonet#1:104/36".parse().unwrap();
 		let message = build_originated_message(
-			MessageData {
+			&MessageData {
 				destination: None,
 				timestamp: 1,
 				to_user: "All".to_owned(),
@@ -2532,7 +2803,7 @@ mod tests {
 			}),
 		};
 		let message = build_originated_message(
-			MessageData {
+			&MessageData {
 				destination: None,
 				timestamp: 1,
 				to_user: "All".to_owned(),
@@ -2665,7 +2936,7 @@ mod tests {
 			additional_kludge_lines: Vec::new(),
 		};
 		let build = |data: MessageData| {
-			build_originated_message(data, &provenance, &keys.secret, 7, 1, "test", &[])
+			build_originated_message(&data, &provenance, &keys.secret, 7, 1, "test", &[])
 		};
 
 		// A Message carrying none of them is what native origination produces.
@@ -2680,7 +2951,7 @@ mod tests {
 			.is_ok()
 		);
 
-		let cases: [(MessageData, &str); 6] = [
+		let cases: [(MessageData, &str); 7] = [
 			(
 				MessageData {
 					legacy_attributes: Some(0),
@@ -2715,6 +2986,13 @@ mod tests {
 					..netmail()
 				},
 				"LegacyAttributes bit 4, which the File children carry",
+			),
+			(
+				MessageData {
+					legacy_attributes: Some(1 << 9),
+					..netmail()
+				},
+				"non-persistent LegacyAttributes bits",
 			),
 			(
 				MessageData {

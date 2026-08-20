@@ -8,10 +8,13 @@ use std::error::Error;
 use std::fmt;
 use std::path::Path;
 
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD_NO_PAD;
 use tith_adapter::address::{AddressError, resolve_destination};
-use tith_adapter::convert::parse_timezone;
+use tith_adapter::convert::{parse_timezone, retained_signing};
 use tith_ipc::{Document, EnvelopeKind, Field, Line};
 use tith_message_legacy::{AttachStyle, Disposition, StoredMessage};
+use tith_wire::item::LEGACY_ATTRIBUTES_SIGNED_MASK;
 
 /// A message that cannot be submitted as it stands.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -30,6 +33,9 @@ pub enum BuildError {
 	MissingAttachment { file: String },
 	/// The legacy local date and timezone could not determine a native instant.
 	Timestamp(String),
+	/// TITHSIGN/TITHSIG was present but did not form the canonical retained
+	/// authentication record.
+	Retained(String),
 }
 
 impl fmt::Display for BuildError {
@@ -49,6 +55,7 @@ impl fmt::Display for BuildError {
 				write!(f, "attached file \"{file}\" was not found")
 			}
 			Self::Timestamp(reason) => write!(f, "cannot resolve message timestamp: {reason}"),
+			Self::Retained(reason) => write!(f, "cannot reconstruct retained signature: {reason}"),
 		}
 	}
 }
@@ -79,9 +86,6 @@ fn line(fields: Vec<Field>) -> Line {
 	Line { fields }
 }
 
-/// The FTS-0001.016 `AttributeWord` bit which marks attached files.
-const ATTRIBUTE_FILE_ATTACHED: u16 = 1 << 4;
-
 /// The `Legacy-Attributes` line for one legacy `AttributeWord`, if needed.
 ///
 /// TTS-0005 section 3 type 101 keeps bit 4 out of `LegacyAttributes`, because the
@@ -90,13 +94,62 @@ const ATTRIBUTE_FILE_ATTACHED: u16 = 1 << 4;
 /// of a fact the Message already states, and TSP-0003 section 3.1 could no longer
 /// reconstruct the Message from its legacy form.
 fn legacy_attributes(attributes: u16) -> Option<Line> {
-	let carried = attributes & !ATTRIBUTE_FILE_ATTACHED;
+	let carried = u64::from(attributes) & LEGACY_ATTRIBUTES_SIGNED_MASK;
 	(carried != 0).then(|| {
 		line(vec![
 			unquoted("Legacy-Attributes"),
 			unquoted(&carried.to_string()),
 		])
 	})
+}
+
+fn retained_origin(message: &StoredMessage, domain: Option<&str>) -> Result<String, BuildError> {
+	retained_origin_from_controls(&message.controls, domain)
+}
+
+fn retained_origin_from_controls(
+	controls: &[tith_message_legacy::Control],
+	domain: Option<&str>,
+) -> Result<String, BuildError> {
+	let msgid = controls
+		.iter()
+		.find(|control| control.name.eq_ignore_ascii_case("MSGID"))
+		.ok_or_else(|| BuildError::Retained("TITHSIG requires MSGID".to_owned()))?;
+	let (origin, _) = msgid
+		.value
+		.rsplit_once(' ')
+		.ok_or_else(|| BuildError::Retained("TITHSIG MSGID has no origin".to_owned()))?;
+	if let Ok(address) = origin.parse::<tith_wire::Address>() {
+		if address.is_unlisted() {
+			return Err(BuildError::Retained(
+				"TITHSIG revision 1 cannot carry an unlisted Origin".to_owned(),
+			));
+		}
+		return Ok(address.to_string());
+	}
+	let domain = domain.ok_or_else(|| {
+		BuildError::Retained("legacy MSGID Origin has no trusted domain".to_owned())
+	})?;
+	tith_adapter::address::with_domain(origin, domain)
+		.map(|address| address.to_string())
+		.map_err(|error| BuildError::Retained(error.to_string()))
+}
+
+/// Removes the canonical trailing FTS-4009 Via paragraphs from `NetMail` body
+/// text. They are outside the signed `MessageText` and the service appends the
+/// importing local identity as the new native Via.
+fn message_text_without_vias(mut text: &str) -> &str {
+	while let Some(position) = text.rfind('\u{1}') {
+		let paragraph = text[position + 1..]
+			.strip_suffix('\r')
+			.unwrap_or(&text[position + 1..]);
+		if paragraph.starts_with("Via ") && !paragraph.contains('\r') {
+			text = &text[..position];
+		} else {
+			break;
+		}
+	}
+	text
 }
 
 /// Everything the builder needs that does not come from the message itself.
@@ -178,6 +231,8 @@ pub struct Submission {
 
 /// Converts one stored message into a complete single-Job Submit request.
 pub fn build(message: &StoredMessage, context: &Context<'_>) -> Result<Submission, BuildError> {
+	let retained = retained_signing(&message.controls)
+		.map_err(|error| BuildError::Retained(error.to_string()))?;
 	let destination =
 		resolve_destination(&message.controls, message.destination, context.domain)?.to_string();
 
@@ -188,7 +243,8 @@ pub fn build(message: &StoredMessage, context: &Context<'_>) -> Result<Submissio
 	// The comparison crosses address spaces: MSGID carries a legacy 3D or 4D
 	// address while Origin is a TTS-0004 address, so the local identity is
 	// rendered into legacy form rather than compared as text.
-	if let Some(msgid) = message.control("MSGID")
+	if retained.is_none()
+		&& let Some(msgid) = message.control("MSGID")
 		&& let Some((origin, _)) = msgid.value.rsplit_once(' ')
 		&& origin != context.origin
 		&& Some(origin) != context.legacy_origin.as_deref()
@@ -212,13 +268,18 @@ pub fn build(message: &StoredMessage, context: &Context<'_>) -> Result<Submissio
 		context.configured_offset,
 	)?;
 
+	let origin = retained
+		.as_ref()
+		.map(|_| retained_origin(message, context.domain))
+		.transpose()?
+		.unwrap_or_else(|| context.origin.to_owned());
 	let mut lines = vec![
 		line(vec![unquoted("Submit")]),
 		line(vec![unquoted("Job")]),
 		line(vec![unquoted("Application"), quoted(context.application)]),
 		line(vec![unquoted("Idempotency-Key"), quoted(&idempotency_key)]),
-		line(vec![unquoted("Origin"), quoted(context.origin)]),
-		line(vec![unquoted("Destination"), quoted(&destination)]),
+		line(vec![unquoted("Origin"), quoted(&origin)]),
+		line(vec![unquoted("Local-Identity"), quoted(context.origin)]),
 		line(vec![unquoted("To-User"), quoted(&message.to_user)]),
 		line(vec![unquoted("From-User"), quoted(&message.from_user)]),
 		line(vec![
@@ -226,16 +287,55 @@ pub fn build(message: &StoredMessage, context: &Context<'_>) -> Result<Submissio
 			unquoted(&timestamp.to_string()),
 		]),
 	];
+	if let Some(retained) = &retained
+		&& let Some(signed_origin) = &retained.signed_origin
+	{
+		lines.insert(
+			6,
+			line(vec![
+				unquoted("Signed-Origin"),
+				quoted(&signed_origin.to_string()),
+			]),
+		);
+		if let Some(key) = retained.signed_origin_key {
+			lines.insert(
+				7,
+				line(vec![
+					unquoted("Signed-Origin-Public-Key"),
+					quoted(&STANDARD_NO_PAD.encode(key.as_bytes())),
+				]),
+			);
+		}
+	}
+	let destination_position = 6
+		+ usize::from(
+			retained
+				.as_ref()
+				.is_some_and(|value| value.signed_origin.is_some()),
+		) + usize::from(
+		retained
+			.as_ref()
+			.is_some_and(|value| value.signed_origin_key.is_some()),
+	);
+	lines.insert(
+		destination_position,
+		line(vec![unquoted("Destination"), quoted(&destination)]),
+	);
 
 	// TSP-0003 makes the Subject a FileList when the attach attribute is set,
 	// so it is not a human subject and is not carried as one.
 	if !message.has_file_attached() && !message.subject.is_empty() {
 		lines.push(line(vec![unquoted("Subject"), quoted(&message.subject)]));
 	}
-	if !message.text.is_empty() {
+	let message_text = if retained.is_some() {
+		message_text_without_vias(&message.text)
+	} else {
+		message.text.as_str()
+	};
+	if !message_text.is_empty() {
 		lines.push(line(vec![
 			unquoted("Message-Text"),
-			quoted(&tith_message_legacy::decode_body(&message.text)),
+			quoted(&tith_message_legacy::decode_body(message_text)),
 		]));
 	}
 	lines.extend(legacy_attributes(message.attributes));
@@ -248,12 +348,22 @@ pub fn build(message: &StoredMessage, context: &Context<'_>) -> Result<Submissio
 	if let Some(msgid) = message.control("MSGID") {
 		lines.push(line(vec![unquoted("Message-ID"), quoted(&msgid.value)]));
 	}
+	if let Some(retained) = &retained {
+		lines.push(line(vec![
+			unquoted("Signature"),
+			quoted(&STANDARD_NO_PAD.encode(retained.signature.as_bytes())),
+		]));
+	}
 	for control in &message.controls {
 		// The structured controls have their own mapped fields; only the rest
 		// travel verbatim.
 		if matches!(
 			control.name.to_ascii_uppercase().as_str(),
-			"MSGID" | "MSGTO" | "REPLY" | "CHRS" | "CHARSET" | "TZUTC" | "TZUTCINFO"
+			"MSGID"
+				| "MSGTO" | "REPLY"
+				| "CHRS" | "CHARSET"
+				| "TZUTC" | "TZUTCINFO"
+				| "TITHSIG" | "TITHSIGN"
 		) {
 			continue;
 		}
@@ -317,7 +427,10 @@ pub fn build_packed(
 	attachments: &[tith_message_legacy::Attachment],
 	context: &Context<'_>,
 ) -> Result<Submission, BuildError> {
-	if let Some(msgid) = message.control("MSGID")
+	let retained = retained_signing(&message.controls)
+		.map_err(|error| BuildError::Retained(error.to_string()))?;
+	if retained.is_none()
+		&& let Some(msgid) = message.control("MSGID")
 		&& let Some((origin, _)) = msgid.value.rsplit_once(' ')
 		&& origin != context.origin
 		&& Some(origin) != context.legacy_origin.as_deref()
@@ -342,6 +455,11 @@ pub fn build_packed(
 	// Submit-Items; the original Submit operation accepts the bare `Job` line
 	// and nothing else, so the operation is chosen with the kind.
 	let echo = message.area.as_deref();
+	let origin = retained
+		.as_ref()
+		.map(|_| retained_origin_from_controls(&message.controls, context.domain))
+		.transpose()?
+		.unwrap_or_else(|| context.origin.to_owned());
 	let mut lines = vec![
 		line(vec![unquoted(if echo.is_some() {
 			"Submit-Items"
@@ -354,8 +472,23 @@ pub fn build_packed(
 		},
 		line(vec![unquoted("Application"), quoted(context.application)]),
 		line(vec![unquoted("Idempotency-Key"), quoted(&idempotency_key)]),
-		line(vec![unquoted("Origin"), quoted(context.origin)]),
+		line(vec![unquoted("Origin"), quoted(&origin)]),
+		line(vec![unquoted("Local-Identity"), quoted(context.origin)]),
 	];
+	if let Some(retained) = &retained
+		&& let Some(signed_origin) = &retained.signed_origin
+	{
+		lines.push(line(vec![
+			unquoted("Signed-Origin"),
+			quoted(&signed_origin.to_string()),
+		]));
+		if let Some(key) = retained.signed_origin_key {
+			lines.push(line(vec![
+				unquoted("Signed-Origin-Public-Key"),
+				quoted(&STANDARD_NO_PAD.encode(key.as_bytes())),
+			]));
+		}
+	}
 	if let Some(area) = echo {
 		lines.push(line(vec![unquoted("Area"), quoted(area)]));
 	} else {
@@ -378,11 +511,9 @@ pub fn build_packed(
 	if !message.has_file_attached() && !message.subject.is_empty() {
 		lines.push(line(vec![unquoted("Subject"), quoted(&message.subject)]));
 	}
-	if !message.text.is_empty() {
-		lines.push(line(vec![
-			unquoted("Message-Text"),
-			quoted(&tith_message_legacy::decode_body(&message.text)),
-		]));
+	let (body, tear_line, origin_line) = tith_adapter::convert::message_body_fields(message);
+	if !body.is_empty() {
+		lines.push(line(vec![unquoted("Message-Text"), quoted(&body)]));
 	}
 	lines.extend(legacy_attributes(message.attributes));
 	if let Some(offset) = timestamp_offset {
@@ -391,13 +522,29 @@ pub fn build_packed(
 			unquoted(&offset.to_string()),
 		]));
 	}
+	if let Some(value) = tear_line {
+		lines.push(line(vec![unquoted("Tear-Line"), quoted(&value)]));
+	}
+	if let Some(value) = origin_line {
+		lines.push(line(vec![unquoted("Origin-Line"), quoted(&value)]));
+	}
 	if let Some(msgid) = message.control("MSGID") {
 		lines.push(line(vec![unquoted("Message-ID"), quoted(&msgid.value)]));
+	}
+	if let Some(retained) = &retained {
+		lines.push(line(vec![
+			unquoted("Signature"),
+			quoted(&STANDARD_NO_PAD.encode(retained.signature.as_bytes())),
+		]));
 	}
 	for control in &message.controls {
 		if matches!(
 			control.name.to_ascii_uppercase().as_str(),
-			"MSGID" | "MSGTO" | "REPLY" | "CHRS" | "CHARSET" | "TZUTC" | "TZUTCINFO"
+			"MSGID"
+				| "MSGTO" | "REPLY"
+				| "CHRS" | "CHARSET"
+				| "TZUTC" | "TZUTCINFO"
+				| "TITHSIG" | "TITHSIGN"
 		) {
 			continue;
 		}
@@ -598,6 +745,7 @@ fn push_attachments(
 mod tests {
 	use super::*;
 	use std::fs;
+	use tith_crypto::SIGNATURE_BYTES;
 	use tith_ipc::{SubmissionBody, SubmissionRequest};
 
 	fn stored(subject: &str, attributes: u16, body: &str) -> Vec<u8> {
@@ -666,6 +814,48 @@ mod tests {
 		// paragraphs terminated by U+000A, so the body is decoded rather than
 		// handed over raw. The IPC form escapes that terminator as \n.
 		assert!(text.contains(r#"Message-Text "Hello\n""#), "{text}");
+		fs::remove_dir_all(directory).unwrap();
+	}
+
+	#[test]
+	fn reconstructs_tithsig_as_structured_ipc_fields() {
+		let directory = temp_dir("retained-signature");
+		let encoded = STANDARD_NO_PAD.encode([0_u8; SIGNATURE_BYTES]);
+		let controls = tith_message_legacy::tithsig_controls(&encoded).unwrap();
+		let body = format!(
+			"\u{1}CHRS: UTF-8 4\r{}{}\u{1}MSGID: fidonet#1:9/9 1a2b3c4d\r\u{1}MSGTO: fidonet#1:2/4\r\u{1}TZUTC: 0000\rBody\r\u{1}Via 1:9/9@fidonet @20260101.000001.UTC tith 0.1\r",
+			controls[0], controls[1]
+		);
+		let message = StoredMessage::parse(&stored("Subject", 0, &body)).unwrap();
+		let built = build(
+			&message,
+			&Context {
+				application: "netmail",
+				origin: "fidonet#1:2/3",
+				legacy_origin: Some("1:2/3".to_owned()),
+				domain: Some("fidonet"),
+				configured_offset: None,
+				style: AttachStyle::Flags,
+				features: &features(&[]),
+				directory: &directory,
+				fallback_key: "unused",
+			},
+		)
+		.unwrap();
+		let parsed = SubmissionRequest::parse(&built.request).unwrap();
+		let SubmissionBody::Message(message) = &parsed.jobs[0].body else {
+			panic!("message expected");
+		};
+		assert_eq!(message.origin, "fidonet#1:9/9");
+		assert_eq!(message.local_identity.as_deref(), Some("fidonet#1:2/3"));
+		assert_eq!(message.signature.as_deref(), Some(encoded.as_str()));
+		assert_eq!(message.message_text, "Body\n");
+		assert!(
+			message
+				.additional_kludge_lines
+				.iter()
+				.all(|line| !line.starts_with("TITHSIG") && !line.starts_with("TITHSIGN"))
+		);
 		fs::remove_dir_all(directory).unwrap();
 	}
 
@@ -743,11 +933,11 @@ mod tests {
 	}
 
 	#[test]
-	fn masks_bit_four_and_omits_a_zero_word() {
-		// TTS-0005 section 3 type 101: bit 4 belongs to the File children and a
-		// zero value is written by omitting the value. Submitting either would
-		// give the Message a second representation of a fact it already states,
-		// and TSP-0003 section 3.1 could then never reconstruct it.
+	fn normalizes_the_attribute_word_to_packet_persistent_bits() {
+		// TSP-0003 section 4: only packet-persistent content bits enter the
+		// signed LegacyAttributes value. Bit 4 belongs to File children, while
+		// mutable bookkeeping and transport bits are discarded so an FTSC
+		// conforming legacy processor cannot change the signed projection.
 		let directory = temp_dir("attributes");
 		let context = Context {
 			application: "netmail",
@@ -768,12 +958,16 @@ mod tests {
 		};
 
 		assert!(!request("Subject", 0).contains("Legacy-Attributes"));
-		// HLD, bit 9, is legacy metadata with no other native representation.
-		let held = request("Subject", 1 << 9);
-		assert!(held.contains("Legacy-Attributes 512"), "{held}");
-		// Bit 4 is masked out of a word which carries other bits too.
-		let both = request("a.zip", (1 << 9) | (1 << 4));
-		assert!(both.contains("Legacy-Attributes 512"), "{both}");
+		let mutable = request("Subject", (1 << 2) | (1 << 9) | (1 << 11));
+		assert!(!mutable.contains("Legacy-Attributes"), "{mutable}");
+		// Private, Crash, ReturnReceiptRequest, IsReturnReceipt, and
+		// AuditRequest survive. FileAttached does not.
+		let stable = (1 << 0) | (1 << 1) | (1 << 12) | (1 << 13) | (1 << 14);
+		let mixed = request("a.zip", stable | (1 << 2) | (1 << 4) | (1 << 9));
+		assert!(
+			mixed.contains(&format!("Legacy-Attributes {stable}")),
+			"{mixed}"
+		);
 		fs::remove_dir_all(directory).unwrap();
 	}
 

@@ -432,11 +432,11 @@ A. References
 ─────────────
 
   [TSP‑0002] "Routing and Distribution Configuration", TITH,
-  2026‑08‑18.
+  2026‑08‑20.
 
   [TSP‑0004] "Local IPC Format", TITH, 2026‑08‑17.
 
-  [TSP‑0006] "Outbound Job Submission", TITH, 2026‑08‑18.
+  [TSP‑0006] "Outbound Job Submission", TITH, 2026‑08‑20.
 
   [TSP‑0007] "Unix‐Domain Socket IPC Binding", TITH, 2026‑08‑17.
 
@@ -452,7 +452,7 @@ A. References
 
   [TTS‑0004] "Node Addresses", TITH, 2026‑08‑17.
 
-  [TTS‑0005] "Bundle Format", TITH, 2026‑08‑18.
+  [TTS‑0005] "Bundle Format", TITH, 2026‑08‑20.
 
 
 B. History

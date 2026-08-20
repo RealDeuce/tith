@@ -189,7 +189,7 @@ A. References
 
   [TTS‑0004] "Node Addresses", TITH, 2026‑08‑17.
 
-  [TTS‑0005] "Bundle Format", TITH, 2026‑08‑18.
+  [TTS‑0005] "Bundle Format", TITH, 2026‑08‑20.
 
   [TTS‑5000] "The Distribution Nodelist", TITH, 2026‑08‑18.
 

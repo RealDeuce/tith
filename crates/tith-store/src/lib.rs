@@ -21,6 +21,28 @@ const DUPLICATES: TableDefinition<&[u8], &str> = TableDefinition::new("inbound-d
 const CLAIM_KEYS: TableDefinition<&[u8], &[u8]> = TableDefinition::new("inbound-claim-keys");
 const RESOLVED_TOKENS: TableDefinition<&str, &[u8]> =
 	TableDefinition::new("inbound-resolved-tokens");
+const KEY_PINS: TableDefinition<&str, &[u8]> = TableDefinition::new("listed-key-pins");
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum KeyPinSource {
+	TrustedContact,
+	NativeContinuity,
+	LegacyDirected,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct KeyPin {
+	pub current: PublicKey,
+	pub anchor: Option<PublicKey>,
+	pub predecessor: Option<PublicKey>,
+	pub observed: u64,
+	pub source: KeyPinSource,
+}
+
+#[derive(Clone)]
+pub struct KeyPinStore {
+	database: Arc<Database>,
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ItemKind {
@@ -165,6 +187,143 @@ pub struct InboundStore {
 	database: Arc<Database>,
 }
 
+impl KeyPinStore {
+	pub fn get(&self, address: &str) -> Result<Option<KeyPin>, StoreError> {
+		let read = self.database.begin_read()?;
+		let table = read.open_table(KEY_PINS)?;
+		table
+			.get(address)?
+			.map(|value| decode_key_pin(value.value()))
+			.transpose()
+	}
+
+	/// Resolve a listed address without allowing a locally observed key to
+	/// supersede an unrelated nodelist key.
+	pub fn resolve(
+		&self,
+		address: &str,
+		nodelist_key: Option<PublicKey>,
+	) -> Result<Option<PublicKey>, StoreError> {
+		let pin = self.get(address)?;
+		Ok(match (pin, nodelist_key) {
+			(Some(pin), Some(anchor)) if pin.anchor == Some(anchor) => Some(pin.current),
+			(_, Some(anchor)) => Some(anchor),
+			(Some(pin), None) => Some(pin.current),
+			(None, None) => None,
+		})
+	}
+
+	/// Establish a first-contact pin. An existing trust decision is never
+	/// replaced by another first-contact observation.
+	pub fn trust_on_first_use(
+		&self,
+		address: &str,
+		key: PublicKey,
+		observed: u64,
+	) -> Result<KeyPin, StoreError> {
+		let write = self.database.begin_write()?;
+		let pin = KeyPin {
+			current: key,
+			anchor: None,
+			predecessor: None,
+			observed,
+			source: KeyPinSource::TrustedContact,
+		};
+		{
+			let mut table = write.open_table(KEY_PINS)?;
+			if let Some(existing) = table.get(address)? {
+				return decode_key_pin(existing.value());
+			}
+			let encoded = encode_key_pin(pin);
+			table.insert(address, encoded.as_slice())?;
+		}
+		write.commit()?;
+		Ok(pin)
+	}
+
+	/// Advance the effective key only when the response was authenticated by
+	/// that exact predecessor. The caller verifies the signed response first.
+	pub fn advance(
+		&self,
+		address: &str,
+		predecessor: PublicKey,
+		current: PublicKey,
+		nodelist_key: Option<PublicKey>,
+		observed: u64,
+	) -> Result<KeyPin, StoreError> {
+		let write = self.database.begin_write()?;
+		let pin;
+		{
+			let mut table = write.open_table(KEY_PINS)?;
+			let existing = table
+				.get(address)?
+				.map(|value| decode_key_pin(value.value()))
+				.transpose()?;
+			let effective = match (existing, nodelist_key) {
+				(Some(value), Some(anchor)) if value.anchor == Some(anchor) => value.current,
+				(_, Some(anchor)) => anchor,
+				(Some(value), None) => value.current,
+				(None, None) => return Err(StoreError::InvalidPayload),
+			};
+			if effective != predecessor {
+				return Err(StoreError::InvalidPayload);
+			}
+			pin = KeyPin {
+				current,
+				anchor: nodelist_key.or_else(|| existing.and_then(|value| value.anchor)),
+				predecessor: Some(predecessor),
+				observed,
+				source: KeyPinSource::NativeContinuity,
+			};
+			let encoded = encode_key_pin(pin);
+			table.insert(address, encoded.as_slice())?;
+		}
+		write.commit()?;
+		Ok(pin)
+	}
+}
+
+fn encode_key_pin(pin: KeyPin) -> Vec<u8> {
+	let mut output = Vec::with_capacity(108);
+	output.push(1);
+	output.push(match pin.source {
+		KeyPinSource::TrustedContact => 0,
+		KeyPinSource::NativeContinuity => 1,
+		KeyPinSource::LegacyDirected => 2,
+	});
+	output.extend_from_slice(pin.current.as_bytes());
+	for key in [pin.anchor, pin.predecessor] {
+		output.push(u8::from(key.is_some()));
+		output.extend_from_slice(key.unwrap_or(PublicKey::from_bytes([0; 32])).as_bytes());
+	}
+	output.extend_from_slice(&pin.observed.to_be_bytes());
+	output
+}
+
+fn decode_key_pin(value: &[u8]) -> Result<KeyPin, StoreError> {
+	if value.len() != 108 || value[0] != 1 || value[34] > 1 || value[67] > 1 {
+		return Err(StoreError::CorruptRecord);
+	}
+	let source = match value[1] {
+		0 => KeyPinSource::TrustedContact,
+		1 => KeyPinSource::NativeContinuity,
+		2 => KeyPinSource::LegacyDirected,
+		_ => return Err(StoreError::CorruptRecord),
+	};
+	let current = PublicKey::from_bytes(value[2..34].try_into().unwrap());
+	let anchor = (value[34] == 1).then(|| PublicKey::from_bytes(value[35..67].try_into().unwrap()));
+	let predecessor =
+		(value[67] == 1).then(|| PublicKey::from_bytes(value[68..100].try_into().unwrap()));
+	let observed = u64::from_be_bytes(value[100..108].try_into().unwrap());
+	Ok(KeyPin {
+		current,
+		anchor,
+		predecessor,
+		observed,
+		source,
+	})
+}
+
 impl InboundStore {
 	pub fn create(path: impl AsRef<Path>) -> Result<Self, StoreError> {
 		let database = Arc::new(Database::create(path)?);
@@ -175,6 +334,7 @@ impl InboundStore {
 			write.open_table(DUPLICATES)?;
 			write.open_table(CLAIM_KEYS)?;
 			write.open_table(RESOLVED_TOKENS)?;
+			write.open_table(KEY_PINS)?;
 		}
 		write.commit()?;
 		Ok(Self { database })
@@ -182,6 +342,13 @@ impl InboundStore {
 
 	pub fn outbound(&self) -> Result<OutboundStore, StoreError> {
 		OutboundStore::new(Arc::clone(&self.database))
+	}
+
+	#[must_use]
+	pub fn key_pins(&self) -> KeyPinStore {
+		KeyPinStore {
+			database: Arc::clone(&self.database),
+		}
 	}
 
 	pub fn insert(&self, value: NewInbound<'_>) -> Result<InboundRecord, StoreError> {
@@ -852,6 +1019,37 @@ fn decode_token_resolution(mut input: &[u8]) -> Result<(String, InboundState, bo
 #[cfg(test)]
 mod tests {
 	use super::*;
+
+	#[test]
+	fn listed_key_pins_advance_only_from_the_effective_predecessor() {
+		let path = std::env::temp_dir().join(format!(
+			"tith-store-{}.redb",
+			random_identifier('T').unwrap()
+		));
+		let store = InboundStore::create(&path).unwrap();
+		let pins = store.key_pins();
+		let anchor = PublicKey::from_bytes([1; 32]);
+		let successor = PublicKey::from_bytes([2; 32]);
+		let replacement_anchor = PublicKey::from_bytes([3; 32]);
+
+		pins.advance("fidonet#1/2", anchor, successor, Some(anchor), 10)
+			.unwrap();
+		assert_eq!(
+			pins.resolve("fidonet#1/2", Some(anchor)).unwrap(),
+			Some(successor)
+		);
+		assert!(
+			pins.advance("fidonet#1/2", anchor, replacement_anchor, Some(anchor), 11)
+				.is_err()
+		);
+		assert_eq!(
+			pins.resolve("fidonet#1/2", Some(replacement_anchor))
+				.unwrap(),
+			Some(replacement_anchor)
+		);
+		drop(store);
+		std::fs::remove_file(path).unwrap();
+	}
 	use tith_crypto::Signature;
 	use tith_wire::bundle::Identity;
 	use tith_wire::tlv::OwnedTlv;

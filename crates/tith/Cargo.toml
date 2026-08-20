@@ -8,6 +8,7 @@ repository.workspace = true
 publish = false
 
 [dependencies]
+base64.workspace = true
 tith-adapter = { path = "../tith-adapter" }
 tith-bso = { path = "../tith-bso" }
 tith-crypto.workspace = true

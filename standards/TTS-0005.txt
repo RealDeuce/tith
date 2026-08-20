@@ -3,10 +3,10 @@ TITH                                              THIS ISN'T THAT HARD
 **********************************************************************
 
 Publication:  TTS‑0005
-Revision:     8
+Revision:     9
 Title:        Bundle Format
 Author(s):    Stephen Hurd
-Date:         2026‑08‑19
+Date:         2026‑08‑20
 ══════════════════════════════════════════════════════════════════════
 
 Status of this document
@@ -65,19 +65,32 @@ Contents
   is applicable to the SignedTLV values that follow.  If it is the
   unlisted address defined in TTS‑0004, it MUST be immediately
   followed by a PublicKey as defined in TTS‑0003.  Otherwise it MUST
-  NOT be followed by a PublicKey.  For the unlisted address, this
+  NOT be followed by a PublicKey, except in the PublicKeyRequest reply
+  defined below.  For the unlisted address, this
   PublicKey is the key applicable to the SignedTLV values that follow.
   For any other Origin, the applicable key is obtained from the
-  nodelist and a supplied PublicKey MUST NOT override it.
+  nodelist or the trust state defined by TSP‑0015, and a supplied
+  PublicKey MUST NOT override it.
+
+  A reply to a PublicKeyRequest is the sole exception for a listed
+  Origin.  Its Origin MUST be immediately followed by the PublicKey
+  whose private key signs that reply.  The receiver MUST accept that
+  key only when it is the key requested in the original Header, or
+  when the request was an explicitly authorized first‑contact probe.
 
   Ignoring permitted unknown values, the next item MUST be a SignedTLV
   as defined in TTS‑0003.  This is the Header SignedTLV and MUST NOT
   contain an Origin.  Its SignedData MUST contain one Destination,
-  followed by a PublicKey if and only if the Destination is the
-  unlisted address, followed by one Timestamp, all as defined in
+  followed by a PublicKey if the Destination is the unlisted address
+  or the Bundle requests continuity from a listed predecessor key,
+  followed by one Timestamp, all as defined in
   TTS‑0003.  A required PublicKey MUST be the encoded child immediately
   after its Destination.  The PublicKey identifies the particular
-  unlisted system to which the Bundle is addressed.  The Timestamp
+  unlisted system to which the Bundle is addressed.  For a listed
+  Destination it identifies the already trusted predecessor key from
+  which a PublicKeyRequest asks for continuity.  A listed Destination
+  PublicKey is permitted only in a Bundle whose only request is one
+  PublicKeyRequest.  The Timestamp
   indicates when the bundling process started and is not updated when
   another item is added to the Bundle.
 
@@ -333,9 +346,12 @@ Contents
   ────────────
   An Accepted value which contains a manditory RequestIdentifier as
   defined in section 4, followed by a manditory TLVHash as defined in
-  section 4.  It indicates that the identified value has been
-  validated and either durably stored by the receiver or recognized
-  as a previously accepted duplicate as specified in section 7.
+  section 4, and, only when accepting a PublicKeyRequest, followed by
+  exactly one PublicKey.  It indicates that the identified value has been
+  validated.  Except for PublicKeyRequest, it also indicates that the
+  value was either durably stored by the receiver or recognized as a
+  previously accepted duplicate as specified in section 7.  For a
+  PublicKeyRequest, the following PublicKey is the accepted result.
 
   69. PollMessages
   ────────────────
@@ -351,6 +367,21 @@ Contents
   ────────────────────
   A PollFileRequests value contains a manditory RequestIdentifier and
   requests held FileRequests committed to the Bundle Origin.
+
+  72. PublicKeyRequest
+  ────────────────────
+  A PublicKeyRequest contains one manditory RequestIdentifier and no
+  other child.  It asks the listed Destination for its current public
+  key.  It MUST be the only request in the Bundle, MUST be in the only
+  payload SignedTLV, and that SignedTLV MUST contain only its leading
+  Header TLVHash and the PublicKeyRequest.  It MUST NOT be combined
+  with operational work or a Poll.
+
+  When the listed Destination PublicKey is present in the Header, the
+  Server MUST sign the reply with that exact key.  It MAY use a
+  retained private key for this reply even though that key is no
+  longer current.  When it is absent, the request is a first‑contact
+  probe and the Server signs with its current key.
 
   When the Destination accepts a Poll value, it MUST atomically claim
   every matching held value which is not already claimed for an active
@@ -437,15 +468,25 @@ Contents
   101. LegacyAttributes
   ─────────────────────
   Contains a number encoded the same as the Type and Length values.
-  The number has the same meaning as the AttributeWord in FTS‑0001.016.
-  If anything in here is actually useful, it should have a separate
-  value.
+  Its only permitted bits have these AttributeWord meanings from
+  FTS‑0001.016:
+
+    bit 0   Private
+    bit 1   Crash
+    bit 12  ReturnReceiptRequest
+    bit 13  IsReturnReceipt
+    bit 14  AuditRequest
+
+  These are the packet‐persistent legacy message attributes.  All
+  other AttributeWord bits are either redundant native facts or
+  mutable legacy bookkeeping and transport state, and MUST NOT be set
+  in this value.
 
   A zero conveys nothing that the absence of this value does not, so
   a zero MUST NOT be emitted and an absent value means that no legacy
-  attribute is asserted.  Bit 4, FileAttached, MUST NOT be set: the
-  File children of the Message carry that fact, and a legacy
-  conversion boundary sets the bit from the File children it emits.
+  attribute is asserted.  In particular, bit 4, FileAttached, is
+  represented by the File children of the Message; a legacy conversion
+  boundary sets that bit from the File children it emits.
 
   102. TimestampOffset
   ────────────────────
@@ -627,9 +668,17 @@ Contents
   the original Bundle.
 
   For each value in the Bundle of the types Message, File, FileRequest,
-  PollMessages, PollFiles, and PollFileRequests, exactly one Accepted or
-  Rejected value is included in the same order as in the original
-  Bundle.
+  PollMessages, PollFiles, PollFileRequests, and PublicKeyRequest,
+  exactly one Accepted or Rejected value is included in the same order
+  as in the original Bundle.
+
+  A PublicKeyRequest reply MUST use the listed Origin PublicKey rule
+  in section 2 and MUST contain exactly one payload SignedTLV.  Its
+  Accepted value MUST contain the Server's current PublicKey.  Thus a
+  reply signed by the requested predecessor certifies the successor
+  carried inside its authenticated SignedData.  This proof establishes
+  continuity only; it is not revocation of the predecessor or evidence
+  that the predecessor was not compromised.
 
   When a Poll or FileRequest is Accepted, every value returned in
   response to it MUST be in the same SignedTLV as its Accepted value.
@@ -683,9 +732,11 @@ Contents
 A. References
 ─────────────
 
-  [TSP‑0003] "Legacy Data Formats and TITH", TITH, 2026‑08‑18.
+  [TSP‑0003] "Legacy Data Formats and TITH", TITH, 2026‑08‑20.
 
   [TSP‑0011] "Durable Inbound Delivery Items", TITH, 2026‑08‑18.
+
+  [TSP‑0015] "Public Key Trust and Continuity", TITH, 2026‑08‑20.
 
   [FTA‑1006.002] "Keywords to indicate requirement levels" FTSC,
   2000‑01‑17.
@@ -743,5 +794,10 @@ B. History
 
    Rev.8, 2026‑08‑19: Defined MessageText as paragraphs each terminated
    by U+000A, with U+000A as the only line break.
+
+   Rev.9, 2026‑08‑20: Restricted LegacyAttributes to stable signed
+   facts, and added the dedicated PublicKeyRequest and its
+   predecessor‑signed current‑key response for listed key discovery
+   and rotation continuity.
 
 **********************************************************************

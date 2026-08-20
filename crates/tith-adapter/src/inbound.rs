@@ -552,7 +552,7 @@ End
 			public_key: keys.public,
 		};
 		let item = build_originated_message(
-			MessageData {
+			&MessageData {
 				destination: Some(destination),
 				timestamp: 1_755_518_400,
 				to_user: "Recipient".to_owned(),
@@ -590,7 +590,7 @@ End
 		let keys = SigningKeyPair::from_seed(&[98; 32]).unwrap();
 		let origin: Address = "fidonet#1:104/1".parse().unwrap();
 		let item = build_originated_message(
-			MessageData {
+			&MessageData {
 				destination: None,
 				timestamp: 1_755_518_400,
 				to_user: "All".to_owned(),

@@ -3,10 +3,10 @@ TITH                                              THIS ISN'T THAT HARD
 **********************************************************************
 
 Publication:  TSP‑0006
-Revision:     7
+Revision:     8
 Title:        Outbound Job Submission
 Author(s):    Stephen Hurd
-Date:         2026‑08‑19
+Date:         2026‑08‑20
 ══════════════════════════════════════════════════════════════════════
 
 Status of this document
@@ -29,6 +29,10 @@ Abstract
   ownership, idempotency and conflict detection, source‐independent
   lookup, batch commitment, generated wire filenames, results, and a
   command‐line client.
+
+  It also carries a canonically reconstructed TSP‑0003 Message and its
+  retained end‐to‐end Signature through the same UTF‑8 Job grammar,
+  without defining a second binary IPC representation.
 
 Contents
 ────────
@@ -117,7 +121,9 @@ Contents
     Application "<application-name>"
     Idempotency-Key "<key>"
     Origin "<origin>"
+    [Local-Identity "<local-identity>"]
     [Signed-Origin "<local-identity>"]
+    [Signed-Origin-Public-Key "<base64-public-key>"]
     Destination "<destination-identity>"
     To-User "<UTF-8-string>"
     From-User "<UTF-8-string>"
@@ -130,6 +136,10 @@ Contents
     [Origin-Line "<UTF-8-string>"]
     [Message-ID "<UTF-8-string>"]
     [Reply-To "<address>" "<UTF-8-string>"]
+    [Signature "<base64-signature>"]
+    [Via "<address>" ["<base64-public-key>"]
+        <unsigned-integer> "<UTF-8-string>"]...
+    [Seen-By "<address>"]...
     [Additional-Kludge-Line "<UTF-8-string>"]...
     [Class "<configuration-name>"]
     [Next-Hop Route|Active "<next-hop-identity>"|
@@ -177,7 +187,9 @@ Contents
     Application "<application-name>"
     Idempotency-Key "<key>"
     Origin "<origin>"
+    [Local-Identity "<local-identity>"]
     [Signed-Origin "<local-identity>"]
+    [Signed-Origin-Public-Key "<base64-public-key>"]
     Area "<area-name>"
     To-User "<UTF-8-string>"
     From-User "<UTF-8-string>"
@@ -190,6 +202,10 @@ Contents
     [Origin-Line "<UTF-8-string>"]
     [Message-ID "<UTF-8-string>"]
     [Reply-To "<address>" "<UTF-8-string>"]
+    [Signature "<base64-signature>"]
+    [Via "<address>" ["<base64-public-key>"]
+        <unsigned-integer> "<UTF-8-string>"]...
+    [Seen-By "<address>"]...
     [Additional-Kludge-Line "<UTF-8-string>"]...
     [Attachment
     Source-Path "<local-pathname>"|Source-Handle <unsigned-integer>
@@ -324,6 +340,23 @@ Contents
   block.  If Origin later has an applicable key, TTS‑0005 ignores
   SignedOrigin rather than allowing it to override that key.
 
+  Local-Identity identifies the one local identity whose Routes or
+  Areas block, delivery copies, and appended Via apply.  It is
+  RECOMMENDED in every generated Message Job.  For ordinary
+  origination it MUST select the same local signer which Origin or
+  Signed-Origin selects.  For a retained Signature it is independent
+  of the remote effective signer and MUST NOT change Origin or
+  SignedOrigin.
+
+  When Local-Identity is absent, the Service uses the only configured
+  local identity if exactly one exists.  Otherwise, for NetMail it
+  evaluates the configured Routes for the submitted Origin and
+  Destination pair, and for EchoMail it evaluates Areas for the
+  submitted Area.  It may default the line only when that evaluation
+  selects exactly one local identity.  Zero or multiple candidates is
+  Invalid and the result description requires Local-Identity.  The
+  default never combines several local identities on one connection.
+
   For EchoMail or File, the local signing identity also has exactly one
   applicable TSP‑0002 Areas block containing the submitted area and
   item Kind.  The Service MUST authorize the Application to originate
@@ -400,8 +433,27 @@ Contents
   uses the instant at which the Job is committed.  Legacy-Attributes,
   Timestamp-Offset, Tear-Line, Origin-Line, Message-ID, Reply-To, and
   Additional-Kludge-Line have the meanings, encodings, ordering, and
-  restrictions specified by TTS‑0005.  The service supplies Signature,
-  RequestIdentifier, Via, and routing metadata.
+  restrictions specified by TTS‑0005.  For ordinary origination the
+  Service supplies Signature.  It always supplies RequestIdentifier,
+  appends Via, and supplies routing metadata.
+
+  Signature is the 86‑character unpadded RFC‑4648 base64 encoding of
+  the 64‑byte TTS‑0003 Signature.  Its presence selects retained
+  Message reconstruction rather than local origination.  Timestamp
+  MUST then be an explicit integer, Message-Text MUST already have the
+  exact TTS‑0005 paragraph encoding, and Auto normalization is
+  prohibited for every signed field.  Signed-Origin is then the actual
+  signed TTS‑0005 address rather than a local identity reference.
+  Signed-Origin-Public-Key occurs if and only if that address is the
+  unlisted address and contains its 43‑character unpadded RFC‑4648
+  PublicKey.
+
+  A retained Via line contains its Address, the conditional PublicKey
+  when that Address is unlisted, its Timestamp, and its software
+  string.  Seen-By lines supply the current unsigned addresses in
+  processing order.  Signature, Via, and Seen-By are prohibited for a
+  newly originated Message.  TITHSIGN and TITHSIG are structured
+  legacy controls and MUST NOT also occur as Additional-Kludge-Line.
 
   Class occurs for NetMail, Peer-File, and FileRequest.  It is a
   TSP‑0002 delivery class configuration name, defaults to Normal, and
@@ -624,6 +676,17 @@ Contents
   SeenBy, and the local AKA recorded with every delivery copy.  A
   FileRequest is not signed; its local identity supplies only the local
   AKA and routing configuration.
+
+  For a Message Job carrying Signature, the Service reconstructs the
+  canonical TSP‑0003 signed children from the named UTF‑8 fields and
+  ingested Attachment Sources.  It resolves the effective Origin or
+  SignedOrigin key exactly as TTS‑0005 requires, verifies Signature
+  over those exact encoded children, and refuses the Job if the key is
+  unknown or verification fails.  It MUST NOT re‐sign, normalize, or
+  silently omit a signed field.  It then retains Signature, replaces
+  RequestIdentifier, retains the submitted unsigned Via, SeenBy, and
+  AdditionalKludgeLine state, and appends Local-Identity as Via before
+  commitment.
 
   A Forward Job preserves the exact signed children and end‐to‐end
   Signature of its inbound item.  It replaces RequestIdentifier for the
@@ -1142,7 +1205,7 @@ A. References
   https://github.com/jedisct1/libhydrogen/wiki
 
   [TSP‑0002] "Routing and Distribution Configuration", TITH,
-  2026‑08‑18.
+  2026‑08‑20.
 
   [TSP‑0004] "Local IPC Format", TITH, 2026‑08‑17.
 
@@ -1164,7 +1227,7 @@ A. References
 
   [TTS‑0004] "Node Addresses", TITH, 2026‑08‑17.
 
-  [TTS‑0005] "Bundle Format", TITH, 2026‑08‑18.
+  [TTS‑0005] "Bundle Format", TITH, 2026‑08‑20.
 
   [TTS‑0007] "Signed Integer Encoding", TITH, 2026‑08‑16.
 
@@ -1194,5 +1257,10 @@ B. History
    Rev.7, 2026‑08‑19: Had the service supply the MessageText paragraph
    terminator TTS‑0005 requires rather than refuse a Message-Text
    without one.
+
+   Rev.8, 2026‑08‑20: Extended the existing UTF‑8 Message Job grammar
+   to carry a canonically reconstructed TSP‑0003 Signature and current
+   unsigned suffix, and defined explicit and unambiguous default
+   selection of its one Local-Identity.
 
 **********************************************************************

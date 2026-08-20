@@ -1,0 +1,577 @@
+**********************************************************************
+TITH                                              THIS ISN'T THAT HARD
+**********************************************************************
+
+Publication:  TSP‑0014
+Revision:     1
+Title:        Signed Mail From Legacy‐Only Systems
+Author(s):    Stephen Hurd
+Date:         2026‑08‑20
+══════════════════════════════════════════════════════════════════════
+
+Status of this document
+───────────────────────
+
+  This document is a TITH Standard Proposal (TSP) — it documents a
+  proposed standard and solicits discussion.  Until promoted to a TTS,
+  this is experimental only and does not describe required behaviour.
+
+  This document is released to the public domain, and may be used,
+  copied or modified for any purpose whatever.
+
+Abstract
+────────
+
+  This document describes how a system that runs only legacy FTN
+  software can originate end‐to‐end signed mail and be authenticated by
+  TITH systems, without implementing TITH transport, bundles, or a
+  nodelist entry.  It defines channels by which such a system publishes
+  its public key, states the binding strength each channel provides,
+  and specifies that legacy‐only signing reuses the TSP‑0003 section
+  3.1 signed‐region reconstruction unchanged rather than introducing a
+  second signature scheme.
+
+Contents
+────────
+
+  1. Introduction
+  2. Applicability
+  3. Key Publication Channels
+  4. Key Binding and Trust
+  5. Signing Legacy Messages
+  6. Verification
+  7. Out of Scope
+  8. Feedback and Discussion
+
+  A. References
+  B. History
+
+══════════════════════════════════════════════════════════════════════
+
+
+1. Introduction
+───────────────
+
+  A system may be entirely satisfied with its existing mailer and
+  tosser.  It runs binkd over an FTS‑5005.003 Binkley Style Outbound,
+  or a mailer speaking the EMSI handshake, and it has no interest in
+  TITH transport, bundles, IIH endpoints, or a TITH service port.  It
+  would still like its mail to carry a signature that survives to the
+  reader, and it would still like other systems to know that the mail
+  is its own.
+
+  Nothing in TITH requires transport and item authentication to be
+  adopted together.  TTS‑0005 places the Message Signature over encoded
+  Message children, not over a Bundle, and TSP‑0003 section 3.1 already
+  defines a byte‐exact carriage of that signature through legacy stored
+  and packed Messages.  The missing pieces for a legacy‐only system are
+  a way to publish its public key without a nodelist entry, and a plain
+  statement that it may originate — not merely relay — a Message
+  carrying its own Signature.
+
+  Without those pieces, mail from such a system arrives at a gateway
+  unsigned.  Under TSP‑0003 section 2 the gateway then signs the Message
+  itself as SignedOrigin, attesting only that it imported the displayed
+  legacy claim.  TSP‑0011 records that outcome as SignedOrigin-Valid.
+  The author's own authorship is not represented anywhere.  This
+  proposal exists so that such a system can reach Origin-Valid instead.
+
+
+2. Applicability
+────────────────
+
+  This document applies to a system that:
+
+    • has an address in a legacy FTN domain, listed or not;
+    • exchanges mail using legacy transports and file formats only; and
+    • holds a TITH signing key pair as defined by TTS‑0005.
+
+  Such a system needs the TTS‑0002 integer and TLV encodings, the
+  TTS‑0003 common types, the TTS‑0005 Message child order and Signature
+  rules, the TSP‑0003 field mappings, and a libhydrogen signing
+  implementation.  That is a library, not a mailer.  It does not need
+  TTS‑0006 Bundle Exchange, a Bundle, a TITH listener, an assigned
+  service port, or a nodelist entry.
+
+  A system that publishes a nodelist entry carrying the TTS‑5000 IIH
+  flag already has the strongest available key binding and SHOULD use
+  it.  Sections 3.2 through 3.4 exist for systems which cannot or will
+  not obtain such an entry, and as corroboration for those which can.
+
+  Throughout this document, PublicKeyText is the 43‑character RFC‑4648
+  base64 encoding of a 32‑byte TITH public key with its trailing
+  padding removed, exactly as TTS‑5000 defines for the IIH flag.  It
+  uses the standard base64 alphabet, never the URL‐safe alphabet, and
+  contains no whitespace, line break, or padding character.  A value of
+  any other length, alphabet, or encoding is malformed and MUST be
+  rejected rather than repaired.
+
+
+3. Key Publication Channels
+───────────────────────────
+
+  Each channel below publishes exactly one PublicKeyText for the
+  publishing system.  A system MUST publish the same key through every
+  channel it uses.  A verifier which observes two different keys for one
+  address MUST treat that as the conflict described in section 4 and
+  MUST NOT choose whichever arrived first.
+
+  Where a channel has an existing container for the key it uses it, and
+  the key is then the TTS‑5000 IIH flag in whatever flag list that
+  transport already carries.  Where a channel has none, or where the
+  existing container cannot hold the flag, the key is carried with the
+  version digit "1", which selects the key representation in section 2
+  and the signing rules in section 5.  A value with an unrecognised
+  version is ignored, not guessed at.
+
+  3.1 Nodelist Publication
+  ────────────────────────
+
+  TTS‑5000 field 9 already defines the IIH flag, whose PublicKey is the
+  key used to authenticate TITH data whose Origin is that node's
+  address.  This document adds nothing to it and changes nothing about
+  it.
+
+  A node which wants only key publication, and no TITH endpoint, uses
+  the bare form:
+
+    IIH:<PublicKeyText>
+
+  TTS‑5000 already states that such a value publishes its PublicKey
+  without supplying a usable server endpoint.  That is the intended
+  configuration for a legacy‐only system and is not a defect.
+
+  3.2 binkp Session Flags
+  ───────────────────────
+
+  FTS‑1026.001 defines the frame
+
+    M_NUL "NDL system_capabilities"
+
+  and deployed practice fills its argument with the node's nodelist flag
+  list.  The configuration sample distributed with binkd is
+  "nodeinfo 115200,TCP,BINKP".
+
+  TTS‑5000 already defines the IIH flag as the way a TITH public key
+  appears in a nodelist flag list.  A binkp mailer therefore publishes
+  its key by including that flag in the list it already sends:
+
+    M_NUL "NDL 115200,TCP,BINKP,IIH:<PublicKeyText>"
+
+  The element is exactly the TTS‑5000 field 9 flag, so this introduces
+  no new representation of the key.  The endpoint bearing forms of IIH
+  are equally valid here, although a verifier using this channel takes
+  only the PublicKey from them.
+
+  The NDL argument has no strict grammar.  FTS‑1026.001 calls it
+  system_capabilities and recommends the keyword form only for
+  compatibility, and deployed content is a loose comma separated
+  capability list: the binkd sample above begins with a line speed,
+  which is not a nodelist flag at all.  An IIH element therefore
+  displaces no defined grammar.
+
+  It is nonetheless worth stating plainly that IIH is not a conformant
+  FTS‑5001.006 flag.  The FTSC has assigned no normal flag for it, and
+  it cannot be a User Flag: that form is limited to thirty‐two
+  alphanumeric characters, while IIH with a 43‑character key is
+  forty‐seven characters containing Colon and the base64 characters "+"
+  and "/".  TTS‑5000 removes both the length restriction and the U
+  delimiter, which is precisely why this flag is expressible in a TITH
+  nodelist and not in an FTS‑5000.005 one.  A system unwilling to put a
+  non‐FTSC element in NDL uses the frame form below.
+
+  A verifier splits the NDL argument on Comma (U+002C), ignores every
+  element it does not recognise, including a bare U delimiter, and takes
+  the PublicKey from an IIH element.  FTS‑5001.006 recommends that a
+  parser make no distinction between normal and User Flags, so the
+  position of the element relative to any U does not matter.  TTS‑5000
+  already makes a flag list carrying two different IIH PublicKeys
+  invalid; such an NDL supplies no key at all.
+
+  Because the flag list is ordinary configuration text, an unmodified
+  binkd publishes a key today by adding the flag to its nodeinfo
+  setting.  No other channel in this document has that property.
+
+  Neither binkp nor FTS‑1026.001 limits the length of an NDL argument.
+  A command frame carries up to 32767 octets of which the command
+  identifier takes one, so the argument may reach 32766 octets, and
+  binkd sizes its receive buffer for a full frame.  The constraint is
+  entirely at the sending end, in each mailer's configuration: binkd
+  stores nodeinfo through a bounded copy which keeps 119 characters and
+  discards the rest without reporting an error.  The flag consumes 47 of
+  those, and a node with a long flag list or a long INA hostname will
+  not fit.  Silent truncation is the hazard here rather than rejection,
+  although a truncated element fails the section 2 length rule and so
+  supplies no key rather than a wrong one.
+
+  A mailer which cannot place the flag in NDL, or which does not expose
+  that field to its operator, publishes the key in its own frame
+  instead:
+
+    M_NUL "TITHKEY 1 <PublicKeyText>"
+
+  FTS‑1026.001 lists SYS, ZYZ, LOC, NDL, TIME, VER, and TRF in this
+  keyword form and states that any other M_NUL argument may be used and
+  that a mailer may ignore arguments it does not support.  This frame is
+  therefore an ordinary use of the extension point that document already
+  provides, and it has no length constraint beyond the binkp frame
+  itself.
+
+  A session MUST NOT carry two TITHKEY frames.  When a session carries
+  both an IIH flag in NDL and a TITHKEY frame, their keys MUST agree; a
+  disagreement is a conflict under section 4 and no key from that
+  session is used.
+
+  NDL is observed before the session has finished authenticating.  A key
+  learned this way MUST NOT be bound to any address until the binkp
+  session has completed password or FTS‑1027.001 CRAM authentication for
+  that address.  It MUST be discarded when the session is non‐secure,
+  when the session fails, and when the peer presents no authenticated
+  address.  Authentication is necessary but not sufficient: section 4
+  binds a key only in a session the verifier itself originated.
+
+  When the authenticated session presents several addresses in M_ADR,
+  the key binds to every address the session authenticated.  A system
+  requiring different keys for different addresses MUST publish them
+  through nodelist entries instead; this channel cannot express that.
+
+  3.3 EMSI Session Flags
+  ──────────────────────
+
+  FSC‑0056.001 defines the predefined IDENT extra field appended to
+  EMSI_DAT.  Its final ASCII2 subfield carries the FTSC nodelist flags
+  associated with the system, which is the same flag list section 3.2
+  uses.  A mailer speaking EMSI therefore publishes its key by including
+  the TTS‑5000 IIH flag in that subfield, so that the flags subfield of
+  IDENT reads:
+
+    [MO,XA,IIH:<PublicKeyText>]
+
+  No new EMSI_addon and no new product_ID is required, and a verifier
+  parses that subfield exactly as section 3.2 parses NDL.
+  PublicKeyText contains no brace, bracket, comma, or non‐ASCII byte, so
+  it needs neither the ASCII1 doubling rule nor any relaxation of the
+  FSC‑0056.001 7‑bit restriction.
+
+  The conformance caveat in section 3.2 applies here with more force.
+  FSC‑0056.001 names this subfield the FTSC nodelist flags rather than
+  leaving its content open, so a mailer which holds its operator to that
+  definition has no room for an IIH element and no legal User Flag form
+  for one.
+
+  A mailer whose flags subfield cannot accommodate the flag, or which
+  does not expose it, publishes the key in its own extra field instead:
+
+    {TITHKEY}{[1][<PublicKeyText>]}
+
+  The product_ID is the ASCII1 field "TITHKEY" and the specific_data is
+  one ASCII1 field containing two ASCII2 subfields, the version and the
+  PublicKeyText, in that order, following the structure FSC‑0056.001
+  defines for IDENT.  That document states that any program may add
+  extra fields without affecting other systems and that a receiver
+  ignores extra fields it does not recognise.
+
+  As in section 3.2, an EMSI_DAT MUST NOT carry two TITHKEY extra
+  fields, and a TITHKEY extra field disagreeing with an IIH flag in the
+  same handshake is a conflict under section 4.
+
+  As in section 3.2, the EMSI_DAT packet carries
+  the session password in the same structure, so the key is a claim
+  until the handshake has authenticated the presented addresses, it
+  binds to every address that handshake authenticated, and section 4
+  binds it only in a session the verifier itself originated.
+
+  IEMSI, described in part III of FSC‑0056.001, is the interactive
+  variant used when a human user logs in to a system.  It identifies a
+  user to a BBS, not a node to a node, and MUST NOT be used to publish
+  a node's key.
+
+  3.4 File Request
+  ────────────────
+
+  A system which accepts file requests publishes its key under the
+  magic request name:
+
+    TITHKEY
+
+  The name is matched without regard to case.  Magic request names are
+  established practice rather than an FTSC assignment; a request
+  processor implements them at the SRIF boundary defined by
+  FSP‑1040.001, originally FSC‑0086.001, and the request itself is an
+  ordinary action line in an FTS‑0006.002 WaZOO REQ file.
+
+  The response is one file named TITHKEY.TXT, which is eight‐plus‐three
+  safe and therefore survives the FSC‑0056.001 FNC filename conversion
+  flag.  Its complete contents are exactly one line:
+
+    TITHKEY 1 <PublicKeyText>
+
+  The fields are separated by one ASCII Space.  A reader MUST accept a
+  terminating LF, CRLF, or end of file, and MUST reject any other
+  content, additional line, leading whitespace, or trailing byte.  The
+  file is ASCII and MUST NOT carry a byte order mark.
+
+  This channel binds the key to the session in which the file arrived,
+  and therefore to the address that session authenticated.  Because the
+  verifier issues the request, this is the channel most naturally used
+  in the directed session section 4 requires.  A TITHKEY.TXT received in
+  any other way — routed, forwarded, or arriving unrequested — binds
+  nothing.
+
+
+4. Key Binding and Trust
+────────────────────────
+
+  A channel supplies a key.  Binding is the separate question of which
+  address that key belongs to, and it depends on who originated the
+  session and where the endpoint came from.
+
+  A session is directed when the verifier originated it towards an
+  endpoint taken from the nodelist, or from trusted local configuration
+  for an address with no nodelist entry.  The verifier then knows which
+  address it reached, because it chose the destination from data it
+  already trusts.  Every other session is undirected, including every
+  session a peer originated.  Passing a password check proves that the
+  caller knows the password; it does not tell the answering system who
+  placed the call.
+
+  The channels therefore provide these binding strengths:
+
+    Authoritative
+      The TTS‑5000 IIH flag.  The nodelist distribution is the trust
+      path, and the binding is a published fact about the address.
+
+    Directed
+      Sections 3.2, 3.3, and 3.4, observed in a directed session which
+      also completed its legacy authentication.  The binding is as
+      strong as the trusted endpoint data and that authentication
+      together, and no stronger.
+
+    Undirected
+      Those same three channels observed in any other session.
+      Observation only.
+
+  TSP‑0015 owns the pin record, nodelist precedence, first‑contact
+  policy, and continuity rules shared with native TITH.  The channels
+  in this document supply observations to those rules; they do not
+  define a second kind of pin.
+
+  A directed observation MAY establish an initial pin only when local
+  policy explicitly designates that exact contact as trusted.  A later
+  directed observation of a different key MUST NOT replace the pin by
+  itself.  Rotation requires the predecessor‑signed continuity proof
+  in TTS‑0005, a new external trust anchor, or an explicit operator
+  action.  Merely calling the same endpoint again does not prove that
+  the formerly trusted private key authorized the change.
+
+  An undirected observation MUST NOT establish, replace, or remove a
+  pin, and MUST NOT resolve a conflict.  It MAY be recorded or prompt a
+  directed observation for corroboration.  Two different keys observed
+  for one address within a single session are a conflict and neither is
+  accepted from that session.
+
+  An address the verifier can never call, and which has no nodelist
+  entry, has no directed channel available and cannot be pinned at all.
+  That is the intended outcome rather than a gap.  A system which cannot
+  be reached and has not been listed has published nothing that a
+  verifier is able to check.
+
+  Directed legacy discovery is weaker than the nodelist and this
+  document does not pretend otherwise.  It remains an input at the
+  legacy conversion boundary while TSP‑0015 defines the shared trust
+  decision.
+
+
+5. Signing Legacy Messages
+──────────────────────────
+
+  A legacy‐only system signs by producing exactly the bytes TSP‑0003
+  section 3.1 already defines.  That section authorises the author of a
+  Message to construct the signed region rather than only carry one
+  through a conversion, so this document adds no production rule of its
+  own.  A legacy‐only system MUST NOT define, negotiate, or emit a
+  second signature scheme, a second control paragraph carrying a
+  signature, or a variant encoding of the same one.
+
+  The originator constructs the canonical Message children for its
+  message under the TSP‑0003 field mappings, signs the exact encoded
+  byte range TTS‑0005 specifies, and emits the two TITHSIG controls
+  carrying that 64‑byte Signature.
+
+  Because the originator is the author, Origin is its own TTS‑0004
+  address and SignedOrigin is absent.  TSP‑0003 section 3.1 states that
+  a Message without SignedOrigin has no TITHSIGN control, so a
+  legacy‐only originator emits TITHSIG and never TITHSIGN.  A
+  legacy‐only originator which emits TITHSIGN is claiming to relay
+  another system's signed Message, which is a different operation
+  governed entirely by TSP‑0003.
+
+  The originator MUST perform the same self‐check TSP‑0003 section 3.1
+  requires of an exporter: apply the canonical Legacy‑to‑TITH rules to
+  the legacy Message it is about to send, compare the resulting encoded
+  children byte for byte against the children it signed, and verify the
+  Signature over that result.  Semantic equality is insufficient.  A
+  message which does not pass MUST NOT be sent with TITHSIG controls; it
+  is sent unsigned or not at all.
+
+  Every constraint TSP‑0003 places on canonical conversion applies
+  unchanged, including the FTS‑0001.016 field widths of the stored and
+  packed Message, the prohibition on U+0000 in name and subject fields,
+  the requirement that every address component fit an unsigned 16‑bit
+  field, and the representable timestamp interval.  A message which
+  cannot be canonically represented is not signed rather than being
+  signed lossily.
+
+  An originator MUST publish its key through at least one section 3
+  channel.  A signature no verifier can check has no effect, and a
+  verifier which cannot obtain a key does not fail the message — it
+  falls back to the gateway import in TSP‑0003 section 2, which is the
+  outcome this document exists to avoid.
+
+
+6. Verification
+───────────────
+
+  A receiving system verifies a legacy Message carrying TITHSIG exactly
+  as TSP‑0003 section 3.1 specifies.  This document adds only the key
+  selection rule and the resulting authentication state.
+
+  The key applicable to Origin is the effective listed key resolved
+  under TSP‑0015, including its nodelist precedence rules.
+
+  When neither exists, reconstruction is not attempted.  The Message is
+  processed by the ordinary gateway‐signed import in TSP‑0003 section 2
+  and the absence of a key is recorded for diagnosis.
+
+  When reconstruction and verification succeed, the item's TSP‑0011
+  ItemAuthentication is Origin-Valid.  That is the entire point of this
+  document: the author's own key authenticated the Message, and no
+  gateway attestation was substituted for it.
+
+  A key which is not the nodelist key or the pin MUST NOT be used to
+  reach Origin-Valid, and in particular a key carried inside the Message
+  being verified MUST NOT be used to verify it.  Such a key proves only
+  that whoever produced the Message holds the corresponding secret,
+  which anyone can arrange for a key pair they generated themselves.
+
+  When TITHSIG is absent, malformed, or fails verification, TSP‑0003
+  section 3.1 already governs the outcome: it authenticates nothing, the
+  Message falls back to ordinary import, and the failure is recorded.
+  A verification failure MUST NOT be retried against a different key in
+  the hope of success, and MUST NOT cause a pin to change.
+
+
+7. Out of Scope
+───────────────
+
+  This document provides authorship authentication for legacy mail and
+  nothing else.  In particular it does not provide:
+
+    • confidentiality of any kind;
+    • authentication of the legacy transport beyond whatever binkp or
+      EMSI authentication the operator already configured;
+    • protection against replay beyond the duplicate identity TTS‑0005
+      already defines for a validated item;
+    • authority over EchoMail area membership or distribution; or
+    • any means of revoking a key whose holder has lost control of it.
+
+  TSP‑0015 and TTS‑0005 provide predecessor‑signed rotation continuity.
+  They do not provide revocation.  A compromised predecessor can
+  certify an attacker's successor exactly as convincingly as the holder
+  can.  Recovery therefore requires a separately trusted nodelist or
+  operator decision.  Section 8 discusses why nothing better is
+  proposed here.
+
+
+8. Feedback and Discussion
+──────────────────────────
+
+  Whether the flag form in sections 3.2 and 3.3 should exist is the
+  sharpest open question here.  IIH is not a conformant FTS‑5001.006
+  flag: no normal flag is assigned for it, and a User Flag may hold
+  thirty‐two alphanumeric characters against the forty‐seven this needs.
+  Keeping it buys publication from an unmodified binkd, at the price of
+  accepting that a session flag list carries whatever the sending system
+  chose to put there.  Dropping it leaves section 3 conformant and
+  leaves every binkp and EMSI publisher needing a patched mailer.
+
+  The binkp and EMSI channels bind one key to every address a session
+  authenticates.  A sysop who uses distinct keys per network cannot
+  express that and must use nodelist entries instead.  Whether the
+  published value should carry an address is open; carrying one invites
+  disagreement with M_ADR, which is why this revision does not.
+
+  Revocation after key loss remains unsolved and may not be solvable at
+  this layer.  Candidates are a published expiry beside the key and a
+  signed revocation object fetched by the same magic name.  Both are
+  more machinery than an acknowledged gap deserves until a deployment
+  needs one.
+
+  Magic request names have never been assigned by the FTSC, so TITHKEY
+  could collide with a local magic name on some system.  A more specific
+  name would reduce that risk at the cost of the eight character limit.
+
+
+A. References
+─────────────
+
+  [FTS‑0001.016] Revision 16, "A Basic FidoNet Technical Standard",
+  FTSC, 1995‑09‑30.
+
+  [FTS‑0006.002] "YOOHOO and YOOHOO/2U2", FTSC, 1991‑11‑30.
+
+  [FSC‑0056.001] "EMSI/IEMSI Protocol Definitions", FTSC, 1991‑05‑03.
+
+  [FSC‑0086.001] "Standard Request Information File", FTSC,
+  1995‑09‑03.
+
+  [FSP‑1040.001] Revision 1, "SRIF file request interface", FTSC,
+  2018‑03‑11.
+
+  [FTS‑1026.001] Revision 1, "Binkp/1.0 Protocol specification", FTSC,
+  2005‑12‑01.
+
+  [FTS‑1027.001] Revision 1, "Binkp/1.0 optional protocol extension
+  CRAM", FTSC, 2005‑12‑01.
+
+  [FTS‑5000.005] "The Distribution Nodelist", FTSC Members,
+  Administrator and Honoured Guests.  January 2014.  Obsoleted by
+  TTS‑5000.
+
+  [FTS‑5001.006] "Nodelist flags and userflags", FTSC Members,
+  Administrator and Honoured Guests.  August 2017.
+
+  [FTS‑5005.003] "Advanced BinkleyTerm Style Outbound flow and control",
+  FTSC, 2016‑10‑31.
+
+  [Libhydrogen] Version 1,
+  https://github.com/jedisct1/libhydrogen/wiki
+
+  [RFC‑4648] "The Base16, Base32, and Base64 Data Encodings", IETF,
+  2006‑10.
+
+  [TSP‑0003] "Legacy Data Formats and TITH", TITH, 2026‑08‑20.
+
+  [TSP‑0011] "Durable Inbound Delivery Items", TITH, 2026‑08‑18.
+
+  [TSP‑0015] "Public Key Trust and Continuity", TITH, 2026‑08‑20.
+
+  [TTS‑0002] "Type Length Value Encoding", TITH, 2026‑08‑17.
+
+  [TTS‑0003] "Common TLV Types", TITH, 2026‑08‑18.
+
+  [TTS‑0004] "Node Addresses", TITH, 2026‑08‑17.
+
+  [TTS‑0005] "Bundle Format", TITH, 2026‑08‑20.
+
+  [TTS‑0006] "Bundle Exchange Protocol", TITH, 2026‑08‑20.
+
+  [TTS‑5000] "The Distribution Nodelist", TITH, 2026‑08‑18.
+
+
+B. History
+──────────
+
+   Rev.1, 2026‑08‑20: Initial Release.
+
+**********************************************************************

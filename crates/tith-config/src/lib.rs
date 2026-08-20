@@ -44,6 +44,7 @@ pub struct Peer {
 	pub address: Address,
 	pub public_key: Option<PublicKey>,
 	pub endpoints: Vec<Endpoint>,
+	pub trust_on_first_use: bool,
 	pub boss: Option<String>,
 	pub hub: Option<String>,
 }
@@ -393,6 +394,7 @@ fn parse_peers(input: &str) -> Result<BTreeMap<String, Peer>, ConfigError> {
 		let mut address = None;
 		let mut public_key = None;
 		let mut endpoints = Vec::new();
+		let mut trust_on_first_use = false;
 		let mut boss = None;
 		let mut hub = None;
 		loop {
@@ -446,6 +448,9 @@ fn parse_peers(input: &str) -> Result<BTreeMap<String, Peer>, ConfigError> {
 					}
 					endpoints.push(endpoint);
 				}
+				["Trust-On-First-Use"] if !trust_on_first_use => {
+					trust_on_first_use = true;
+				}
 				["Boss", value] if boss.is_none() => {
 					boss = Some(peer_ref(file, line.number, value)?);
 				}
@@ -476,6 +481,13 @@ fn parse_peers(input: &str) -> Result<BTreeMap<String, Peer>, ConfigError> {
 				"Boss and Hub require an unlisted peer",
 			));
 		}
+		if trust_on_first_use && (address.is_unlisted() || endpoints.is_empty()) {
+			return Err(err(
+				file,
+				input[index - 1].number,
+				"Trust-On-First-Use requires a listed address and an Endpoint",
+			));
+		}
 		let key = (address.clone(), public_key.map(|value| *value.as_bytes()));
 		if !identities.insert(key) {
 			return Err(err(
@@ -491,6 +503,7 @@ fn parse_peers(input: &str) -> Result<BTreeMap<String, Peer>, ConfigError> {
 				address,
 				public_key,
 				endpoints,
+				trust_on_first_use,
 				boss,
 				hub,
 			},
@@ -1096,6 +1109,20 @@ mod tests {
 		.unwrap();
 		assert_eq!(config.schedules[0].classes, ["Normal"]);
 		assert_eq!(config.schedules[0].repeat_after_minutes, 1);
+	}
+
+	#[test]
+	fn trust_on_first_use_requires_a_listed_contact_endpoint() {
+		let listed =
+			"Peer nc\nAddress fidonet#1:123\nEndpoint nc.example 24555\nTrust-On-First-Use\nEnd\n";
+		let peers = parse_peers(listed).unwrap();
+		assert!(peers["nc"].trust_on_first_use);
+
+		let no_endpoint = "Peer nc\nAddress fidonet#1:123\nTrust-On-First-Use\nEnd\n";
+		assert!(parse_peers(no_endpoint).is_err());
+
+		let unlisted = "Peer nc\nAddress p2p#-1\nPublic-Key AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\nEndpoint nc.example 24555\nTrust-On-First-Use\nEnd\n";
+		assert!(parse_peers(unlisted).is_err());
 	}
 
 	#[test]

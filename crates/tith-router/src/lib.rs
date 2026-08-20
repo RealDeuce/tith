@@ -7,7 +7,7 @@ use tith_config::{
 	RouteMethod, Routes, Selector,
 };
 use tith_nodelist::{Keyword, Nodelist};
-use tith_wire::bundle::Identity;
+use tith_wire::bundle::{Identity, KeyResolver};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RouteFailure {
@@ -29,6 +29,7 @@ pub fn route_netmail(
 	destination: &Identity,
 	vias: &[Identity],
 	nodelist: &Nodelist,
+	resolver: &impl KeyResolver,
 ) -> Result<Commitment, RouteFailure> {
 	if nodelist
 		.get(&destination.address)
@@ -36,11 +37,9 @@ pub fn route_netmail(
 	{
 		return Err(RouteFailure::Unroutable);
 	}
-	let selected = routes
-		.routes
-		.iter()
-		.enumerate()
-		.find(|(_, rule)| selector_matches(&rule.destination, destination, config, nodelist));
+	let selected = routes.routes.iter().enumerate().find(|(_, rule)| {
+		selector_matches(&rule.destination, destination, config, nodelist, resolver)
+	});
 	let listed_defaults = [
 		RouteMethod::Direct,
 		RouteMethod::Boss,
@@ -70,7 +69,9 @@ pub fn route_netmail(
 		|(index, rule)| (Some(index), rule.methods.as_slice()),
 	);
 	for (method_index, method) in methods.iter().enumerate() {
-		if let Some((next_hop, passive)) = candidate(method, destination, config, nodelist) {
+		if let Some((next_hop, passive)) =
+			candidate(method, destination, config, nodelist, resolver)
+		{
 			if vias.contains(&next_hop) {
 				return Err(RouteFailure::Loop);
 			}
@@ -85,11 +86,11 @@ pub fn route_netmail(
 	Err(RouteFailure::Unroutable)
 }
 
-fn peer_identity(peer: &Peer, nodelist: &Nodelist) -> Option<Identity> {
+fn peer_identity(peer: &Peer, resolver: &impl KeyResolver) -> Option<Identity> {
 	let public_key = if peer.address.is_unlisted() {
 		peer.public_key?
 	} else {
-		nodelist.get(&peer.address)?.tith.as_ref()?.public_key
+		resolver.public_key(&peer.address)?
 	};
 	Some(Identity {
 		address: peer.address.clone(),
@@ -100,15 +101,20 @@ fn peer_identity(peer: &Peer, nodelist: &Nodelist) -> Option<Identity> {
 fn exact_peer<'a>(
 	identity: &Identity,
 	config: &'a ConfigurationSet,
-	nodelist: &Nodelist,
+	resolver: &impl KeyResolver,
 ) -> Option<&'a Peer> {
 	config.peers.values().find(|peer| {
-		peer.address == identity.address && peer_identity(peer, nodelist).as_ref() == Some(identity)
+		peer.address == identity.address && peer_identity(peer, resolver).as_ref() == Some(identity)
 	})
 }
 
-fn usable(identity: &Identity, config: &ConfigurationSet, nodelist: &Nodelist) -> bool {
-	if exact_peer(identity, config, nodelist).is_some_and(|peer| !peer.endpoints.is_empty()) {
+fn usable(
+	identity: &Identity,
+	config: &ConfigurationSet,
+	nodelist: &Nodelist,
+	resolver: &impl KeyResolver,
+) -> bool {
+	if exact_peer(identity, config, resolver).is_some_and(|peer| !peer.endpoints.is_empty()) {
 		return true;
 	}
 	nodelist
@@ -122,8 +128,12 @@ fn usable(identity: &Identity, config: &ConfigurationSet, nodelist: &Nodelist) -
 		})
 }
 
-fn named_peer(name: &str, config: &ConfigurationSet, nodelist: &Nodelist) -> Option<Identity> {
-	peer_identity(config.peers.get(name)?, nodelist)
+fn named_peer(
+	name: &str,
+	config: &ConfigurationSet,
+	resolver: &impl KeyResolver,
+) -> Option<Identity> {
+	peer_identity(config.peers.get(name)?, resolver)
 }
 
 fn candidate(
@@ -131,20 +141,23 @@ fn candidate(
 	destination: &Identity,
 	config: &ConfigurationSet,
 	nodelist: &Nodelist,
+	resolver: &impl KeyResolver,
 ) -> Option<(Identity, bool)> {
 	match method {
-		RouteMethod::Via(name) => Some((named_peer(name, config, nodelist)?, false)),
+		RouteMethod::Via(name) => Some((named_peer(name, config, resolver)?, false)),
 		RouteMethod::Direct => {
 			if destination.address.is_unlisted() {
-				let peer = exact_peer(destination, config, nodelist)?;
+				let peer = exact_peer(destination, config, resolver)?;
 				(!peer.endpoints.is_empty()).then(|| (destination.clone(), false))
 			} else {
-				let entry = nodelist.get(&destination.address)?;
-				(!matches!(
-					entry.keyword,
-					Keyword::Private | Keyword::Hold | Keyword::Down
-				) && usable(destination, config, nodelist))
-				.then(|| (destination.clone(), false))
+				let prohibited = nodelist.get(&destination.address).is_some_and(|entry| {
+					matches!(
+						entry.keyword,
+						Keyword::Private | Keyword::Hold | Keyword::Down
+					)
+				});
+				(!prohibited && usable(destination, config, nodelist, resolver))
+					.then(|| (destination.clone(), false))
 			}
 		}
 		RouteMethod::Hold => (!nodelist
@@ -152,14 +165,14 @@ fn candidate(
 			.is_some_and(|entry| entry.keyword == Keyword::Down))
 		.then(|| (destination.clone(), true)),
 		RouteMethod::Boss | RouteMethod::Hub if destination.address.is_unlisted() => {
-			let peer = exact_peer(destination, config, nodelist)?;
+			let peer = exact_peer(destination, config, resolver)?;
 			let name = match method {
 				RouteMethod::Boss => peer.boss.as_ref()?,
 				RouteMethod::Hub => peer.hub.as_ref()?,
 				_ => unreachable!(),
 			};
-			let identity = named_peer(name, config, nodelist)?;
-			eligible_ancestor(identity, config, nodelist)
+			let identity = named_peer(name, config, resolver)?;
+			eligible_ancestor(identity, config, nodelist, resolver)
 		}
 		RouteMethod::Boss => {
 			if destination.address.point() == 0 {
@@ -178,7 +191,7 @@ fn candidate(
 					address,
 					public_key: entry.tith.as_ref()?.public_key,
 				};
-				eligible_ancestor(identity, config, nodelist)
+				eligible_ancestor(identity, config, nodelist, resolver)
 			}
 		}
 		RouteMethod::Hub | RouteMethod::Host | RouteMethod::Region | RouteMethod::Zone => {
@@ -199,6 +212,7 @@ fn candidate(
 				},
 				config,
 				nodelist,
+				resolver,
 			)
 		}
 	}
@@ -208,9 +222,10 @@ fn eligible_ancestor(
 	identity: Identity,
 	config: &ConfigurationSet,
 	nodelist: &Nodelist,
+	resolver: &impl KeyResolver,
 ) -> Option<(Identity, bool)> {
-	let configured = exact_peer(&identity, config, nodelist);
-	(configured.is_some() || usable(&identity, config, nodelist)).then(|| {
+	let configured = exact_peer(&identity, config, resolver);
+	(configured.is_some() || usable(&identity, config, nodelist, resolver)).then(|| {
 		(
 			identity,
 			configured.is_some_and(|peer| peer.endpoints.is_empty()),
@@ -229,12 +244,13 @@ pub fn selector_matches(
 	identity: &Identity,
 	config: &ConfigurationSet,
 	nodelist: &Nodelist,
+	resolver: &impl KeyResolver,
 ) -> bool {
 	match selector {
 		Selector::All => true,
 		Selector::Address(address) => &identity.address == address,
 		Selector::AddressPattern(pattern) => pattern.matches(&identity.address),
-		Selector::Peer(name) => named_peer(name, config, nodelist).as_ref() == Some(identity),
+		Selector::Peer(name) => named_peer(name, config, resolver).as_ref() == Some(identity),
 		Selector::Branch(kind, root) => {
 			nodelist
 				.get(&identity.address)
@@ -285,8 +301,9 @@ pub fn failure_policies(
 	destination: &Identity,
 	route_rule: Option<usize>,
 	relay_override: Option<FailurePolicy>,
-	nodelist: &Nodelist,
+	key_sources: (&Nodelist, &impl KeyResolver),
 ) -> [FailurePolicy; 5] {
+	let (nodelist, resolver) = key_sources;
 	let kinds = [
 		FailureKind::Unroutable,
 		FailureKind::Loop,
@@ -305,8 +322,14 @@ pub fn failure_policies(
 				.iter()
 				.find(|rule| {
 					(matches!(rule.kind, FailureKind::Any) || rule.kind == kind)
-						&& selector_matches(&rule.origin, origin, config, nodelist)
-						&& selector_matches(&rule.destination, destination, config, nodelist)
+						&& selector_matches(&rule.origin, origin, config, nodelist, resolver)
+						&& selector_matches(
+							&rule.destination,
+							destination,
+							config,
+							nodelist,
+							resolver,
+						)
 				})
 				.map_or(routes.failure_default, |rule| rule.policy)
 		})
@@ -334,8 +357,9 @@ mod tests {
 			address: Address::unlisted("p2p".to_owned()).unwrap(),
 			public_key: PublicKey::from_bytes([0; 32]),
 		};
+		let nodelist = Nodelist::default();
 		let commitment =
-			route_netmail(&config, routes, &destination, &[], &Nodelist::default()).unwrap();
+			route_netmail(&config, routes, &destination, &[], &nodelist, &nodelist).unwrap();
 		assert_eq!(commitment.next_hop.address, destination.address);
 		assert_eq!(
 			route_netmail(
@@ -343,9 +367,39 @@ mod tests {
 				routes,
 				&destination,
 				&[commitment.next_hop],
-				&Nodelist::default()
+				&nodelist,
+				&nodelist,
 			),
 			Err(RouteFailure::Loop)
 		);
+	}
+
+	#[test]
+	fn a_pinned_listed_peer_routes_without_a_nodelist_entry() {
+		let config = ConfigurationSet::parse(
+			"Peer next\nAddress fidonet#1/2\nEndpoint next.example 24555\nEnd\n",
+			"Routes fidonet#1\nRoute All Using Via @next\nEnd\n",
+			"",
+			"",
+		)
+		.unwrap();
+		let routes = &config.routes[0];
+		let destination = Identity {
+			address: "fidonet#1/9".parse().unwrap(),
+			public_key: PublicKey::from_bytes([9; 32]),
+		};
+		let next: Address = "fidonet#1/2".parse().unwrap();
+		let resolver =
+			|address: &Address| (address == &next).then_some(PublicKey::from_bytes([2; 32]));
+		let commitment = route_netmail(
+			&config,
+			routes,
+			&destination,
+			&[],
+			&Nodelist::default(),
+			&resolver,
+		)
+		.unwrap();
+		assert_eq!(commitment.next_hop.address, next);
 	}
 }

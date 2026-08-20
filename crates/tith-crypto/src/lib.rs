@@ -98,6 +98,15 @@ impl SecretKey {
 	pub const fn as_bytes(&self) -> &[u8; SECRET_KEY_BYTES] {
 		&self.0
 	}
+
+	/// Returns the public half which libhydrogen stores in a signing secret.
+	#[must_use]
+	pub fn public_key(&self) -> PublicKey {
+		let bytes: [u8; PUBLIC_KEY_BYTES] = self.0[SECRET_KEY_BYTES - PUBLIC_KEY_BYTES..]
+			.try_into()
+			.expect("libhydrogen signing-key sizes are fixed");
+		PublicKey::from_bytes(bytes)
+	}
 }
 
 impl Drop for SecretKey {
@@ -596,6 +605,7 @@ mod tests {
 	#[test]
 	fn deterministic_sign_and_streaming_verify() {
 		let keys = SigningKeyPair::from_seed(&[7; 32]).unwrap();
+		assert_eq!(keys.secret.public_key(), keys.public);
 		let mut signer = TlvSigner::new().unwrap();
 		signer.update(b"first").unwrap();
 		signer.update(b"second").unwrap();

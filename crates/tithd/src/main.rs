@@ -189,7 +189,7 @@ fn run() -> Result<(), Box<dyn Error>> {
 			)
 		}
 		Some("serve-mail") => {
-			let usage = "usage: tithd serve-mail ADDRESS DATABASE APPLICATION CONFIG-DIRECTORY NODELIST-DOMAIN NODELIST-FILE LOCAL-IDENTITY NODE-SECRET-FILE [--listen-only] [--local-offset SECONDS] [--timeout SECONDS]";
+			let usage = "usage: tithd serve-mail ADDRESS DATABASE APPLICATION CONFIG-DIRECTORY NODELIST-DOMAIN NODELIST-FILE LOCAL-IDENTITY NODE-SECRET-FILE [--retired-node-secret FILE]... [--listen-only] [--local-offset SECONDS] [--timeout SECONDS]";
 			let address: SocketAddr = arguments.next().ok_or(usage)?.parse()?;
 			let database = arguments.next().ok_or(usage)?;
 			let application = arguments.next().ok_or(usage)?;
@@ -203,8 +203,12 @@ fn run() -> Result<(), Box<dyn Error>> {
 				local_offset: None,
 				timeout: Duration::from_mins(1),
 			};
+			let mut retired_secret_files = Vec::new();
 			while let Some(option) = arguments.next() {
 				match option.as_str() {
+					"--retired-node-secret" => {
+						retired_secret_files.push(arguments.next().ok_or(usage)?);
+					}
 					"--listen-only" => outbound.enabled = false,
 					"--local-offset" => {
 						outbound.local_offset = Some(arguments.next().ok_or(usage)?.parse()?);
@@ -223,6 +227,10 @@ fn run() -> Result<(), Box<dyn Error>> {
 			)?;
 			let (local_ref, local) = resolve_local(&local_name, &configuration, &nodelist)?;
 			let secret = mail::read_secret(Path::new(&secret_file))?;
+			let retired_secrets = retired_secret_files
+				.iter()
+				.map(|path| mail::read_secret(Path::new(path)))
+				.collect::<Result<Vec<_>, _>>()?;
 			mail::serve(
 				address,
 				Path::new(&database),
@@ -233,6 +241,7 @@ fn run() -> Result<(), Box<dyn Error>> {
 					reference: local_ref,
 					identity: local,
 					secret,
+					retired_secrets,
 				},
 				&outbound,
 			)

@@ -3,10 +3,10 @@ TITH                                              THIS ISN'T THAT HARD
 **********************************************************************
 
 Publication:  TSP‑0013
-Revision:     4
+Revision:     5
 Title:        Legacy Mailer and Tosser IPC Adapters
 Author(s):    Stephen Hurd
-Date:         2026‑08‑19
+Date:         2026‑08‑20
 ══════════════════════════════════════════════════════════════════════
 
 Status of this document
@@ -78,6 +78,9 @@ Contents
     • the exact conversion policy and resulting canonical submission;
     • TSP‑0003 TITHSIGN and TITHSIG verification and mutable forwarding
       evidence when signed‑region reconstruction succeeds;
+    • the ordered normalized Message model, retained Signature, current
+      unsigned suffix, selected Local-Identity, and canonical
+      submission identity;
     • every Application and Idempotency-Key;
     • each returned JobID and state; and
     • legacy cleanup still required.
@@ -116,12 +119,15 @@ Contents
   When TSP‑0003 TITHSIG reconstruction succeeds, this record includes
   the unchanged signed Message region, retained Signature, and current
   unsigned legacy controls.  It also records legacy carriage and
-  bookkeeping evidence which has no signed mapping.  AttributeWord is
-  not in that category because it maps signed LegacyAttributes.
-  It then submits through the applicable TSP‑0006 Submit or
-  Submit-Items operation.  The mailer receives native fields and
-  Sources; it does not receive a request to interpret a .MSG, packet,
-  tic, or flow file.
+  bookkeeping evidence which has no signed mapping.  Only the
+  packet‐persistent AttributeWord subset defined by TSP‑0003 maps
+  signed LegacyAttributes; changes to all other bits remain recorded
+  unsigned evidence.  It then submits the named native fields,
+  retained Signature and suffix, selected Local-Identity, and Sources
+  through the applicable TSP‑0006 Submit or Submit-Items operation.
+  TITHSIGN and TITHSIG are not duplicated as generic controls.  The
+  mailer receives no request to interpret a .MSG, packet, tic, or flow
+  file.
 
   The adapter MUST NOT remove, truncate, mark sent, or otherwise retire
   a legacy object until a complete Committed result or
@@ -310,6 +316,15 @@ Contents
   accepted input dialects only where TSP‑0003 expressly permits it.  It
   MUST NOT be presented as another native TITH wire grammar.
 
+  The TSP‑0006 retained Message Job is the transaction boundary for
+  that reconstruction.  The adapter records the canonical Job before
+  submission, including the exact Signature and Local-Identity.  The
+  Service independently reconstructs and verifies the signed bytes,
+  replaces only the unsigned RequestIdentifier, retains current
+  unsigned controls, and appends the selected local Via.  A different
+  Idempotency-Key does not authorize a second delivery of the same
+  authenticated signed-item identity.
+
   At the legacy FTN boundary, exported EchoMail and file distribution
   network (FDN) transfers are NetMail traffic.  They use individual
   NetMail messages, packets, file attaches, and TIC conventions
@@ -387,15 +402,15 @@ A. References
   1992‑12‑08.
 
   [TSP‑0002] "Routing and Distribution Configuration", TITH,
-  2026‑08‑18.
+  2026‑08‑20.
 
-  [TSP‑0003] "Legacy Data Formats and TITH", TITH, 2026‑08‑18.
+  [TSP‑0003] "Legacy Data Formats and TITH", TITH, 2026‑08‑20.
 
   [TSP‑0004] "Local IPC Format", TITH, 2026‑08‑17.
 
   [TSP‑0005] "Durable Outbound Jobs", TITH, 2026‑08‑18.
 
-  [TSP‑0006] "Outbound Job Submission", TITH, 2026‑08‑19.
+  [TSP‑0006] "Outbound Job Submission", TITH, 2026‑08‑20.
 
   [TSP‑0011] "Durable Inbound Delivery Items", TITH, 2026‑08‑18.
 
@@ -421,5 +436,11 @@ B. History
    Rev.4, 2026‑08‑19: Classified a transfer belonging to no area and
    no message as a Peer-File Job and a converted WaZOO request as one
    FileRequest Job per action.
+
+   Rev.5, 2026‑08‑20: Recorded the normalized Message model,
+   retained Signature and unsigned suffix, canonical submission, and
+   selected Local-Identity; mapped only packet‐persistent attributes
+   into signed data; and placed TITHSIG reconstruction through the
+   TSP‑0006 retained Message Job.
 
 **********************************************************************

@@ -3,10 +3,10 @@ TITH                                              THIS ISN'T THAT HARD
 **********************************************************************
 
 Publication:  TTS‑0006
-Revision:     4
+Revision:     5
 Title:        Bundle Exchange Protocol
 Author(s):    Stephen Hurd
-Date:         2026‑08‑18
+Date:         2026‑08‑20
 ══════════════════════════════════════════════════════════════════════
 
 Status of this document
@@ -103,8 +103,10 @@ Contents
 
   Authentication of the unlisted address proves possession of its
   private key.  It does not establish membership in a network which
-  uses a nodelist.  A supplied PublicKey MUST NOT be used in place of
-  the nodelist key for any other Origin.
+  uses a nodelist.  Except for the dedicated PublicKeyRequest exchange
+  defined by TTS‑0005, a supplied PublicKey MUST NOT be used in place
+  of the trusted key for any other Origin.  TSP‑0015 defines how a
+  listed key is pinned and advanced.
 
 
 4. Connection Flow
@@ -143,6 +145,27 @@ Contents
   it SHOULD ensure that a FIN is sent and not a RST.  Since this is the
   standard behaviour, simply calling close() on the socket should do
   this.
+
+  A PublicKeyRequest uses a connection of its own.  The Client MUST
+  send a Bundle containing only the dedicated request grammar in
+  TTS‑0005 and then close its write side.  The Server MUST NOT use that
+  connection for held or operational values.  After completely
+  receiving and authenticating the reply, the Client closes the
+  connection before opening an operational connection.
+
+  When a listed peer's reply fails authentication with the currently
+  trusted key, the Client MAY make one PublicKeyRequest for that exact
+  predecessor and then retry the original exchange once in the same
+  schedule activation.  It MUST authenticate the key reply with the
+  requested predecessor before persisting or using the returned key.
+  Failure of either the probe or the one retry ends that attempt; this
+  rule does not create an unbounded retry loop.
+
+  A first‑contact PublicKeyRequest omits the listed Destination
+  PublicKey.  A Client MUST do this only when its local configuration
+  explicitly authorizes trust on first use for that contact and fixes
+  the endpoint used.  Receipt of such a self‑signed response is not
+  evidence that the endpoint belongs to the intended operator.
 
 
 5. Error Handling
@@ -218,11 +241,13 @@ Contents
 A. References
 ─────────────
 
+  [TSP‑0015] "Public Key Trust and Continuity", TITH, 2026‑08‑20.
+
   [TTS‑0003] "Common TLV Types", TITH, 2026‑08‑18.
 
   [TTS‑0004] "Node Addresses", TITH, 2026‑08‑17.
 
-  [TTS‑0005] "Bundle Format", TITH, 2026‑08‑18.
+  [TTS‑0005] "Bundle Format", TITH, 2026‑08‑20.
 
   [TTS‑5000] "The Distribution Nodelist", TITH, 2026‑08‑18.
 
@@ -241,5 +266,8 @@ B. History
    Rev.4, 2026‑08‑18: Distinguished mandatory Bundle and payload
    SignedTLV authentication from optional end‐to‐end Message and File
    signatures.
+
+   Rev.5, 2026‑08‑20: Defined the dedicated listed‑key discovery
+   exchange and a single same‑activation continuity retry.
 
 **********************************************************************

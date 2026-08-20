@@ -59,7 +59,7 @@ pub fn read_header<R: Read>(
 			.read_owned()?;
 		prefix.extend_from_slice(&value.encode());
 		if value.type_code == types::SIGNED_TLV {
-			let bundle = Bundle::parse(&prefix, resolver)?;
+			let bundle = Bundle::parse_header_prefix(&prefix, resolver)?;
 			let header_hash = hash_tlv(&bundle.header.encoded)?;
 			return Ok(Some(IncomingBundle {
 				bundle,

@@ -102,7 +102,11 @@ pub struct VerifiedSignedTlv {
 pub struct Bundle {
 	pub encoded: Vec<u8>,
 	pub origin: Identity,
+	/// A listed outer Origin key carried only by a `PublicKeyRequest` reply.
+	pub advertised_origin_key: Option<PublicKey>,
 	pub destination: Identity,
+	/// A listed Header Destination predecessor key requested by a key probe.
+	pub requested_destination_key: Option<PublicKey>,
 	pub timestamp: u64,
 	pub header: VerifiedSignedTlv,
 	pub payloads: Vec<VerifiedSignedTlv>,
@@ -246,6 +250,50 @@ pub fn unauthenticated_signed_data(value: &OwnedTlv) -> Result<Vec<OwnedTlv>, Bu
 
 impl Bundle {
 	pub fn parse(encoded: &[u8], resolver: &impl KeyResolver) -> Result<Self, BundleError> {
+		Self::parse_internal(encoded, resolver, ListedOriginKey::Prohibited, false)
+	}
+
+	/// Parses only the Origin and Header prefix while deferring rules which
+	/// depend on seeing the payload.
+	pub fn parse_header_prefix(
+		encoded: &[u8],
+		resolver: &impl KeyResolver,
+	) -> Result<Self, BundleError> {
+		Self::parse_internal(encoded, resolver, ListedOriginKey::Prohibited, true)
+	}
+
+	/// Parses a probe reply whose listed outer Origin carries the key that
+	/// authenticated the reply. `expected` pins that key when a predecessor is
+	/// already trusted; `None` is the explicit first-contact TOFU case.
+	pub fn parse_public_key_reply(
+		encoded: &[u8],
+		resolver: &impl KeyResolver,
+		expected: Option<PublicKey>,
+	) -> Result<Self, BundleError> {
+		let mode = expected.map_or(ListedOriginKey::Any, ListedOriginKey::Exact);
+		let bundle = Self::parse_internal(encoded, resolver, mode, false)?;
+		if bundle.advertised_origin_key.is_none()
+			|| bundle.payloads.len() != 1
+			|| bundle.payloads[0].data.len() != 2
+			|| bundle.payloads[0].data[0].type_code != types::TLV_HASH
+			|| bundle.payloads[0].data[1].type_code != types::ACCEPTED
+		{
+			return Err(BundleError::Unexpected("PublicKeyRequest reply grammar"));
+		}
+		let accepted = crate::item::validate_item(&bundle.payloads[0].data[1], resolver)?
+			.ok_or(BundleError::Unexpected("PublicKeyRequest Accepted"))?;
+		if accepted.response_public_key.is_none() {
+			return Err(BundleError::Missing("Accepted current PublicKey"));
+		}
+		Ok(bundle)
+	}
+
+	fn parse_internal(
+		encoded: &[u8],
+		resolver: &impl KeyResolver,
+		listed_origin_key: ListedOriginKey,
+		allow_header_only: bool,
+	) -> Result<Self, BundleError> {
 		let top = parse_sequence(encoded)?;
 		let origin_tlv = top.first().ok_or(BundleError::Missing("Origin"))?;
 		if origin_tlv.type_code != types::ORIGIN {
@@ -253,6 +301,7 @@ impl Bundle {
 		}
 		let origin_address = address_value(origin_tlv)?;
 		let mut index = 1;
+		let mut advertised_origin_key = None;
 		let origin_public_key = if origin_address.is_unlisted() {
 			let value = top
 				.get(index)
@@ -262,16 +311,35 @@ impl Bundle {
 			}
 			index += 1;
 			Some(value)
-		} else {
-			if top
-				.get(index)
-				.is_some_and(|value| value.type_code == types::PUBLIC_KEY)
-			{
-				return Err(BundleError::Unexpected("Origin PublicKey"));
+		} else if top
+			.get(index)
+			.is_some_and(|value| value.type_code == types::PUBLIC_KEY)
+		{
+			let value = &top[index];
+			let key = public_key_value(value)?;
+			match listed_origin_key {
+				ListedOriginKey::Prohibited => {
+					return Err(BundleError::Unexpected("listed Origin PublicKey"));
+				}
+				ListedOriginKey::Exact(expected) if key != expected => {
+					return Err(BundleError::InvalidSignature);
+				}
+				ListedOriginKey::Any | ListedOriginKey::Exact(_) => {}
 			}
+			index += 1;
+			advertised_origin_key = Some(key);
+			Some(value)
+		} else {
 			None
 		};
-		let origin = identity(origin_tlv, origin_public_key, resolver)?;
+		let origin = if let Some(key) = advertised_origin_key {
+			Identity {
+				address: origin_address,
+				public_key: key,
+			}
+		} else {
+			identity(origin_tlv, origin_public_key, resolver)?
+		};
 
 		let header_tlv = next_defined(&top, &mut index)
 			.filter(|value| value.type_code == types::SIGNED_TLV)
@@ -280,7 +348,8 @@ impl Bundle {
 		if header.identity != origin {
 			return Err(BundleError::Unexpected("Header Origin"));
 		}
-		let (destination, timestamp) = validate_header(&header.data, resolver)?;
+		let (destination, requested_destination_key, timestamp) =
+			validate_header(&header.data, resolver)?;
 		let expected_hash = hash_tlv(&header.encoded)?;
 
 		let mut payloads = Vec::new();
@@ -313,17 +382,55 @@ impl Bundle {
 				unknown_top_level.push(value.clone());
 			}
 		}
+		if requested_destination_key.is_some()
+			&& !(allow_header_only && payloads.is_empty())
+			&& !(payloads.len() == 1
+				&& payloads[0].data.len() == 2
+				&& payloads[0].data[0].type_code == types::TLV_HASH
+				&& payloads[0].data[1].type_code == types::PUBLIC_KEY_REQUEST)
+		{
+			return Err(BundleError::Unexpected(
+				"listed Destination PublicKey outside a sole PublicKeyRequest",
+			));
+		}
 
 		Ok(Self {
 			encoded: encoded.to_vec(),
 			origin,
+			advertised_origin_key,
 			destination,
+			requested_destination_key,
 			timestamp,
 			header,
 			payloads,
 			unknown_top_level,
 		})
 	}
+
+	/// Returns the request identifier and precise payload hash for a dedicated
+	/// key probe, or `None` for an ordinary or incomplete Bundle.
+	pub fn public_key_request(&self) -> Result<Option<(u64, TlvHash)>, BundleError> {
+		if self.payloads.len() != 1
+			|| self.payloads[0].data.len() != 2
+			|| self.payloads[0].data[0].type_code != types::TLV_HASH
+			|| self.payloads[0].data[1].type_code != types::PUBLIC_KEY_REQUEST
+		{
+			return Ok(None);
+		}
+		let item = crate::item::validate_item(&self.payloads[0].data[1], &|_: &Address| None)?
+			.ok_or(BundleError::Unexpected("PublicKeyRequest"))?;
+		Ok(Some((
+			item.request_identifier,
+			hash_tlv(&self.payloads[0].encoded)?,
+		)))
+	}
+}
+
+#[derive(Clone, Copy)]
+enum ListedOriginKey {
+	Prohibited,
+	Any,
+	Exact(PublicKey),
 }
 
 fn next_defined<'a>(values: &'a [OwnedTlv], index: &mut usize) -> Option<&'a OwnedTlv> {
@@ -339,12 +446,13 @@ fn next_defined<'a>(values: &'a [OwnedTlv], index: &mut usize) -> Option<&'a Own
 fn validate_header(
 	children: &[OwnedTlv],
 	resolver: &impl KeyResolver,
-) -> Result<(Identity, u64), BundleError> {
+) -> Result<(Identity, Option<PublicKey>, u64), BundleError> {
 	let mut index = 0;
 	let destination_tlv = next_defined(children, &mut index)
 		.filter(|value| value.type_code == types::DESTINATION)
 		.ok_or(BundleError::Missing("Destination"))?;
 	let destination_address = address_value(destination_tlv)?;
+	let mut requested_destination_key = None;
 	let destination_key = if destination_address.is_unlisted() {
 		let value = children
 			.get(index)
@@ -354,23 +462,36 @@ fn validate_header(
 		}
 		index += 1;
 		Some(value)
+	} else if children
+		.get(index)
+		.is_some_and(|value| value.type_code == types::PUBLIC_KEY)
+	{
+		let value = &children[index];
+		requested_destination_key = Some(public_key_value(value)?);
+		index += 1;
+		Some(value)
 	} else {
-		if children
-			.get(index)
-			.is_some_and(|value| value.type_code == types::PUBLIC_KEY)
-		{
-			return Err(BundleError::Unexpected("Destination PublicKey"));
-		}
 		None
 	};
-	let destination = identity(destination_tlv, destination_key, resolver)?;
+	let destination = if let Some(key) = requested_destination_key {
+		Identity {
+			address: destination_address,
+			public_key: key,
+		}
+	} else {
+		identity(destination_tlv, destination_key, resolver)?
+	};
 	let timestamp = next_defined(children, &mut index)
 		.filter(|value| value.type_code == types::TIMESTAMP)
 		.ok_or(BundleError::Missing("Timestamp after Destination"))?;
 	if next_defined(children, &mut index).is_some() {
 		return Err(BundleError::Unexpected("defined Header value"));
 	}
-	Ok((destination, decode_u64(&timestamp.value)?))
+	Ok((
+		destination,
+		requested_destination_key,
+		decode_u64(&timestamp.value)?,
+	))
 }
 
 fn concatenate(values: &[OwnedTlv]) -> Vec<u8> {
@@ -451,6 +572,96 @@ pub fn build_bundle(
 	Ok(concatenate(&top))
 }
 
+/// Builds the dedicated initial Bundle which asks a server for its current
+/// signing key. No operational request may share this Bundle.
+pub fn build_public_key_probe(
+	origin: &Identity,
+	origin_secret: &SecretKey,
+	destination: &Address,
+	requested_key: Option<PublicKey>,
+	timestamp: u64,
+	request_identifier: u64,
+) -> Result<Vec<u8>, BundleError> {
+	if destination.is_unlisted() {
+		return Err(BundleError::Unexpected(
+			"PublicKeyRequest for an unlisted Destination",
+		));
+	}
+	let mut top = vec![OwnedTlv::new(
+		types::ORIGIN,
+		origin.address.to_string().into_bytes(),
+	)?];
+	if origin.address.is_unlisted() {
+		top.push(OwnedTlv::new(
+			types::PUBLIC_KEY,
+			origin.public_key.as_bytes().to_vec(),
+		)?);
+	}
+	let mut header_data = vec![OwnedTlv::new(
+		types::DESTINATION,
+		destination.to_string().into_bytes(),
+	)?];
+	if let Some(key) = requested_key {
+		header_data.push(OwnedTlv::new(types::PUBLIC_KEY, key.as_bytes().to_vec())?);
+	}
+	header_data.push(OwnedTlv::new(types::TIMESTAMP, encode_u64(timestamp))?);
+	let header = build_signed_tlv(&header_data, None, origin_secret)?;
+	let header_hash = hash_tlv(&header.encode())?;
+	let payload = [
+		OwnedTlv::new(types::TLV_HASH, header_hash.as_bytes().to_vec())?,
+		crate::item::public_key_request(request_identifier)?,
+	];
+	top.push(header);
+	top.push(build_signed_tlv(&payload, None, origin_secret)?);
+	Ok(concatenate(&top))
+}
+
+/// Builds the reply to one `PublicKeyRequest`.
+///
+/// `signing_origin` is the requested predecessor identity and may use a
+/// retained secret. Its key is repeated after the listed outer Origin so the
+/// client can select it before authenticating the Header. `current_key` is
+/// inside Accepted and is therefore certified by that predecessor signature.
+pub fn build_public_key_reply(
+	signing_origin: &Identity,
+	signing_secret: &SecretKey,
+	destination: &Identity,
+	timestamp: u64,
+	request_identifier: u64,
+	response_to: TlvHash,
+	current_key: PublicKey,
+) -> Result<Vec<u8>, BundleError> {
+	let mut top = vec![OwnedTlv::new(
+		types::ORIGIN,
+		signing_origin.address.to_string().into_bytes(),
+	)?];
+	// A probe reply always states its signing key, including for a listed Origin.
+	top.push(OwnedTlv::new(
+		types::PUBLIC_KEY,
+		signing_origin.public_key.as_bytes().to_vec(),
+	)?);
+	let mut header_data = vec![OwnedTlv::new(
+		types::DESTINATION,
+		destination.address.to_string().into_bytes(),
+	)?];
+	if destination.address.is_unlisted() {
+		header_data.push(OwnedTlv::new(
+			types::PUBLIC_KEY,
+			destination.public_key.as_bytes().to_vec(),
+		)?);
+	}
+	header_data.push(OwnedTlv::new(types::TIMESTAMP, encode_u64(timestamp))?);
+	let header = build_signed_tlv(&header_data, None, signing_secret)?;
+	let header_hash = hash_tlv(&header.encode())?;
+	let payload = [
+		OwnedTlv::new(types::TLV_HASH, header_hash.as_bytes().to_vec())?,
+		crate::item::accepted_public_key(request_identifier, response_to, current_key)?,
+	];
+	top.push(header);
+	top.push(build_signed_tlv(&payload, None, signing_secret)?);
+	Ok(concatenate(&top))
+}
+
 #[cfg(test)]
 mod tests {
 	use tith_crypto::SigningKeyPair;
@@ -492,6 +703,74 @@ mod tests {
 		assert_eq!(parsed.destination, destination);
 		assert_eq!(parsed.timestamp, 1_700_000_000);
 		assert_eq!(parsed.payloads.len(), 1);
+	}
+
+	#[test]
+	fn predecessor_key_certifies_a_successor_in_a_probe_reply() {
+		let client_keys = SigningKeyPair::from_seed(&[21; 32]).unwrap();
+		let old_server_keys = SigningKeyPair::from_seed(&[22; 32]).unwrap();
+		let new_server_keys = SigningKeyPair::from_seed(&[23; 32]).unwrap();
+		let client = Identity {
+			address: "fidonet#1:2/3".parse().unwrap(),
+			public_key: client_keys.public,
+		};
+		let server_address: Address = "fidonet#1:2/4".parse().unwrap();
+		let old_server = Identity {
+			address: server_address.clone(),
+			public_key: old_server_keys.public,
+		};
+		let probe = build_public_key_probe(
+			&client,
+			&client_keys.secret,
+			&server_address,
+			Some(old_server.public_key),
+			1,
+			77,
+		)
+		.unwrap();
+		let resolver = |address: &Address| {
+			(address == &client.address)
+				.then_some(client.public_key)
+				.or_else(|| (address == &server_address).then_some(new_server_keys.public))
+		};
+		let parsed_probe = Bundle::parse(&probe, &resolver).unwrap();
+		assert_eq!(
+			parsed_probe.requested_destination_key,
+			Some(old_server.public_key)
+		);
+		let probe_values = parse_sequence(&probe).unwrap();
+		let prefix = concatenate(&probe_values[..2]);
+		assert!(Bundle::parse(&prefix, &resolver).is_err());
+		assert!(Bundle::parse_header_prefix(&prefix, &resolver).is_ok());
+		let (request_identifier, response_to) = parsed_probe.public_key_request().unwrap().unwrap();
+		let reply = build_public_key_reply(
+			&old_server,
+			&old_server_keys.secret,
+			&client,
+			2,
+			request_identifier,
+			response_to,
+			new_server_keys.public,
+		)
+		.unwrap();
+		let parsed =
+			Bundle::parse_public_key_reply(&reply, &resolver, Some(old_server.public_key)).unwrap();
+		let accepted = crate::item::validate_item(&parsed.payloads[0].data[1], &resolver)
+			.unwrap()
+			.unwrap();
+		assert_eq!(accepted.response_public_key, Some(new_server_keys.public));
+
+		assert!(
+			Bundle::parse_public_key_reply(&reply, &resolver, Some(new_server_keys.public),)
+				.is_err()
+		);
+		let mut tampered = reply;
+		let last = tampered.last_mut().unwrap();
+		*last ^= 1;
+		assert!(
+			Bundle::parse_public_key_reply(&tampered, &resolver, Some(old_server.public_key),)
+				.is_err()
+		);
 	}
 
 	#[test]

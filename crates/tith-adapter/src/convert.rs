@@ -17,13 +17,13 @@ use std::collections::BTreeMap;
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD_NO_PAD;
-use tith_crypto::verify_tlv;
+use tith_crypto::{PUBLIC_KEY_BYTES, PublicKey, SIGNATURE_BYTES, Signature, verify_tlv};
 use tith_message_legacy::{
 	Control, ExportError, PackedMessage, control, encode_body, format_date_time, parse_date_time,
 	tithsig_controls, tithsign_controls,
 };
 use tith_wire::bundle::KeyResolver;
-use tith_wire::item::{ItemAuthentication, ReadMessage};
+use tith_wire::item::{ItemAuthentication, LEGACY_ATTRIBUTES_SIGNED_MASK, ReadMessage};
 use tith_wire::{Address, OwnedTlv, types};
 
 use crate::address::{self, AddressError};
@@ -111,6 +111,132 @@ pub enum Fidelity {
 	/// A deliberate presentation loss. TSP-0003 section 10: compatibility output
 	/// "MUST NOT carry TITHSIG".
 	Compatibility,
+}
+
+/// The structured authentication carried by canonical TITHSIGN/TITHSIG
+/// controls. The signature is deliberately not verified here: the service
+/// owns the current key resolver and verifies the reconstructed Message before
+/// committing it.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RetainedSigning {
+	pub signature: Signature,
+	pub signed_origin: Option<Address>,
+	pub signed_origin_key: Option<PublicKey>,
+}
+
+/// Decodes canonical revision-1 TITHSIGN/TITHSIG controls.
+///
+/// Absence returns `None`. A malformed or partial group is an error and must
+/// not be passed through as an `AdditionalKludgeLine`.
+pub fn retained_signing(controls: &[Control]) -> Result<Option<RetainedSigning>, ConvertError> {
+	let signing: Vec<(usize, &Control)> = controls
+		.iter()
+		.enumerate()
+		.filter(|(_, control)| matches!(control.name.as_str(), "TITHSIGN" | "TITHSIG"))
+		.collect();
+	if signing.is_empty() {
+		return Ok(None);
+	}
+	if signing.windows(2).any(|pair| pair[1].0 != pair[0].0 + 1) {
+		return Err(ConvertError::Unrepresentable(
+			"a nonconsecutive TITHSIGN/TITHSIG group",
+		));
+	}
+	let sig: Vec<_> = signing
+		.iter()
+		.filter(|(_, control)| control.name == "TITHSIG")
+		.collect();
+	if sig.len() != 2 || sig[1].0 != sig[0].0 + 1 {
+		return Err(ConvertError::Unrepresentable("a malformed TITHSIG group"));
+	}
+	let mut signature_text = String::new();
+	for (_, control) in sig {
+		let Some(chunk) = control.value.strip_prefix("1 ") else {
+			return Err(ConvertError::Unrepresentable("a TITHSIG revision"));
+		};
+		if chunk.len() != 43 {
+			return Err(ConvertError::Unrepresentable("a TITHSIG chunk"));
+		}
+		signature_text.push_str(chunk);
+	}
+	let signature: [u8; SIGNATURE_BYTES] = STANDARD_NO_PAD
+		.decode(signature_text)
+		.map_err(|_| ConvertError::Unrepresentable("a TITHSIG encoding"))?
+		.try_into()
+		.map_err(|_| ConvertError::Unrepresentable("a TITHSIG Signature"))?;
+
+	let sign: Vec<_> = signing
+		.iter()
+		.filter(|(_, control)| control.name == "TITHSIGN")
+		.collect();
+	let (signed_origin, signed_origin_key) = if sign.is_empty() {
+		(None, None)
+	} else {
+		if sign.last().expect("not empty").0 + 1
+			!= signing
+				.iter()
+				.find(|(_, control)| control.name == "TITHSIG")
+				.expect("two TITHSIG controls")
+				.0
+		{
+			return Err(ConvertError::Unrepresentable(
+				"a nonconsecutive TITHSIGN group",
+			));
+		}
+		let mut encoded = String::new();
+		for (position, (_, control)) in sign.iter().enumerate() {
+			let Some(rest) = control.value.strip_prefix("1 ") else {
+				return Err(ConvertError::Unrepresentable("a TITHSIGN revision"));
+			};
+			let (marker, chunk) = rest
+				.split_once(' ')
+				.ok_or(ConvertError::Unrepresentable("a TITHSIGN chunk"))?;
+			let final_chunk = position + 1 == sign.len();
+			if (final_chunk && marker != ".")
+				|| (!final_chunk && marker != "+")
+				|| chunk.is_empty()
+				|| chunk.len() > 43
+				|| (!final_chunk && chunk.len() != 43)
+			{
+				return Err(ConvertError::Unrepresentable("a TITHSIGN chunk"));
+			}
+			encoded.push_str(chunk);
+		}
+		let bytes = STANDARD_NO_PAD
+			.decode(encoded)
+			.map_err(|_| ConvertError::Unrepresentable("a TITHSIGN encoding"))?;
+		let values = tith_wire::tlv::parse_sequence(&bytes)
+			.map_err(|_| ConvertError::Unrepresentable("a TITHSIGN TLV sequence"))?;
+		if values.is_empty() || values[0].type_code != types::SIGNED_ORIGIN {
+			return Err(ConvertError::Unrepresentable("a TITHSIGN SignedOrigin"));
+		}
+		let address = std::str::from_utf8(&values[0].value)
+			.map_err(|_| ConvertError::Unrepresentable("a TITHSIGN SignedOrigin"))?
+			.parse::<Address>()
+			.map_err(|_| ConvertError::Unrepresentable("a TITHSIGN SignedOrigin"))?;
+		let key = if address.is_unlisted() {
+			if values.len() != 2 || values[1].type_code != types::PUBLIC_KEY {
+				return Err(ConvertError::Unrepresentable("a TITHSIGN PublicKey"));
+			}
+			let bytes: [u8; PUBLIC_KEY_BYTES] = values[1]
+				.value
+				.as_slice()
+				.try_into()
+				.map_err(|_| ConvertError::Unrepresentable("a TITHSIGN PublicKey"))?;
+			Some(PublicKey::from_bytes(bytes))
+		} else {
+			if values.len() != 1 {
+				return Err(ConvertError::Unrepresentable("a listed TITHSIGN value"));
+			}
+			None
+		};
+		(Some(address), key)
+	};
+	Ok(Some(RetainedSigning {
+		signature: Signature::from_bytes(signature),
+		signed_origin,
+		signed_origin_key,
+	}))
 }
 
 /// One converted message and what its conversion preserved.
@@ -292,8 +418,9 @@ fn build(
 	let attach = !data.attachments.is_empty();
 	// TSP-0003 section 4: LegacyAttributes, or zero when absent, with bit 4
 	// cleared and then set exactly when File children are present.
-	let attributes = u16::try_from(data.legacy_attributes.unwrap_or(0) & 0xffff)
-		.map_err(|_| ConvertError::Unrepresentable("LegacyAttributes"))?;
+	let attributes =
+		u16::try_from(data.legacy_attributes.unwrap_or(0) & LEGACY_ATTRIBUTES_SIGNED_MASK)
+			.map_err(|_| ConvertError::Unrepresentable("LegacyAttributes"))?;
 	let attributes = if attach {
 		attributes | ATTRIBUTE_FILE_ATTACHED
 	} else {
@@ -732,7 +859,7 @@ fn finish_reconstruction(
 		message.subject.clone()
 	};
 	push(&mut children, types::SUBJECT, subject.into_bytes())?;
-	let (text, tear_line, origin_line) = body_text(message);
+	let (text, tear_line, origin_line) = message_body_fields(message);
 	push(&mut children, types::MESSAGE_TEXT, text.into_bytes())?;
 
 	if let Some(tag) = &message.area {
@@ -778,18 +905,16 @@ fn finish_reconstruction(
 		}
 	}
 
-	// TSP-0003 section 4: import clears bit 4 and preserves the remaining bits,
-	// omitting the value when nothing remains set. Every legacy format carries
-	// the AttributeWord in a fixed field and canonical export always emits TZUTC,
-	// so an absent native value and a zero one share one legacy encoding; TTS-0005
-	// makes absence the one that reconstructs, and keeps attachment presence in
-	// the File children alone.
-	let attributes = message.attributes & !ATTRIBUTE_FILE_ATTACHED;
+	// TSP-0003 section 4: import retains only the packet-persistent signed
+	// subset. FileAttached is represented by File children; bookkeeping and
+	// transport bits may be changed by conforming legacy software and therefore
+	// cannot be part of the stable signed projection.
+	let attributes = u64::from(message.attributes) & LEGACY_ATTRIBUTES_SIGNED_MASK;
 	if attributes != 0 {
 		push(
 			&mut children,
 			types::LEGACY_ATTRIBUTES,
-			tith_wire::encode_u64(u64::from(attributes)),
+			tith_wire::encode_u64(attributes),
 		)?;
 	}
 	if offset != 0 {
@@ -849,7 +974,8 @@ fn origin_key_end(read: &ReadMessage) -> usize {
 /// TSP-0003 section 7: import removes AREA, SPTH, the optional footer lines,
 /// SEEN-BY, and PATH from `MessageText`. Section 3 places `NetMail` Via
 /// paragraphs after the body, so those are removed too.
-fn body_text(message: &PackedMessage) -> (String, Option<String>, Option<String>) {
+#[must_use]
+pub fn message_body_fields(message: &PackedMessage) -> (String, Option<String>, Option<String>) {
 	if message.area.is_some() {
 		let (text, footer) = split_footer(&message.text);
 		let mut tear = None;
@@ -900,11 +1026,11 @@ mod tests {
 		}
 	}
 
-	fn signed(data: MessageData) -> (ReadMessage, SigningKeyPair, Address) {
+	fn signed(data: &MessageData) -> (ReadMessage, SigningKeyPair, Address) {
 		signed_with(data, &[])
 	}
 
-	fn signed_with_seen_by(data: MessageData) -> (ReadMessage, SigningKeyPair, Address) {
+	fn signed_with_seen_by(data: &MessageData) -> (ReadMessage, SigningKeyPair, Address) {
 		signed_with(
 			data,
 			&[
@@ -915,7 +1041,7 @@ mod tests {
 	}
 
 	fn signed_with(
-		data: MessageData,
+		data: &MessageData,
 		seen_by: &[Address],
 	) -> (ReadMessage, SigningKeyPair, Address) {
 		let keys = SigningKeyPair::from_seed(&[90; 32]).unwrap();
@@ -985,7 +1111,7 @@ mod tests {
 
 	#[test]
 	fn a_canonical_netmail_reconstructs_its_signed_region() {
-		let (read, keys, _) = signed(netmail(Vec::new(), "Hello"));
+		let (read, keys, _) = signed(&netmail(Vec::new(), "Hello"));
 		let converted = to_legacy(
 			&read,
 			&context(),
@@ -1021,6 +1147,35 @@ mod tests {
 	}
 
 	#[test]
+	fn retained_signing_rejects_an_interrupted_control_group() {
+		let (read, keys, _) = signed(&netmail(Vec::new(), "Hello"));
+		let mut converted = to_legacy(
+			&read,
+			&context(),
+			ItemAuthentication::OriginValid,
+			None,
+			&resolver(&keys),
+		)
+		.unwrap();
+		let second = converted
+			.message
+			.controls
+			.iter()
+			.position(|control| control.name == "TITHSIG")
+			.expect("canonical output has TITHSIG")
+			+ 1;
+		let unrelated = converted.message.controls[0].clone();
+		converted.message.controls.insert(second, unrelated);
+
+		assert!(matches!(
+			retained_signing(&converted.message.controls),
+			Err(ConvertError::Unrepresentable(
+				"a nonconsecutive TITHSIGN/TITHSIG group"
+			))
+		));
+	}
+
+	#[test]
 	fn attachments_become_the_subject_filelist_and_set_bit_four() {
 		// The signed Message carries no LegacyAttributes at all, which is what
 		// native origination produces. TSP-0003 section 4 has export set bit 4
@@ -1041,7 +1196,7 @@ mod tests {
 			],
 			"",
 		);
-		let (read, keys, _) = signed(data);
+		let (read, keys, _) = signed(&data);
 		let converted = to_legacy(
 			&read,
 			&context(),
@@ -1072,7 +1227,7 @@ mod tests {
 	fn a_delivery_warning_forces_compatibility_output() {
 		// TSP-0013 section 4: the diagnostic must not be in an object used to
 		// reconstruct the item, and a packet record is the only object.
-		let (read, keys, _) = signed(netmail(Vec::new(), "Hello"));
+		let (read, keys, _) = signed(&netmail(Vec::new(), "Hello"));
 		let converted = to_legacy(
 			&read,
 			&context(),
@@ -1093,7 +1248,7 @@ mod tests {
 	fn an_unsigned_or_invalid_item_never_carries_tithsig() {
 		// TSP-0003 section 10.1: "Invalid or Unsigned input is not eligible for a
 		// canonical signed-region export."
-		let (read, keys, _) = signed(netmail(Vec::new(), "Hello"));
+		let (read, keys, _) = signed(&netmail(Vec::new(), "Hello"));
 		for authentication in [
 			ItemAuthentication::Unsigned,
 			ItemAuthentication::OriginInvalid,
@@ -1122,7 +1277,7 @@ mod tests {
 		let mut data = netmail(Vec::new(), "Hello");
 		data.legacy_attributes = None;
 		data.timestamp_offset = None;
-		let (read, keys, _) = signed(data);
+		let (read, keys, _) = signed(&data);
 		let converted = to_legacy(
 			&read,
 			&context(),
@@ -1157,7 +1312,7 @@ mod tests {
 		// no mapping and must survive the round trip inside MessageText.
 		let mut data = netmail(Vec::new(), "Hello");
 		data.text = "Body line one\n--- tosser 1.0\n * Origin: A board (1:104/36)\n".to_owned();
-		let (read, keys, _) = signed(data);
+		let (read, keys, _) = signed(&data);
 		let converted = to_legacy(
 			&read,
 			&context(),
@@ -1204,7 +1359,7 @@ mod tests {
 
 	#[test]
 	fn a_canonical_echomail_reconstructs_its_signed_region() {
-		let (read, keys, _) = signed_with_seen_by(echomail());
+		let (read, keys, _) = signed_with_seen_by(&echomail());
 		let converted = to_legacy(
 			&read,
 			&context(),
@@ -1249,7 +1404,7 @@ mod tests {
 		let mut data = echomail();
 		data.subject = "Ordering".to_owned();
 		let (read, keys, _) = signed_with(
-			data,
+			&data,
 			&[
 				"fidonet#1:104/36".parse().unwrap(),
 				"fidonet#1:104/1".parse().unwrap(),
@@ -1281,7 +1436,7 @@ mod tests {
 
 	#[test]
 	fn an_echomail_with_no_representable_recipient_is_refused() {
-		let (read, keys, _) = signed_with(echomail(), &["fidonet#2:200/7".parse().unwrap()]);
+		let (read, keys, _) = signed_with(&echomail(), &["fidonet#2:200/7".parse().unwrap()]);
 		let error = to_legacy(
 			&read,
 			&context(),

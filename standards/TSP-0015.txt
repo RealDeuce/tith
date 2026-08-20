@@ -1,0 +1,189 @@
+**********************************************************************
+TITH                                              THIS ISN'T THAT HARD
+**********************************************************************
+
+Publication:  TSP‑0015
+Revision:     1
+Title:        Public Key Trust and Continuity
+Author(s):    Stephen Hurd
+Date:         2026‑08‑20
+══════════════════════════════════════════════════════════════════════
+
+Status of this document
+───────────────────────
+
+  This document is a TITH Standard Proposal (TSP) — it documents a
+  proposed standard and solicits discussion.  Until promoted to a TTS,
+  this is experimental only and does not describe required behaviour.
+
+  This document is released to the public domain, and may be used,
+  copied or modified for any purpose whatever.
+
+Abstract
+────────
+
+  This document defines durable public key pins, first contact, and
+  authenticated key continuity for listed TITH identities.  It is
+  shared by native TITH exchange and legacy discovery gateways.
+
+Contents
+────────
+
+  1.  Introduction
+  2.  Trust Records
+  3.  Resolution and Nodelist Precedence
+  4.  First Contact and Observations
+  5.  Native Continuity Proof
+  6.  Rotation and Revocation
+  7.  Feedback and Discussion
+
+  A. References
+  B. History
+
+══════════════════════════════════════════════════════════════════════
+
+
+1. Introduction
+───────────────
+
+  A listed address identifies one system only when its signing public
+  key is known.  A current nodelist supplies that trust anchor in the
+  ordinary case, but private networks, delayed nodelists, first contact,
+  and planned rotation also require durable local trust state.
+
+  This proposal defines that state once.  Native TITH obtains a key or
+  continuity proof with the PublicKeyRequest in TTS‑0005.  A legacy
+  gateway may obtain observations through TSP‑0014.  Those are input
+  channels, not competing definitions of what a pin means.
+
+
+2. Trust Records
+────────────────
+
+  A conforming implementation which retains a key for a listed address
+  MUST store it in service‑owned durable state.  A record contains:
+
+  • the canonical listed address;
+  • the current pinned PublicKey;
+  • the nodelist PublicKey which anchored its continuity chain, if any;
+  • the predecessor PublicKey for the latest authenticated advance, if
+    any;
+  • when the observation was accepted; and
+  • whether it came from trusted first contact, native continuity, or a
+    legacy directed observation.
+
+  The update which advances a pin MUST be atomic.  A crash cannot leave
+  a new current key without the record of the predecessor and source
+  which authorized it.  Pin state is private service data and MUST NOT
+  depend on an outbound filename, scan order, or transient connection.
+
+
+3. Resolution and Nodelist Precedence
+─────────────────────────────────────
+
+  A current nodelist PublicKey is the external trust anchor for its
+  listed address.  With no continuity record, it is the effective key.
+
+  A continuity record anchored by that exact nodelist key makes its
+  current pinned key effective.  This permits an old published key to
+  certify a planned successor before the next nodelist is distributed.
+  If the nodelist later publishes the successor, that nodelist key is
+  directly effective and the older chain no longer needs to override
+  it.
+
+  If the nodelist publishes a key unrelated to the record's anchor, the
+  nodelist key takes precedence.  A local observation MUST NOT override
+  that new external trust decision.  With no nodelist key, an existing
+  local pin is effective.
+
+  An unlisted identity is already the address and PublicKey pair
+  defined by TTS‑0004 and does not use a listed‑address pin.
+
+
+4. First Contact and Observations
+────────────────────────────────
+
+  A self‑signed key observed at a contacted endpoint proves possession
+  of that key but does not prove that the endpoint belongs to the
+  intended listed address.  An implementation MUST NOT create or
+  replace a pin from such an observation by default.
+
+  First contact MAY establish a pin only when the operator explicitly
+  designates that exact contact as trusted.  TSP‑0002 does this with
+  Trust-On-First-Use on a listed Peer having a configured Endpoint.
+  The implementation MUST log that a new trust decision was made.
+  Repeating first contact MUST NOT replace an existing pin.
+
+  TSP‑0014 classifies legacy observations as directed or undirected.
+  A directed observation MAY establish an initial pin only under an
+  equivalent explicit trusted‑contact policy.  An undirected
+  advertisement MAY be recorded or used for operator corroboration but
+  MUST NOT establish or advance a pin by itself.
+
+
+5. Native Continuity Proof
+──────────────────────────
+
+  TTS‑0005 defines a PublicKeyRequest which names an already trusted
+  predecessor in the listed Destination's following PublicKey.  The
+  Server repeats that predecessor after its listed reply Origin, signs
+  the reply using the predecessor's retained private key, and carries
+  its current PublicKey inside the authenticated Accepted value.
+
+  The Client MUST verify the complete reply using the exact requested
+  predecessor.  It MUST also verify the reversed Bundle identities,
+  RequestIdentifier, ResponseTo hash, and dedicated reply grammar.  It
+  MAY atomically advance the pin only after every check succeeds.
+
+  A response signed by any other key is not continuity evidence.  A
+  newly observed key, a different legacy advertisement, or repeated
+  authentication failure MUST NOT replace the current key.
+
+
+6. Rotation and Revocation
+──────────────────────────
+
+  An operator planning rotation retains the old private key long enough
+  to answer PublicKeyRequest with a bundle which certifies the new key.
+  A retained secret MUST be used only for that continuity response and
+  MUST NOT sign ordinary new traffic.
+
+  This mechanism establishes continuity, not revocation.  If the old
+  private key is compromised, an attacker can certify another key with
+  the same authority.  Recovery then requires a trust decision outside
+  this proof, such as a corrected authenticated nodelist, an operator
+  administrative action, or another separately authenticated channel.
+  Software MUST NOT describe a continuity advance as proof that the
+  predecessor is uncompromised or revoked.
+
+
+7. Feedback and Discussion
+──────────────────────────
+
+  Discussion of this proposal should occur in the repository issue
+  tracker.  Reports should distinguish discovery, continuity, and
+  compromise recovery because they have different trust properties.
+
+
+A. References
+─────────────
+
+  [TSP‑0002] "Routing and Distribution Configuration", TITH,
+  2026‑08‑20.
+
+  [TSP‑0014] "Signed Mail From Legacy‐Only Systems", TITH,
+  2026‑08‑20.
+
+  [TTS‑0004] "Node Addresses", TITH, 2026‑08‑17.
+
+  [TTS‑0005] "Bundle Format", TITH, 2026‑08‑20.
+
+  [TTS‑5000] "The Distribution Nodelist", TITH, 2026‑08‑18.
+
+
+B. History
+──────────
+
+   Rev.1, 2026‑08‑20: Initial release.
+
+**********************************************************************

@@ -18,6 +18,7 @@ pub const ACCEPTED: u64 = 68;
 pub const POLL_MESSAGES: u64 = 69;
 pub const POLL_FILES: u64 = 70;
 pub const POLL_FILE_REQUESTS: u64 = 71;
+pub const PUBLIC_KEY_REQUEST: u64 = 72;
 
 pub const FILENAME: u64 = 96;
 pub const CONTENTS: u64 = 97;
@@ -47,13 +48,18 @@ pub const REPLACES: u64 = 121;
 
 #[must_use]
 pub const fn is_defined(type_code: u64) -> bool {
-	matches!(type_code, 0..=9 | 64..=71 | 96..=99 | 101..=121)
+	matches!(type_code, 0..=9 | 64..=72 | 96..=99 | 101..=121)
 }
 
 #[must_use]
 pub const fn is_request(type_code: u64) -> bool {
 	matches!(
 		type_code,
-		MESSAGE | FILE | FILE_REQUEST | POLL_MESSAGES | POLL_FILES | POLL_FILE_REQUESTS
+		MESSAGE
+			| FILE | FILE_REQUEST
+			| POLL_MESSAGES
+			| POLL_FILES
+			| POLL_FILE_REQUESTS
+			| PUBLIC_KEY_REQUEST
 	)
 }

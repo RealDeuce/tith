@@ -3,10 +3,10 @@ TITH                                              THIS ISN'T THAT HARD
 **********************************************************************
 
 Publication:  TSP‑0003
-Revision:     6
+Revision:     7
 Title:        Legacy Data Formats and TITH
 Author(s):    Stephen Hurd
-Date:         2026‑08‑19
+Date:         2026‑08‑20
 ════════════════════════════════════════════════════════════════════════
 
 Status of this document
@@ -268,23 +268,25 @@ Contents
       TITHSIG reconstruction.
 
   LegacyAttributes
-      Legacy to TITH: the complete AttributeWord, augmented only by
-      the exact FLAGS mappings in section 3.
-      TITH to legacy: AttributeWord, with file‐attach bit 4 made
-      consistent with the actual File children.  Revision 1 requires
-      LegacyAttributes to be present and its bit 4 already to agree
-      with the presence of File children.  During TITHSIG
-      reconstruction FLAGS remains an unsigned AdditionalKludgeLine and
-      does not contribute to LegacyAttributes.  FileRequest bit 11 and
-      FileUpdateReq bit 15 are preserved independently; neither creates
-      a TTS‑0005 FileRequest.
+      Legacy to TITH: the normalized packet‐persistent subset of the
+      AttributeWord, augmented only by the exact FLAGS mappings in
+      section 3 and omitted when zero.  TITH to legacy: that subset,
+      with file‐attach bit 4 derived from the actual File children.
+      Revision 1 requires LegacyAttributes to be absent when the subset
+      is zero and otherwise to contain only that subset.  During
+      TITHSIG reconstruction FLAGS remains an unsigned
+      AdditionalKludgeLine and does not contribute to
+      LegacyAttributes.  FileRequest bit 11 and FileUpdateReq bit 15
+      remain legacy processing state; neither is signed or creates a
+      TTS‑0005 FileRequest.
 
   TimestampOffset
       Legacy to TITH: TZUTC or TZUTCINFO, or trusted source policy when
-      the control is absent.
+      the control is absent; zero is represented by an absent child.
       TITH to legacy: TZUTC and the conversion of UTC Timestamp to the
-      stored or packed local DateTime.  Revision 1 requires this child
-      to be present and exactly representable by TZUTC.
+      stored or packed local DateTime.  Revision 1 requires a nonzero
+      child to be exactly representable by TZUTC and requires the child
+      to be absent when TZUTC represents zero.
 
   TearLine
       Legacy to TITH: the optional EchoMail line beginning with three
@@ -543,13 +545,14 @@ Contents
   A FLAGS control is preserved verbatim and MAY additionally contribute
   only these exact AttributeWord meanings to LegacyAttributes:
 
-    PVT bit 0, CRA bit 1, RCV bit 2, SNT bit 3, K/S bit 7,
-    HLD bit 9, FRQ bit 11, and RRQ bit 12.
+    PVT bit 0, CRA bit 1, and RRQ bit 12.
 
-  FIL is deliberately absent from that list.  It names bit 4, which
-  section 4 keeps out of LegacyAttributes because the File children
-  carry attachment presence.  FIL still identifies attached files for
-  ordinary import as described below.
+  These are the FLAGS names for packet‐persistent signed bits.  The
+  AttributeWord can additionally supply IsReturnReceipt bit 13 and
+  AuditRequest bit 14.  FIL is deliberately absent from the FLAGS
+  list: it names bit 4, which section 4 keeps out of LegacyAttributes
+  because the File children carry attachment presence.  FIL still
+  identifies attached files for ordinary import as described below.
 
   All other FLAGS tokens remain legacy metadata.  In particular, DIR,
   ZON, HUB, IMM, KFS, and TFS do not grant native routing, priority, or
@@ -576,8 +579,9 @@ Contents
   processing semantics; by themselves they do not identify companion
   files and MUST NOT create TTS‑0005 FileRequest values.  If several bits
   are asserted, the one FileList has every asserted legacy meaning.
-  Ordinary import preserves all three bits and the list even when a
-  requested or update operation has no native equivalent.
+  Ordinary import preserves the list as Subject when a requested or
+  update operation has no native equivalent, but does not place the
+  mutable request bits in signed LegacyAttributes.
 
   FLAGS FIL and FRQ are compatibility copies of bits 4 and 11.  ASSOC
   is a repeatable compatibility list of companion filenames.  Ordinary
@@ -837,13 +841,24 @@ Contents
   importing gateway appends its own Via before committing the Message to
   a new next hop as required by TTS‑0005.
 
+  When the importer uses TSP‑0006, it submits those reconstructed named
+  Message fields, the retained Signature, the actual SignedOrigin and
+  conditional PublicKey from TITHSIGN, its selected Local-Identity,
+  Attachment Sources, and current unsigned suffix through that
+  document's existing UTF‑8 Message Job grammar.  It MUST NOT submit
+  TITHSIGN or TITHSIG again as an AdditionalKludgeLine.  The Service
+  reconstructs and verifies the same signed children before commitment;
+  it does not create a second binary Message submission grammar.
+
   The enclosing Message Type and Length and every child following
   Signature are freshly encoded because they are outside the original
   signature.  Other unsigned control paragraphs may be added, removed,
   reordered, or modified without affecting reconstruction.  Packet
   routing and stored‐message bookkeeping fields have no signed mapping
-  and are ignored.  AttributeWord does map signed LegacyAttributes; a
-  change to that word causes original Signature verification to fail.
+  and are ignored.  Only the normalized packet‐persistent subset of the
+  AttributeWord maps signed LegacyAttributes.  A change to that subset
+  causes original Signature verification to fail; changes to the other
+  bits do not alter the reconstructed signed region.
 
   If TITHSIG is absent, malformed, or fails verification, it does not
   authenticate any native value.  TITHSIGN then cannot select a signer
@@ -915,13 +930,22 @@ Contents
   discarded.
 
   Export writes zero for timesRead, cost, replyTo, and nextReply.  It
-  writes LegacyAttributes, or zero when absent, after clearing bit 4
-  and setting that bit exactly when File children are present.  Import
-  clears bit 4 from the AttributeWord and preserves the remaining bits
-  as LegacyAttributes, omitting the value entirely when nothing remains
-  set.  Bits 11 and 15 are not changed by attachment export.  No
-  attribute grants native authority or silently creates a native
-  request.
+  writes only these LegacyAttributes bits, or zero when absent:
+
+    bit 0   Private
+    bit 1   Crash
+    bit 12  ReturnReceiptRequest
+    bit 13  IsReturnReceipt
+    bit 14  AuditRequest
+
+  It then sets bit 4 exactly when File children are present.  Import
+  retains only those five bits as LegacyAttributes and omits the value
+  entirely when none is set.  Bit 4 is represented only by File
+  children.  Bit 10 is unused, and every other AttributeWord bit is
+  mutable legacy bookkeeping or transport state; canonical export
+  writes those bits as zero and import discards them from the signed
+  projection.  No attribute grants native authority or silently
+  creates a native request.
 
   Both import rules follow from TTS‑0005, which makes an absent
   LegacyAttributes the only native representation of a zero
@@ -1462,16 +1486,16 @@ A. References
 
   [Policy] "FidoNet Policy Document", Version 4.07, 1989‑06‑09.
 
-  [TSP‑0006] "Outbound Job Submission", TITH, 2026‑08‑19.
+  [TSP‑0006] "Outbound Job Submission", TITH, 2026‑08‑20.
 
   [TSP‑0013] "Legacy Mailer and Tosser IPC Adapters", TITH,
-  2026‑08‑18.
+  2026‑08‑20.
 
   [TSP‑0011] "Durable Inbound Delivery Items", TITH, 2026‑08‑18.
 
   [TTS‑0004] "Node Addresses", TITH, 2026‑08‑17.
 
-  [TTS‑0005] "Bundle Format", TITH, 2026‑08‑18.
+  [TTS‑0005] "Bundle Format", TITH, 2026‑08‑20.
 
 
 B. History
@@ -1507,5 +1531,11 @@ B. History
    rather than separate two, so each MessageText terminator maps to one
    hard carriage return and back, and had import supply the terminator
    of a final paragraph which ended at the NUL.
+
+   Rev.7, 2026‑08‑20: Restricted signed LegacyAttributes to the five
+   packet‐persistent AttributeWord bits, made attachment presence a
+   File‐child fact and mutable bits legacy state, and reconciled the
+   field map with the absent‐zero rules for LegacyAttributes and
+   TimestampOffset.
 
 **********************************************************************

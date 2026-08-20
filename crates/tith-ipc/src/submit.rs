@@ -57,8 +57,8 @@ pub struct SubmissionJob {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum SubmissionBody {
-	Message(MessageSubmission),
-	File(FileSubmission),
+	Message(Box<MessageSubmission>),
+	File(Box<FileSubmission>),
 	FileRequest(FileRequestSubmission),
 	Forward {
 		inbound_id: String,
@@ -76,7 +76,11 @@ pub enum MessageKind {
 pub struct MessageSubmission {
 	pub kind: MessageKind,
 	pub origin: String,
+	/// The one local identity whose routing configuration and Via apply.
+	pub local_identity: Option<String>,
 	pub signed_origin: Option<String>,
+	/// Present only when a retained Signed-Origin is the unlisted address.
+	pub signed_origin_public_key: Option<String>,
 	pub destination_or_area: String,
 	pub to_user: String,
 	pub from_user: String,
@@ -89,11 +93,24 @@ pub struct MessageSubmission {
 	pub origin_line: Option<String>,
 	pub message_id: Option<String>,
 	pub reply_to: Option<(String, String)>,
+	/// A retained end-to-end Message Signature, as unpadded RFC-4648 base64.
+	pub signature: Option<String>,
+	/// Existing unsigned path values reconstructed from legacy state.
+	pub vias: Vec<MessageVia>,
+	pub seen_by: Vec<String>,
 	pub additional_kludge_lines: Vec<String>,
 	pub class: Option<String>,
 	pub next_hop: Option<NextHop>,
 	pub failure_policy: Option<FailureOverride>,
 	pub attachments: Vec<SourceSubmission>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MessageVia {
+	pub address: String,
+	pub public_key: Option<String>,
+	pub timestamp: u64,
+	pub software: String,
 }
 
 /// Where a standalone File Job sends its File.
@@ -338,12 +355,12 @@ fn parse_job(
 				claim_token: token.text.clone(),
 			}
 		}
-		ParsedJobKind::File | ParsedJobKind::PeerFile => {
-			SubmissionBody::File(parse_file(&mut cursor, kind == ParsedJobKind::PeerFile)?)
-		}
+		ParsedJobKind::File | ParsedJobKind::PeerFile => SubmissionBody::File(Box::new(
+			parse_file(&mut cursor, kind == ParsedJobKind::PeerFile)?,
+		)),
 		ParsedJobKind::FileRequest => SubmissionBody::FileRequest(parse_file_request(&mut cursor)?),
 		ParsedJobKind::NetMail | ParsedJobKind::EchoMail => {
-			SubmissionBody::Message(parse_message(&mut cursor, kind)?)
+			SubmissionBody::Message(Box::new(parse_message(&mut cursor, kind)?))
 		}
 	};
 	let mut canonical = Vec::new();
@@ -363,7 +380,9 @@ fn parse_message(
 	kind: ParsedJobKind,
 ) -> Result<MessageSubmission, IpcError> {
 	let origin = cursor.required_quoted("Origin")?;
+	let local_identity = cursor.optional_quoted("Local-Identity")?;
 	let signed_origin = cursor.optional_quoted("Signed-Origin")?;
+	let signed_origin_public_key = cursor.optional_quoted("Signed-Origin-Public-Key")?;
 	let (message_kind, destination_or_area) = match kind {
 		ParsedJobKind::NetMail => (MessageKind::NetMail, cursor.required_quoted("Destination")?),
 		ParsedJobKind::EchoMail => (MessageKind::EchoMail, cursor.required_quoted("Area")?),
@@ -380,6 +399,15 @@ fn parse_message(
 	let origin_line = cursor.optional_quoted("Origin-Line")?;
 	let message_id = cursor.optional_quoted("Message-ID")?;
 	let reply_to = cursor.optional_two_quoted("Reply-To")?;
+	let signature = cursor.optional_quoted("Signature")?;
+	let mut vias = Vec::new();
+	while let Some(value) = cursor.optional_via()? {
+		vias.push(value);
+	}
+	let mut seen_by = Vec::new();
+	while let Some(value) = cursor.optional_quoted("Seen-By")? {
+		seen_by.push(value);
+	}
 	let mut additional_kludge_lines = Vec::new();
 	while let Some(value) = cursor.optional_quoted("Additional-Kludge-Line")? {
 		additional_kludge_lines.push(value);
@@ -403,7 +431,9 @@ fn parse_message(
 	Ok(MessageSubmission {
 		kind: message_kind,
 		origin,
+		local_identity,
 		signed_origin,
+		signed_origin_public_key,
 		destination_or_area,
 		to_user,
 		from_user,
@@ -416,6 +446,9 @@ fn parse_message(
 		origin_line,
 		message_id,
 		reply_to,
+		signature,
+		vias,
+		seen_by,
 		additional_kludge_lines,
 		class,
 		next_hop,
@@ -638,6 +671,60 @@ impl<'a> Cursor<'a> {
 		};
 		self.advance();
 		Ok(Some(value))
+	}
+
+	fn optional_via(&mut self) -> Result<Option<MessageVia>, IpcError> {
+		let Some(fields) = self.current().and_then(|line| exact(line, &["Via"])) else {
+			return Ok(None);
+		};
+		let (address, public_key, timestamp, software) = match fields {
+			[
+				Field {
+					text: address,
+					quoted: true,
+				},
+				Field {
+					text: timestamp,
+					quoted: false,
+				},
+				Field {
+					text: software,
+					quoted: true,
+				},
+			] => (address.clone(), None, timestamp, software.clone()),
+			[
+				Field {
+					text: address,
+					quoted: true,
+				},
+				Field {
+					text: public_key,
+					quoted: true,
+				},
+				Field {
+					text: timestamp,
+					quoted: false,
+				},
+				Field {
+					text: software,
+					quoted: true,
+				},
+			] => (
+				address.clone(),
+				Some(public_key.clone()),
+				timestamp,
+				software.clone(),
+			),
+			_ => return Err(self.error("invalid Via")),
+		};
+		let timestamp = parse_u64(timestamp).ok_or_else(|| self.error("invalid Via Timestamp"))?;
+		self.advance();
+		Ok(Some(MessageVia {
+			address,
+			public_key,
+			timestamp,
+			software,
+		}))
 	}
 
 	fn optional_unquoted(&mut self, name: &str) -> Result<Option<&'a str>, IpcError> {
@@ -939,5 +1026,21 @@ mod tests {
 		};
 		assert_eq!(message.origin, "fidonet#1/100");
 		assert_eq!(message.signed_origin.as_deref(), Some("fidonet#1/1"));
+	}
+
+	#[test]
+	fn parses_a_retained_message_signature_and_local_identity() {
+		let signature = "A".repeat(86);
+		let request = format!(
+			"TITH-IPC 1\nSubmit\nJob\nApplication \"gateway\"\nIdempotency-Key \"retained\"\nOrigin \"fidonet#1:9/9\"\nLocal-Identity \"fidonet#1:2/3\"\nDestination \"fidonet#1:2/4\"\nTo-User \"You\"\nFrom-User \"Me\"\nTimestamp 1755500000\nMessage-Text \"Body\\n\"\nSignature \"{signature}\"\nVia \"fidonet#1:9/9\" 1755500001 \"legacy 1.0\"\nSeen-By \"fidonet#1:9/9\"\nAdditional-Kludge-Line \"FLAGS KFS\"\nEnd\nEnd\n"
+		);
+		let parsed = SubmissionRequest::parse(request.as_bytes()).unwrap();
+		let SubmissionBody::Message(message) = &parsed.jobs[0].body else {
+			panic!("message expected");
+		};
+		assert_eq!(message.local_identity.as_deref(), Some("fidonet#1:2/3"));
+		assert_eq!(message.signature.as_deref(), Some(signature.as_str()));
+		assert_eq!(message.vias.len(), 1);
+		assert_eq!(message.seen_by, ["fidonet#1:9/9"]);
 	}
 }

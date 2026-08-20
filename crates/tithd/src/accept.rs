@@ -43,6 +43,16 @@ pub struct Acceptance<'a> {
 	pub local: &'a Identity,
 }
 
+impl KeyResolver for Acceptance<'_> {
+	fn public_key(&self, address: &tith_wire::Address) -> Option<tith_crypto::PublicKey> {
+		self.store
+			.key_pins()
+			.resolve(&address.to_string(), self.nodelist.public_key(address))
+			.ok()
+			.flatten()
+	}
+}
+
 /// A refusal to relay, which is answered rather than raised.
 ///
 /// TSP-0002 section 6 gives each cause a failure kind; the peer learns the
@@ -108,9 +118,10 @@ impl Acceptance<'_> {
 			}
 			// Poll values are answered by the exchange before dispatch; reaching
 			// here means the caller did not recognise one.
-			ItemKind::PollMessages | ItemKind::PollFiles | ItemKind::PollFileRequests => {
-				Some("request type is not implemented")
-			}
+			ItemKind::PollMessages
+			| ItemKind::PollFiles
+			| ItemKind::PollFileRequests
+			| ItemKind::PublicKeyRequest => Some("request type is not implemented"),
 			ItemKind::Accepted | ItemKind::Rejected => {
 				return Err("a request position contains a response value".into());
 			}
@@ -254,6 +265,7 @@ impl Acceptance<'_> {
 			destination,
 			&vias,
 			self.nodelist,
+			self,
 		)
 		.map_err(|failure| match failure {
 			RouteFailure::Loop => {
@@ -280,7 +292,7 @@ impl Acceptance<'_> {
 			&commitment.next_hop,
 			commitment.route_rule,
 			rule.and_then(|rule| rule.on_failure),
-			self.nodelist,
+			(self.nodelist, self),
 		));
 		let identity = relay_identity(signed).map_err(|error| {
 			Refusal::temporary(format!("could not derive a spool key: {error}"))
@@ -331,14 +343,20 @@ impl Acceptance<'_> {
 		destination: &Identity,
 	) -> Option<&'r RelayRule> {
 		routes.relay.iter().find(|rule| {
-			selector_matches(&rule.from, peer, self.configuration, self.nodelist)
-				&& selector_matches(&rule.origin, signer, self.configuration, self.nodelist)
+			selector_matches(&rule.from, peer, self.configuration, self.nodelist, self)
 				&& selector_matches(
-					&rule.destination,
-					destination,
+					&rule.origin,
+					signer,
 					self.configuration,
 					self.nodelist,
-				)
+					self,
+				) && selector_matches(
+				&rule.destination,
+				destination,
+				self.configuration,
+				self.nodelist,
+				self,
+			)
 		})
 	}
 

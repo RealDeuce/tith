@@ -25,6 +25,7 @@ pub enum RequestKind {
 	PollMessages,
 	PollFiles,
 	PollFileRequests,
+	PublicKeyRequest,
 }
 
 impl RequestKind {
@@ -132,6 +133,7 @@ fn request_kind(item: &ValidatedItem) -> Option<RequestKind> {
 		ItemKind::PollMessages => Some(RequestKind::PollMessages),
 		ItemKind::PollFiles => Some(RequestKind::PollFiles),
 		ItemKind::PollFileRequests => Some(RequestKind::PollFileRequests),
+		ItemKind::PublicKeyRequest => Some(RequestKind::PublicKeyRequest),
 		ItemKind::Accepted | ItemKind::Rejected => None,
 	}
 }
@@ -221,6 +223,11 @@ impl ResponseTracker {
 				}) else {
 					return Err(ExchangeError::UnexpectedResponse);
 				};
+				if item.response_public_key.is_some()
+					&& self.outstanding[position].kind != RequestKind::PublicKeyRequest
+				{
+					return Err(ExchangeError::UnexpectedResponse);
+				}
 				if position < self.completed.len() {
 					return Err(ExchangeError::DuplicateResponse);
 				}

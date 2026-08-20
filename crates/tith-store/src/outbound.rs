@@ -333,6 +333,13 @@ impl OutboundStore {
 		Ok(Self { database })
 	}
 
+	#[must_use]
+	pub fn key_pins(&self) -> crate::KeyPinStore {
+		crate::KeyPinStore {
+			database: Arc::clone(&self.database),
+		}
+	}
+
 	pub fn commit_batch<F>(
 		&self,
 		identities: &[SubmissionIdentity],

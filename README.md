@@ -346,6 +346,22 @@ cargo run -p tithd -- serve-mail 0.0.0.0:24555 \
     /secure/path/node.secret
 ```
 
+A planned key rotation may retain one or more predecessor secrets solely for
+continuity replies:
+
+```sh
+    --retired-node-secret /secure/path/previous-node.secret
+```
+
+When a listed reply fails against the currently trusted key, the outbound
+driver makes one dedicated `PublicKeyRequest`. A predecessor-signed response
+can advance the service-owned durable pin and the original exchange is retried
+once in the same schedule activation. This proves continuity, not revocation.
+For a listed contact with no nodelist key or existing pin, a `Peer` may opt in
+to first-contact pinning by combining a configured `Endpoint` with the
+`Trust-On-First-Use` directive. That trust decision is never enabled by
+default.
+
 It both receives and sends. Local Messages, standalone Files, and FileRequests
 are durably stored before `Accepted` is sent, and signed-item duplicates receive
 `Accepted` without creating another inbound item. A NetMail for another node is

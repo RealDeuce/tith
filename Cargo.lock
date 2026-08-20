@@ -302,6 +302,7 @@ dependencies = [
 name = "tith"
 version = "0.1.0"
 dependencies = [
+ "base64",
  "tith-adapter",
  "tith-bso",
  "tith-crypto",

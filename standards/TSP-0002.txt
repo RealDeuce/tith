@@ -3,10 +3,10 @@ TITH                                              THIS ISN'T THAT HARD
 **********************************************************************
 
 Publication:  TSP‑0002
-Revision:     7
+Revision:     8
 Title:        Routing and Distribution Configuration
 Author(s):    Stephen Hurd
-Date:         2026‑08‑19
+Date:         2026‑08‑20
 ══════════════════════════════════════════════════════════════════════
 
 Status of this document
@@ -116,6 +116,7 @@ Contents
     Address <address>
     Public-Key <public-key>
     Endpoint <server-address> <port>
+    Trust-On-First-Use
     Boss <peer-reference>
     Hub <peer-reference>
 
@@ -139,6 +140,14 @@ Contents
   attempted in file order before an endpoint obtained from the
   nodelist.
 
+  Trust-On-First-Use contains no field and MUST occur at most once.
+  It is permitted only for a listed Address having at least one
+  configured Endpoint.  It authorizes an initial PublicKeyRequest to
+  that configured contact when no nodelist key or local pin exists.
+  The returned self‑signed key becomes the pin specified by TSP‑0015.
+  This directive deliberately accepts the risk that an attacker at
+  first contact can become pinned; it MUST NOT be enabled by default.
+
   Boss and Hub each contain one peer reference and MAY each occur at
   most once.  They are permitted only for an unlisted Peer.  They
   provide the corresponding candidates for the Boss and Hub route
@@ -150,8 +159,9 @@ Contents
   Where this document requires a local identity, its syntax is a
   canonical listed address or a peer reference naming an unlisted
   Peer.  The host MUST have the corresponding secret signing key.  For
-  a listed address, its public half MUST equal the current nodelist
-  key.  For an unlisted Peer, it MUST equal that Peer's Public-Key.
+  a listed address, its public half MUST equal the current trusted key
+  resolved according to TSP‑0015.  For an unlisted Peer, it MUST equal
+  that Peer's Public-Key.
 
 
 4. Selectors
@@ -513,6 +523,11 @@ Contents
   at most once by that activation.  Connections begun before the end
   run to completion.
 
+  The one PublicKeyRequest and one operational retry permitted by
+  TTS‑0006 after an authentication failure are part of the same
+  delivery attempt and occur in the same activation.  A failed probe
+  or retry does not begin another attempt in that activation.
+
   Repeat-After gives the elapsed interval from one nominal end to the
   next nominal beginning.  If an activation begins after its nominal
   end, it still makes one pass.  Missed activations are coalesced: when
@@ -600,8 +615,8 @@ Contents
   copies keep their AKA, next hop, unlisted key, class, and resolved
   policies.  Current schedules determine when their classes run, and
   current Endpoints determine how their Peer is contacted.  A listed
-  next hop uses the current nodelist key because a configured key
-  cannot override it.
+  next hop uses the current trusted key resolved according to
+  TSP‑0015.  A configured key cannot override a listed trust anchor.
 
   An implementation recovering after a failed connection MUST treat
   any request without a durably known complete response as
@@ -735,15 +750,17 @@ A. References
   [TSP‑0011] "Durable Inbound Delivery Items", TITH, 2026‑08‑18.
 
   [TSP‑0013] "Legacy Mailer and Tosser IPC Adapters", TITH,
-  2026‑08‑18.
+  2026‑08‑20.
+
+  [TSP‑0015] "Public Key Trust and Continuity", TITH, 2026‑08‑20.
 
   [TTS‑0003] "Common TLV Types", TITH, 2026‑08‑18.
 
   [TTS‑0004] "Node Addresses", TITH, 2026‑08‑17.
 
-  [TTS‑0005] "Bundle Format", TITH, 2026‑08‑18.
+  [TTS‑0005] "Bundle Format", TITH, 2026‑08‑20.
 
-  [TTS‑0006] "Bundle Exchange Protocol", TITH, 2026‑08‑18.
+  [TTS‑0006] "Bundle Exchange Protocol", TITH, 2026‑08‑20.
 
   [TTS‑5000] "The Distribution Nodelist", TITH, 2026‑08‑18.
 
@@ -784,5 +801,8 @@ B. History
    Rev.7, 2026‑08‑19: Committed a peer‐addressed standalone File and a
    FileRequest directly to their Destination, stated that neither is
    relayed, and named what each Poll value returns.
+
+   Rev.8, 2026‑08‑20: Added explicit trusted‑contact TOFU and resolved
+   listed keys through durable pins and continuity proofs.
 
 **********************************************************************

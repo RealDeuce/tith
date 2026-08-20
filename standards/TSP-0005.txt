@@ -651,17 +651,17 @@ A. References
 ─────────────
 
   [TSP‑0002] "Routing and Distribution Configuration", TITH,
-  2026‑08‑18.
+  2026‑08‑20.
 
   [TSP‑0004] "Local IPC Format", TITH, 2026‑08‑17.
 
-  [TSP‑0006] "Outbound Job Submission", TITH, 2026‑08‑19.
+  [TSP‑0006] "Outbound Job Submission", TITH, 2026‑08‑20.
 
   [TSP‑0011] "Durable Inbound Delivery Items", TITH, 2026‑08‑18.
 
   [TTS‑0003] "Common TLV Types", TITH, 2026‑08‑18.
 
-  [TTS‑0005] "Bundle Format", TITH, 2026‑08‑18.
+  [TTS‑0005] "Bundle Format", TITH, 2026‑08‑20.
 
 
 B. History

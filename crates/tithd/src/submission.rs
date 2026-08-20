@@ -7,7 +7,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD_NO_PAD;
 use tith_config::{ConfigurationSet, IdentityRef};
-use tith_crypto::{SecretKey, hash_submission_file, hash_submission_job, random_bytes};
+use tith_crypto::{
+	PUBLIC_KEY_BYTES, PublicKey, SIGNATURE_BYTES, SecretKey, Signature, hash_submission_file,
+	hash_submission_job, random_bytes,
+};
 use tith_ipc::{
 	DeliveryMode as IpcDeliveryMode, FailureDisposition as IpcDisposition,
 	FailureNotification as IpcNotification, FailureOverride, FileRequestSubmission, FileSubmission,
@@ -25,8 +28,9 @@ use tith_store::{
 use tith_wire::address::Address;
 use tith_wire::bundle::{Identity, KeyResolver};
 use tith_wire::item::{
-	AttachmentData, ItemProvenance, MessageData, StandaloneFileData, build_file_request,
-	build_originated_file, build_originated_message, forward_item, validate_item,
+	AttachmentData, ItemProvenance, MessageData, MessageSuffix, StandaloneFileData, ViaData,
+	build_file_request, build_originated_file, build_originated_message, build_retained_message,
+	forward_item, validate_item,
 };
 
 pub const SOFTWARE: &str = "tithd 0.1.0";
@@ -62,6 +66,45 @@ impl SubmissionEngine {
 		request: &SubmissionRequest,
 		store: &OutboundStore,
 	) -> Result<BatchCommit, StoreError> {
+		let pins = store.key_pins();
+		let mut retained_keys = BTreeMap::new();
+		for peer in self
+			.configuration
+			.peers
+			.values()
+			.filter(|peer| !peer.address.is_unlisted())
+		{
+			if let Some(key) = pins.resolve(
+				&peer.address.to_string(),
+				self.nodelist.public_key(&peer.address),
+			)? {
+				retained_keys.insert(peer.address.clone(), key);
+			}
+		}
+		for job in &request.jobs {
+			let SubmissionBody::Message(message) = &job.body else {
+				continue;
+			};
+			for value in [
+				Some(message.origin.as_str()),
+				message.signed_origin.as_deref(),
+				(message.kind == MessageKind::NetMail)
+					.then_some(message.destination_or_area.as_str()),
+			]
+			.into_iter()
+			.flatten()
+			{
+				let Ok(address) = value.parse::<Address>() else {
+					continue;
+				};
+				if !address.is_unlisted()
+					&& let Some(key) =
+						pins.resolve(&address.to_string(), self.nodelist.public_key(&address))?
+				{
+					retained_keys.insert(address, key);
+				}
+			}
+		}
 		let identities: Vec<_> = request
 			.jobs
 			.iter()
@@ -86,7 +129,7 @@ impl SubmissionEngine {
 					continue;
 				};
 				let job = self
-					.build_job(job_id, request_job, identity, context)
+					.build_job(job_id, request_job, identity, context, &retained_keys)
 					.map_err(|failure| StoreError::JobBuild {
 						position: position + 1,
 						kind: failure.kind,
@@ -150,6 +193,7 @@ impl SubmissionEngine {
 					&destination,
 					&[],
 					&self.nodelist,
+					self.nodelist.as_ref(),
 				)
 				.map_err(|error| failure(BuildFailure::permanent(format!("{error:?}"))))?;
 				(
@@ -187,7 +231,7 @@ impl SubmissionEngine {
 			&target,
 			route_rule,
 			None,
-			&self.nodelist,
+			(&self.nodelist, self.nodelist.as_ref()),
 		);
 		Ok(NewDelivery {
 			local_identity: signer.identity.address.to_string(),
@@ -206,6 +250,7 @@ impl SubmissionEngine {
 		job: &tith_ipc::SubmissionJob,
 		identity: &SubmissionIdentity,
 		context: &tith_store::BatchContext<'_>,
+		retained_keys: &BTreeMap<Address, PublicKey>,
 	) -> Result<NewOutboundJob, BuildFailure> {
 		if job.application.is_empty() || job.idempotency_key.is_empty() {
 			return Err(BuildFailure::invalid(
@@ -214,16 +259,24 @@ impl SubmissionEngine {
 		}
 		match &job.body {
 			SubmissionBody::Message(message) => {
-				self.build_message_job(job_id, identity.clone(), message)
+				self.build_message_job(job_id, identity.clone(), message, retained_keys)
 			}
-			SubmissionBody::File(file) => self.build_file_job(identity.clone(), file),
+			SubmissionBody::File(file) => {
+				self.build_file_job(identity.clone(), file, retained_keys)
+			}
 			SubmissionBody::FileRequest(request) => {
-				self.build_file_request_job(identity.clone(), request)
+				self.build_file_request_job(identity.clone(), request, retained_keys)
 			}
 			SubmissionBody::Forward {
 				inbound_id,
 				claim_token,
-			} => self.build_forward_job(identity.clone(), inbound_id, claim_token, context),
+			} => self.build_forward_job(
+				identity.clone(),
+				inbound_id,
+				claim_token,
+				context,
+				retained_keys,
+			),
 		}
 	}
 
@@ -232,13 +285,48 @@ impl SubmissionEngine {
 		job_id: &str,
 		identity: SubmissionIdentity,
 		message: &MessageSubmission,
+		retained_keys: &BTreeMap<Address, PublicKey>,
 	) -> Result<NewOutboundJob, BuildFailure> {
-		let (signer, provenance) =
-			self.item_provenance(&message.origin, message.signed_origin.as_deref())?;
+		let retained = message.signature.is_some();
+		let (signer, provenance) = if retained {
+			let signer = self.message_local_signer(message, retained_keys)?;
+			(signer, Self::retained_provenance(message, retained_keys)?)
+		} else {
+			if message.signed_origin_public_key.is_some()
+				|| !message.vias.is_empty()
+				|| !message.seen_by.is_empty()
+			{
+				return Err(BuildFailure::invalid(
+					"retained Message fields require Signature",
+				));
+			}
+			let resolved =
+				self.item_provenance(&message.origin, message.signed_origin.as_deref())?;
+			if let Some(local) = message.local_identity.as_deref()
+				&& !std::ptr::eq(self.signer(local)?, resolved.0)
+			{
+				return Err(BuildFailure::invalid(
+					"Local-Identity does not match the originating signer",
+				));
+			}
+			resolved
+		};
 		if message.kind == MessageKind::EchoMail {
 			validate_area_name(&message.destination_or_area)?;
 		}
-		let timestamp = message.timestamp.unwrap_or_else(now);
+		let key_lookup = |address: &Address| {
+			retained_keys
+				.get(address)
+				.copied()
+				.or_else(|| self.nodelist.public_key(address))
+		};
+		let timestamp = if retained {
+			message
+				.timestamp
+				.ok_or_else(|| BuildFailure::invalid("retained Message requires Timestamp"))?
+		} else {
+			message.timestamp.unwrap_or_else(now)
+		};
 		let mut attachments = Vec::new();
 		let mut sources = Vec::new();
 		let mut filenames = BTreeSet::new();
@@ -257,7 +345,8 @@ impl SubmissionEngine {
 		}
 		let (kind, target, destination, seen_by, deliveries) = match message.kind {
 			MessageKind::NetMail => {
-				let destination = self.resolve_identity(&message.destination_or_area)?;
+				let destination =
+					self.resolve_identity_with(&message.destination_or_area, retained_keys)?;
 				let routes =
 					routes_for(&self.configuration, &signer.reference).ok_or_else(|| {
 						BuildFailure::permanent("local signing identity has no Routes block")
@@ -271,6 +360,7 @@ impl SubmissionEngine {
 								&destination,
 								&[],
 								&self.nodelist,
+								&key_lookup,
 							)
 							.map_err(|failure| BuildFailure::permanent(format!("{failure:?}")))?;
 							(
@@ -289,11 +379,17 @@ impl SubmissionEngine {
 									"explicit Active next hop has no usable endpoint",
 								));
 							}
-							(self.resolve_identity(value)?, DeliveryMode::Active, None)
+							(
+								self.resolve_identity_with(value, retained_keys)?,
+								DeliveryMode::Active,
+								None,
+							)
 						}
-						NextHop::Passive(value) => {
-							(self.resolve_identity(value)?, DeliveryMode::Passive, None)
-						}
+						NextHop::Passive(value) => (
+							self.resolve_identity_with(value, retained_keys)?,
+							DeliveryMode::Passive,
+							None,
+						),
 					};
 				let configured = failure_policies(
 					&self.configuration,
@@ -302,7 +398,7 @@ impl SubmissionEngine {
 					&next_hop,
 					route_rule,
 					None,
-					&self.nodelist,
+					(&self.nodelist, &key_lookup),
 				);
 				let delivery = NewDelivery {
 					local_identity: signer.identity.address.to_string(),
@@ -327,6 +423,7 @@ impl SubmissionEngine {
 					&signer.identity,
 					&message.destination_or_area,
 					false,
+					retained_keys,
 				)?;
 				(
 					JobKind::EchoMail,
@@ -354,34 +451,85 @@ impl SubmissionEngine {
 				))
 			})
 			.transpose()?;
-		let item = build_originated_message(
-			MessageData {
-				destination,
-				timestamp,
-				to_user: message.to_user.clone(),
-				from_user: message.from_user.clone(),
-				subject: message.subject.clone(),
-				text: message_text(&message.message_text),
-				area: (message.kind == MessageKind::EchoMail)
-					.then(|| message.destination_or_area.clone()),
-				attachments,
-				legacy_attributes: message.legacy_attributes,
-				timestamp_offset: message.timestamp_offset,
-				tear_line: message.tear_line.clone(),
-				origin_line: message.origin_line.clone(),
-				message_id: message.message_id.clone(),
-				reply_to,
-				additional_kludge_lines: message.additional_kludge_lines.clone(),
-			},
-			&provenance,
-			&signer.secret,
-			random_u64()?,
+		let data = MessageData {
+			destination,
 			timestamp,
-			SOFTWARE,
-			&seen_by,
-		)
+			to_user: message.to_user.clone(),
+			from_user: message.from_user.clone(),
+			subject: message.subject.clone(),
+			text: if retained {
+				message.message_text.clone()
+			} else {
+				message_text(&message.message_text)
+			},
+			area: (message.kind == MessageKind::EchoMail)
+				.then(|| message.destination_or_area.clone()),
+			attachments,
+			legacy_attributes: message.legacy_attributes,
+			timestamp_offset: message.timestamp_offset,
+			tear_line: message.tear_line.clone(),
+			origin_line: message.origin_line.clone(),
+			message_id: message.message_id.clone(),
+			reply_to,
+			additional_kludge_lines: message.additional_kludge_lines.clone(),
+		};
+		if data.additional_kludge_lines.iter().any(|line| {
+			line.split([':', ' ']).next().is_some_and(|name| {
+				name.eq_ignore_ascii_case("TITHSIG") || name.eq_ignore_ascii_case("TITHSIGN")
+			})
+		}) {
+			return Err(BuildFailure::invalid(
+				"TITHSIG and TITHSIGN are structured retained-signature fields",
+			));
+		}
+		let item = if let Some(encoded) = &message.signature {
+			let signature = decode_signature(encoded)?;
+			let vias = message
+				.vias
+				.iter()
+				.map(decode_via)
+				.collect::<Result<Vec<_>, _>>()?;
+			let submitted_seen_by = message
+				.seen_by
+				.iter()
+				.map(|value| {
+					value
+						.parse::<Address>()
+						.map_err(|_| BuildFailure::invalid("invalid Seen-By address"))
+				})
+				.collect::<Result<Vec<_>, _>>()?;
+			build_retained_message(
+				&data,
+				&provenance,
+				signature,
+				&MessageSuffix {
+					existing_vias: &vias,
+					local_via: &signer.identity,
+					request_identifier: random_u64()?,
+					via_timestamp: timestamp,
+					software: SOFTWARE,
+					seen_by: &submitted_seen_by,
+				},
+			)
+		} else {
+			build_originated_message(
+				&data,
+				&provenance,
+				&signer.secret,
+				random_u64()?,
+				timestamp,
+				SOFTWARE,
+				&seen_by,
+			)
+		}
 		.map_err(|error| BuildFailure::invalid(error.to_string()))?;
-		validate_item(&item, self.nodelist.as_ref())
+		let key_lookup = |address: &Address| {
+			retained_keys
+				.get(address)
+				.copied()
+				.or_else(|| self.nodelist.public_key(address))
+		};
+		validate_item(&item, &key_lookup)
 			.map_err(|error| BuildFailure::invalid(error.to_string()))?
 			.ok_or_else(|| BuildFailure::invalid("submission did not construct an item"))?;
 		Ok(NewOutboundJob {
@@ -402,6 +550,7 @@ impl SubmissionEngine {
 		&self,
 		identity: SubmissionIdentity,
 		file: &FileSubmission,
+		resolved: &BTreeMap<Address, PublicKey>,
 	) -> Result<NewOutboundJob, BuildFailure> {
 		let (signer, provenance) =
 			self.item_provenance(&file.origin, file.signed_origin.as_deref())?;
@@ -417,10 +566,10 @@ impl SubmissionEngine {
 			FileTarget::Area(area) => (
 				JobKind::File,
 				JobTarget::Area(area.clone()),
-				self.area_deliveries(&signer.reference, &signer.identity, area, true)?,
+				self.area_deliveries(&signer.reference, &signer.identity, area, true, resolved)?,
 			),
 			FileTarget::Peer(peer) => {
-				let (target, delivery) = self.direct_delivery(signer, peer)?;
+				let (target, delivery) = self.direct_delivery(signer, peer, resolved)?;
 				(JobKind::PeerFile, target, vec![delivery])
 			}
 		};
@@ -474,6 +623,7 @@ impl SubmissionEngine {
 		&self,
 		identity: SubmissionIdentity,
 		request: &FileRequestSubmission,
+		resolved: &BTreeMap<Address, PublicKey>,
 	) -> Result<NewOutboundJob, BuildFailure> {
 		// TTS-0005 section 3 type 66 has no Origin or Signature, so the local
 		// identity supplies only the AKA and routing configuration. There is no
@@ -484,7 +634,7 @@ impl SubmissionEngine {
 				"FileRequest Filename must be nonempty and contain no path component",
 			));
 		}
-		let (target, delivery) = self.direct_delivery(signer, &request.delivery)?;
+		let (target, delivery) = self.direct_delivery(signer, &request.delivery, resolved)?;
 		let item = build_file_request(&request.filename, request.newer_than, random_u64()?)
 			.map_err(|error| BuildFailure::invalid(error.to_string()))?;
 		validate_item(&item, self.nodelist.as_ref())
@@ -514,8 +664,15 @@ impl SubmissionEngine {
 		&self,
 		signer: &LocalSigner,
 		peer: &PeerDelivery,
+		resolved: &BTreeMap<Address, PublicKey>,
 	) -> Result<(JobTarget, NewDelivery), BuildFailure> {
-		let destination = self.resolve_identity(&peer.destination)?;
+		let destination = self.resolve_identity_with(&peer.destination, resolved)?;
+		let key_lookup = |address: &Address| {
+			resolved
+				.get(address)
+				.copied()
+				.or_else(|| self.nodelist.public_key(address))
+		};
 		let usable = self.has_usable_endpoint(&peer.destination);
 		if peer.mode == Some(IpcDeliveryMode::Active) && !usable {
 			return Err(BuildFailure::permanent(
@@ -538,7 +695,7 @@ impl SubmissionEngine {
 			// No Route line selected this hop, so no Route override applies.
 			None,
 			None,
-			&self.nodelist,
+			(&self.nodelist, &key_lookup),
 		);
 		Ok((
 			JobTarget::Destination(destination.address.to_string()),
@@ -560,6 +717,7 @@ impl SubmissionEngine {
 		inbound_id: &str,
 		claim_token: &str,
 		context: &tith_store::BatchContext<'_>,
+		resolved: &BTreeMap<Address, PublicKey>,
 	) -> Result<NewOutboundJob, BuildFailure> {
 		let created = now();
 		let inbound = context
@@ -619,8 +777,13 @@ impl SubmissionEngine {
 				);
 			}
 		}
-		let mut deliveries =
-			self.area_deliveries(&signer.reference, &signer.identity, &area, file_area)?;
+		let mut deliveries = self.area_deliveries(
+			&signer.reference,
+			&signer.identity,
+			&area,
+			file_area,
+			resolved,
+		)?;
 		deliveries.retain(|copy| {
 			copy.next_hop != inbound.record.peer
 				&& !copy
@@ -680,6 +843,132 @@ impl SubmissionEngine {
 			.ok_or_else(|| BuildFailure::invalid("unknown or unauthorized Origin"))
 	}
 
+	fn message_local_signer<'a>(
+		&'a self,
+		message: &MessageSubmission,
+		retained_keys: &BTreeMap<Address, PublicKey>,
+	) -> Result<&'a LocalSigner, BuildFailure> {
+		if let Some(local) = message.local_identity.as_deref() {
+			return self.signer(local);
+		}
+		if self.signers.len() == 1 {
+			return Ok(self.signers.values().next().expect("one signer"));
+		}
+
+		let candidates: Vec<_> = match message.kind {
+			MessageKind::NetMail => {
+				let destination =
+					self.resolve_identity_with(&message.destination_or_area, retained_keys)?;
+				let resolver = |address: &Address| {
+					retained_keys
+						.get(address)
+						.copied()
+						.or_else(|| self.nodelist.public_key(address))
+				};
+				self.signers
+					.values()
+					.filter(|signer| {
+						routes_for(&self.configuration, &signer.reference).is_some_and(|routes| {
+							route_netmail(
+								&self.configuration,
+								routes,
+								&destination,
+								&[],
+								&self.nodelist,
+								&resolver,
+							)
+							.is_ok()
+						})
+					})
+					.collect()
+			}
+			MessageKind::EchoMail => self
+				.signers
+				.values()
+				.filter(|signer| {
+					self.configuration.areas.iter().any(|areas| {
+						areas.local == signer.reference
+							&& areas.areas.iter().any(|area| {
+								!area.file_area && area.name == message.destination_or_area
+							})
+					})
+				})
+				.collect(),
+		};
+		match candidates.as_slice() {
+			[signer] => Ok(*signer),
+			_ => Err(BuildFailure::invalid(
+				"Local-Identity is required because routing does not select exactly one local identity",
+			)),
+		}
+	}
+
+	fn retained_provenance(
+		message: &MessageSubmission,
+		retained_keys: &BTreeMap<Address, PublicKey>,
+	) -> Result<ItemProvenance, BuildFailure> {
+		let origin = message
+			.origin
+			.parse::<Address>()
+			.map_err(|_| BuildFailure::invalid("retained Message Origin is not an address"))?;
+		if origin.is_unlisted() {
+			return Err(BuildFailure::invalid(
+				"TITHSIG revision 1 cannot reconstruct an unlisted Origin",
+			));
+		}
+		let signer = match message.signed_origin.as_deref() {
+			None => {
+				if message.signed_origin_public_key.is_some() {
+					return Err(BuildFailure::invalid(
+						"Signed-Origin-Public-Key requires Signed-Origin",
+					));
+				}
+				Identity {
+					address: origin.clone(),
+					public_key: retained_keys.get(&origin).copied().ok_or_else(|| {
+						BuildFailure::permanent("retained Message Origin key is unavailable")
+					})?,
+				}
+			}
+			Some(value) => {
+				if retained_keys.contains_key(&origin) {
+					return Err(BuildFailure::invalid(
+						"Signed-Origin cannot override the Origin nodelist key",
+					));
+				}
+				let address = value.parse::<Address>().map_err(|_| {
+					BuildFailure::invalid("retained Signed-Origin is not an address")
+				})?;
+				let public_key = if address.is_unlisted() {
+					decode_public_key(message.signed_origin_public_key.as_deref().ok_or_else(
+						|| {
+							BuildFailure::invalid(
+								"unlisted Signed-Origin requires Signed-Origin-Public-Key",
+							)
+						},
+					)?)?
+				} else {
+					if message.signed_origin_public_key.is_some() {
+						return Err(BuildFailure::invalid(
+							"listed Signed-Origin prohibits Signed-Origin-Public-Key",
+						));
+					}
+					retained_keys.get(&address).copied().ok_or_else(|| {
+						BuildFailure::permanent("retained Signed-Origin key is unavailable")
+					})?
+				};
+				Identity {
+					address,
+					public_key,
+				}
+			}
+		};
+		Ok(ItemProvenance {
+			origin,
+			signer: Some(signer),
+		})
+	}
+
 	fn item_provenance<'a>(
 		&'a self,
 		origin: &str,
@@ -722,6 +1011,14 @@ impl SubmissionEngine {
 	}
 
 	fn resolve_identity(&self, value: &str) -> Result<Identity, BuildFailure> {
+		self.resolve_identity_with(value, &BTreeMap::new())
+	}
+
+	fn resolve_identity_with(
+		&self,
+		value: &str,
+		resolved: &BTreeMap<Address, PublicKey>,
+	) -> Result<Identity, BuildFailure> {
 		if let Some(name) = value.strip_prefix('@') {
 			let peer = self
 				.configuration
@@ -732,9 +1029,11 @@ impl SubmissionEngine {
 				peer.public_key
 					.ok_or_else(|| BuildFailure::invalid("unlisted Peer has no public key"))?
 			} else {
-				self.nodelist
-					.public_key(&peer.address)
-					.ok_or_else(|| BuildFailure::permanent("listed Peer has no nodelist key"))?
+				resolved
+					.get(&peer.address)
+					.copied()
+					.or_else(|| self.nodelist.public_key(&peer.address))
+					.ok_or_else(|| BuildFailure::permanent("listed Peer has no trusted key"))?
 			};
 			return Ok(Identity {
 				address: peer.address.clone(),
@@ -749,10 +1048,11 @@ impl SubmissionEngine {
 				"unlisted identities require a Peer reference",
 			));
 		}
-		let public_key = self
-			.nodelist
-			.public_key(&address)
-			.ok_or_else(|| BuildFailure::permanent("identity has no nodelist public key"))?;
+		let public_key = resolved
+			.get(&address)
+			.copied()
+			.or_else(|| self.nodelist.public_key(&address))
+			.ok_or_else(|| BuildFailure::permanent("identity has no trusted public key"))?;
 		Ok(Identity {
 			address,
 			public_key,
@@ -786,6 +1086,7 @@ impl SubmissionEngine {
 		local_identity: &Identity,
 		area_name: &str,
 		file_area: bool,
+		resolved: &BTreeMap<Address, PublicKey>,
 	) -> Result<Vec<NewDelivery>, BuildFailure> {
 		let areas = self
 			.configuration
@@ -811,7 +1112,13 @@ impl SubmissionEngine {
 					.peers
 					.get(&link.peer)
 					.ok_or_else(|| BuildFailure::invalid("unknown Send-To Peer"))?;
-				let identity = self.resolve_identity(&format!("@{}", link.peer))?;
+				let identity = self.resolve_identity_with(&format!("@{}", link.peer), resolved)?;
+				let key_lookup = |address: &Address| {
+					resolved
+						.get(address)
+						.copied()
+						.or_else(|| self.nodelist.public_key(address))
+				};
 				Ok(NewDelivery {
 					local_identity: local_identity.address.to_string(),
 					next_hop: identity.address.to_string(),
@@ -831,7 +1138,7 @@ impl SubmissionEngine {
 							&identity,
 							None,
 							None,
-							&self.nodelist,
+							(&self.nodelist, &key_lookup),
 						),
 						None,
 					),
@@ -839,6 +1146,50 @@ impl SubmissionEngine {
 			})
 			.collect()
 	}
+}
+
+fn decode_fixed<const N: usize>(value: &str, what: &'static str) -> Result<[u8; N], BuildFailure> {
+	let bytes = STANDARD_NO_PAD
+		.decode(value)
+		.map_err(|_| BuildFailure::invalid(what))?;
+	bytes.try_into().map_err(|_| BuildFailure::invalid(what))
+}
+
+fn decode_signature(value: &str) -> Result<Signature, BuildFailure> {
+	Ok(Signature::from_bytes(decode_fixed::<SIGNATURE_BYTES>(
+		value,
+		"invalid retained Signature",
+	)?))
+}
+
+fn decode_public_key(value: &str) -> Result<PublicKey, BuildFailure> {
+	Ok(PublicKey::from_bytes(decode_fixed::<PUBLIC_KEY_BYTES>(
+		value,
+		"invalid retained PublicKey",
+	)?))
+}
+
+fn decode_via(value: &tith_ipc::MessageVia) -> Result<ViaData, BuildFailure> {
+	let address = value
+		.address
+		.parse::<Address>()
+		.map_err(|_| BuildFailure::invalid("invalid Via address"))?;
+	let public_key = value
+		.public_key
+		.as_deref()
+		.map(decode_public_key)
+		.transpose()?;
+	if address.is_unlisted() != public_key.is_some() {
+		return Err(BuildFailure::invalid(
+			"Via PublicKey presence does not match its address",
+		));
+	}
+	Ok(ViaData {
+		address,
+		public_key,
+		timestamp: value.timestamp,
+		software: value.software.clone(),
+	})
 }
 
 struct IngestedSource {
@@ -1214,6 +1565,138 @@ mod tests {
 	}
 
 	#[test]
+	fn retained_message_preserves_signed_bytes_and_rejects_forgery() {
+		let local_keys = SigningKeyPair::from_seed(&[31; 32]).unwrap();
+		let author_keys = SigningKeyPair::from_seed(&[32; 32]).unwrap();
+		let destination_keys = SigningKeyPair::from_seed(&[33; 32]).unwrap();
+		let local: Address = "fidonet#1:104/36".parse().unwrap();
+		let author: Address = "fidonet#1:104/99".parse().unwrap();
+		let destination: Address = "fidonet#1:104/1".parse().unwrap();
+		let configuration = Arc::new(
+			ConfigurationSet::parse(
+				"",
+				&format!("Routes {local}\nRoute All Using Direct Hold\nEnd\n"),
+				"",
+				"",
+			)
+			.unwrap(),
+		);
+		let entry = |number: u16, keys: &SigningKeyPair, endpoint: &str| {
+			format!(
+				"\t{number}\tNode\tLocation\tSysop\t\tCM\t\tIIH:{endpoint}:24554:{}\t\t\n",
+				STANDARD_NO_PAD.encode(keys.public.as_bytes())
+			)
+		};
+		let nodelist = Arc::new(
+			Nodelist::parse(
+				"fidonet",
+				&format!(
+					"Zone\t1\tNode\tLocation\tSysop\t\tCM\t\t\t\t\nHost\t104\tNode\tLocation\tSysop\t\tCM\t\t\t\t\n{}{}{}",
+					entry(1, &destination_keys, "destination.example"),
+					entry(36, &local_keys, "local.example"),
+					entry(99, &author_keys, "author.example")
+				),
+			)
+			.unwrap(),
+		);
+		let engine = SubmissionEngine::new(
+			Arc::clone(&configuration),
+			Arc::clone(&nodelist),
+			[(
+				local.to_string(),
+				LocalSigner {
+					reference: IdentityRef::Listed(local.clone()),
+					identity: Identity {
+						address: local.clone(),
+						public_key: local_keys.public,
+					},
+					secret: Arc::new(local_keys.secret),
+				},
+			)],
+		);
+		let original = build_originated_message(
+			&MessageData {
+				destination: Some(Identity {
+					address: destination.clone(),
+					public_key: destination_keys.public,
+				}),
+				timestamp: 1_755_500_000,
+				to_user: "Recipient".to_owned(),
+				from_user: "Author".to_owned(),
+				subject: "Retained".to_owned(),
+				text: "Body\n".to_owned(),
+				area: None,
+				attachments: Vec::new(),
+				legacy_attributes: Some(1 << 12),
+				timestamp_offset: None,
+				tear_line: None,
+				origin_line: None,
+				message_id: Some("fidonet#1:104/99 12345678".to_owned()),
+				reply_to: None,
+				additional_kludge_lines: Vec::new(),
+			},
+			&ItemProvenance {
+				origin: author.clone(),
+				signer: Some(Identity {
+					address: author.clone(),
+					public_key: author_keys.public,
+				}),
+			},
+			&author_keys.secret,
+			7,
+			1_755_500_001,
+			"author 1.0",
+			&[],
+		)
+		.unwrap();
+		let original_read = tith_wire::item::read_message(&original, nodelist.as_ref()).unwrap();
+		let signature = STANDARD_NO_PAD.encode(original_read.signing.signature.unwrap().as_bytes());
+		let request_text = format!(
+			"TITH-IPC 1\nSubmit\nJob\nApplication \"gateway\"\nIdempotency-Key \"retained\"\nOrigin \"{author}\"\nLocal-Identity \"{local}\"\nDestination \"{destination}\"\nTo-User \"Recipient\"\nFrom-User \"Author\"\nTimestamp 1755500000\nSubject \"Retained\"\nMessage-Text \"Body\\n\"\nLegacy-Attributes 4096\nMessage-ID \"fidonet#1:104/99 12345678\"\nSignature \"{signature}\"\nEnd\nEnd\n"
+		);
+		let request = SubmissionRequest::parse(request_text.as_bytes()).unwrap();
+		let unique = SystemTime::now()
+			.duration_since(UNIX_EPOCH)
+			.unwrap()
+			.as_nanos();
+		let path = std::env::temp_dir().join(format!("tith-retained-{unique}.redb"));
+		let inbound = InboundStore::create(&path).unwrap();
+		let store = inbound.outbound().unwrap();
+		let BatchCommit::Committed(outcomes) = engine.submit(&request, &store).unwrap() else {
+			panic!("commit expected");
+		};
+		let CommitOutcome::New { job_id, .. } = &outcomes[0] else {
+			panic!("new job expected");
+		};
+		let encoded = store.item(job_id).unwrap();
+		let values = parse_sequence(&encoded).unwrap();
+		let retained = tith_wire::item::read_message(&values[0], nodelist.as_ref()).unwrap();
+		assert_eq!(
+			retained.signing.signed_region,
+			original_read.signing.signed_region
+		);
+		assert_eq!(retained.signing.signature, original_read.signing.signature);
+		assert_eq!(retained.vias.last().unwrap().address, local);
+
+		let forged = request_text
+			.replace("Idempotency-Key \"retained\"", "Idempotency-Key \"forged\"")
+			.replace(&signature, &STANDARD_NO_PAD.encode([0_u8; SIGNATURE_BYTES]));
+		let forged = SubmissionRequest::parse(forged.as_bytes()).unwrap();
+		match engine.submit(&forged, &store) {
+			Err(StoreError::JobBuild {
+				kind, description, ..
+			}) => {
+				assert_eq!(kind, JobBuildFailure::Invalid);
+				assert!(description.contains("does not verify"), "{description}");
+			}
+			other => panic!("expected forged signature rejection, got {other:?}"),
+		}
+		drop(store);
+		drop(inbound);
+		std::fs::remove_file(path).unwrap();
+	}
+
+	#[test]
 	fn forwarding_records_every_listed_identity_in_one_seen_by() {
 		// TSP-0002 section 7: the distributor adds its local identity, the
 		// immediate incoming Peer, and every listed Send-To Peer it creates a
@@ -1271,7 +1754,7 @@ mod tests {
 
 		// An EchoMail signed by its author, already seen by one other node.
 		let item = build_originated_message(
-			MessageData {
+			&MessageData {
 				destination: None,
 				timestamp: 1_755_518_400,
 				to_user: "All".to_owned(),
