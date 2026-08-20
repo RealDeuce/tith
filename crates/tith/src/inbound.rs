@@ -5,7 +5,9 @@
 //! `tith-adapter`; this is the loop, the clock, and the command line.
 
 use std::error::Error;
+use std::io::Write as _;
 use std::path::PathBuf;
+use std::path::{Component, Path};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use tith_adapter::config::Configuration;
@@ -21,7 +23,7 @@ use tith_wire::Address;
 use tith_wire::bundle::KeyResolver;
 use tith_wire::item::ItemAuthentication;
 
-const USAGE: &str = "usage: tith inbound (--files ROOT | --tcp ADDRESS CLIENT-PUBLIC CLIENT-SECRET-FILE SERVER-PUBLIC | --unix SOCKET | --named-pipe PIPE SERVICE-SID) --config PATH [--nodelist PATH] [--application NAME] [--batch-window SECONDS] [--batch-max N] [--once] [--poll SECONDS]";
+const USAGE: &str = "usage: tith inbound (run (--files ROOT | --tcp ADDRESS CLIENT-PUBLIC CLIENT-SECRET-FILE SERVER-PUBLIC | --unix SOCKET | --named-pipe PIPE SERVICE-SID) --config PATH [--nodelist PATH] [--application NAME] [--batch-window SECONDS] [--batch-max N] [--once] [--poll SECONDS] | orphan list --config PATH | orphan export --config PATH INBOUND-ID DIRECTORY)";
 
 /// How long a batch may collect before it must publish.
 ///
@@ -34,8 +36,101 @@ const DEFAULT_POLL: u64 = 15;
 pub fn run(arguments: &mut impl Iterator<Item = String>) -> Result<i32, Box<dyn Error>> {
 	match arguments.next().as_deref() {
 		Some("run") => execute(arguments),
+		Some("orphan") => orphan(arguments),
 		_ => Err(USAGE.into()),
 	}
+}
+
+fn orphan(arguments: &mut impl Iterator<Item = String>) -> Result<i32, Box<dyn Error>> {
+	let operation = arguments.next().ok_or(USAGE)?;
+	if arguments.next().as_deref() != Some("--config") {
+		return Err(USAGE.into());
+	}
+	let path = PathBuf::from(arguments.next().ok_or(USAGE)?);
+	let configuration = Configuration::parse(&std::fs::read_to_string(path)?)?;
+	let ledger = Ledger::open(&configuration.ledger)?;
+	match operation.as_str() {
+		"list" if arguments.next().is_none() => {
+			print!("{}", orphan_listing(&ledger)?);
+			Ok(0)
+		}
+		"export" => {
+			let inbound_id = arguments.next().ok_or(USAGE)?;
+			let directory = PathBuf::from(arguments.next().ok_or(USAGE)?);
+			if arguments.next().is_some() {
+				return Err(USAGE.into());
+			}
+			export_orphan(&ledger, &inbound_id, &directory)?;
+			Ok(0)
+		}
+		_ => Err(USAGE.into()),
+	}
+}
+
+fn orphan_listing(ledger: &Ledger) -> Result<String, Box<dyn Error>> {
+	let mut output = String::new();
+	for orphan in ledger.orphans()? {
+		output.push_str(&single_line(&orphan.inbound_id));
+		output.push('\t');
+		output.push_str(&single_line(&orphan.authentication));
+		output.push('\t');
+		output.push_str(&single_line(&orphan.reason));
+		output.push('\n');
+	}
+	Ok(output)
+}
+
+fn single_line(value: &str) -> String {
+	value
+		.chars()
+		.map(|character| match character {
+			'\r' | '\n' | '\t' => ' ',
+			other => other,
+		})
+		.collect()
+}
+
+fn export_orphan(
+	ledger: &Ledger,
+	inbound_id: &str,
+	directory: &Path,
+) -> Result<(), Box<dyn Error>> {
+	let orphan = ledger
+		.orphan(inbound_id)?
+		.ok_or_else(|| format!("no quarantined orphan has InboundID {inbound_id}"))?;
+	std::fs::create_dir(directory)?;
+	write_new(&directory.join("payload.tlv"), &orphan.payload)?;
+	write_new(
+		&directory.join("reason.txt"),
+		format!(
+			"Authentication: {}\nReason: {}\n",
+			orphan.authentication, orphan.reason
+		)
+		.as_bytes(),
+	)?;
+	let legacy = directory.join("legacy");
+	std::fs::create_dir(&legacy)?;
+	for object in orphan.objects {
+		let path = Path::new(&object.name);
+		if !matches!(
+			path.components().collect::<Vec<_>>().as_slice(),
+			[Component::Normal(_)]
+		) {
+			return Err(format!("unsafe quarantined legacy name {:?}", object.name).into());
+		}
+		write_new(&legacy.join(path), &object.contents)?;
+	}
+	Ok(())
+}
+
+fn write_new(path: &Path, contents: &[u8]) -> Result<(), Box<dyn Error>> {
+	let mut file = std::fs::OpenOptions::new()
+		.write(true)
+		.create_new(true)
+		.open(path)?;
+	file.write_all(contents)?;
+	file.sync_all()?;
+	Ok(())
 }
 
 struct Options {
@@ -597,7 +692,7 @@ mod tests {
 	use super::*;
 	use std::fs;
 	use tith_adapter::srif::Afterward;
-	use tith_ledger::{Record, State};
+	use tith_ledger::{QuarantineObject, Record, State};
 
 	fn temp_dir(name: &str) -> PathBuf {
 		let path = std::env::temp_dir().join(format!(
@@ -626,6 +721,56 @@ mod tests {
 			})
 			.expect("stage");
 		ledger
+	}
+
+	#[test]
+	fn orphan_recovery_lists_and_exports_without_releasing_quarantine() {
+		let directory = temp_dir("orphan-export");
+		let ledger = Ledger::open(directory.join("ledger.redb")).expect("ledger");
+		let record = Record {
+			inbound_id: "I1".to_owned(),
+			payload_hash: [7; 32],
+			state: State::Retired,
+			objects: Vec::new(),
+			note: "orphan: invalid signature".to_owned(),
+			claim_token: "C1".to_owned(),
+			distribution: String::new(),
+			forward_job: String::new(),
+			cleanup: Vec::new(),
+		};
+		ledger
+			.stage_orphan(
+				&record,
+				"Origin-Invalid",
+				b"exact TLV",
+				&[QuarantineObject {
+					name: "00000001.pkt".to_owned(),
+					contents: b"recovery packet".to_vec(),
+				}],
+			)
+			.expect("stage orphan");
+
+		assert_eq!(
+			orphan_listing(&ledger).expect("list"),
+			"I1\tOrigin-Invalid\torphan: invalid signature\n"
+		);
+		let export = directory.join("export");
+		export_orphan(&ledger, "I1", &export).expect("export");
+		assert_eq!(fs::read(export.join("payload.tlv")).unwrap(), b"exact TLV");
+		assert_eq!(
+			fs::read_to_string(export.join("reason.txt")).unwrap(),
+			"Authentication: Origin-Invalid\nReason: orphan: invalid signature\n"
+		);
+		assert_eq!(
+			fs::read(export.join("legacy/00000001.pkt")).unwrap(),
+			b"recovery packet"
+		);
+		assert!(
+			export_orphan(&ledger, "I1", &export).is_err(),
+			"an existing export directory must not be replaced"
+		);
+		assert!(ledger.orphan("I1").unwrap().is_some());
+		fs::remove_dir_all(directory).expect("cleanup");
 	}
 
 	#[test]

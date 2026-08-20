@@ -6,7 +6,7 @@
 
 use std::collections::BTreeMap;
 
-use tith_ledger::{Ledger, LedgerError, Object, Record, State};
+use tith_ledger::{Ledger, LedgerError, Object, QuarantineObject, Record, State};
 use tith_message_legacy::{Packet, PacketOptions, endpoint};
 use tith_wire::bundle::KeyResolver;
 use tith_wire::item::{ItemAuthentication, read_file_request, read_message, read_standalone_file};
@@ -35,7 +35,12 @@ pub enum Outcome {
 	},
 	/// Nothing is published. The payload is taken into administrative ownership
 	/// and the item acknowledged.
-	Orphan { reason: String },
+	Orphan {
+		reason: String,
+		authentication: String,
+		payload: Vec<u8>,
+		recovery: Vec<Publication>,
+	},
 	/// A `FileRequest`. Nothing is published; the caller runs the FSC-0086.001
 	/// processor and submits each answering file as a TSP-0006 `Job Peer-File`
 	/// addressed back to the requesting peer.
@@ -158,8 +163,16 @@ pub fn plan(
 	}
 	let item = values.remove(0);
 	match item.type_code {
-		types::MESSAGE => plan_message(claim, &item, configuration, &context, ledger, resolver),
-		types::FILE => plan_file(claim, &item, configuration, &context, ledger),
+		types::MESSAGE => plan_message(
+			claim,
+			payload,
+			&item,
+			configuration,
+			&context,
+			ledger,
+			resolver,
+		),
+		types::FILE => plan_file(claim, payload, &item, configuration, &context, ledger),
 		types::FILE_REQUEST => plan_file_request(&item, configuration),
 		other => Err(InboundError::Payload(format!(
 			"item type {other} is not deliverable to a tosser"
@@ -197,6 +210,7 @@ fn plan_file_request(
 
 fn plan_message(
 	claim: &Claimed,
+	payload: &[u8],
 	item: &OwnedTlv,
 	configuration: &Configuration,
 	context: &Context,
@@ -205,24 +219,23 @@ fn plan_message(
 ) -> Result<Option<Outcome>, InboundError> {
 	let read =
 		read_message(item, resolver).map_err(|error| InboundError::Payload(error.to_string()))?;
-
-	if configuration.policy.action(claim.authentication) == Action::Orphan {
-		return Ok(Some(Outcome::Orphan {
-			reason: format!(
-				"policy orphans {:?}: {}",
-				claim.authentication,
-				diagnostic(claim.authentication).unwrap_or("no diagnostic")
-			),
-		}));
-	}
-	let warning = match configuration.policy.action(claim.authentication) {
-		Action::DeliverWarn => diagnostic(claim.authentication),
-		_ => None,
+	let action = configuration.policy.action(claim.authentication);
+	let warning = match action {
+		Action::DeliverWarn | Action::Orphan => diagnostic(claim.authentication),
+		Action::Deliver => None,
 	};
 
 	let converted = match to_legacy(&read, context, claim.authentication, warning, resolver) {
 		Ok(converted) => converted,
 		Err(error) => {
+			if action == Action::Orphan {
+				return Ok(Some(orphaned(
+					claim,
+					payload,
+					format!("policy orphan; no recovery conversion: {error}"),
+					Vec::new(),
+				)));
+			}
 			let refusal = Refusal::Unconvertible(error.to_string());
 			let disposition = configuration.refusals.disposition(&refusal);
 			return Ok(Some(Outcome::Refuse {
@@ -276,6 +289,18 @@ fn plan_message(
 			converted.diagnostic.unwrap_or_default()
 		),
 	};
+	if action == Action::Orphan {
+		return Ok(Some(orphaned(
+			claim,
+			payload,
+			format!(
+				"policy orphans {:?}: {}",
+				claim.authentication,
+				diagnostic(claim.authentication).unwrap_or("no diagnostic")
+			),
+			objects,
+		)));
+	}
 	let distribution = converted_area.clone();
 	Ok(Some(Outcome::Publish {
 		objects,
@@ -296,6 +321,7 @@ const fn is_forwardable(authentication: ItemAuthentication) -> bool {
 
 fn plan_file(
 	claim: &Claimed,
+	payload: &[u8],
 	item: &OwnedTlv,
 	configuration: &Configuration,
 	context: &Context,
@@ -303,12 +329,7 @@ fn plan_file(
 ) -> Result<Option<Outcome>, InboundError> {
 	let read =
 		read_standalone_file(item).map_err(|error| InboundError::Payload(error.to_string()))?;
-
-	if configuration.policy.action(claim.authentication) == Action::Orphan {
-		return Ok(Some(Outcome::Orphan {
-			reason: format!("policy orphans {:?}", claim.authentication),
-		}));
-	}
+	let action = configuration.policy.action(claim.authentication);
 
 	let identity = ledger.next_identity("object")?;
 	let name = transfer_name(&read.data.filename, truncate(identity));
@@ -317,11 +338,20 @@ fn plan_file(
 	// onward copy. It is published on its own for the local sysop; an ARCmail
 	// bundle handed to this node is the ordinary case.
 	if read.data.area.is_none() {
+		let objects = vec![Publication {
+			name,
+			contents: read.data.contents.clone(),
+		}];
+		if action == Action::Orphan {
+			return Ok(Some(orphaned(
+				claim,
+				payload,
+				format!("policy orphans {:?}", claim.authentication),
+				objects,
+			)));
+		}
 		return Ok(Some(Outcome::Publish {
-			objects: vec![Publication {
-				name,
-				contents: read.data.contents.clone(),
-			}],
+			objects,
 			note: "peer-addressed File".to_owned(),
 			distribution: None,
 			forwardable: false,
@@ -339,6 +369,14 @@ fn plan_file(
 	) {
 		Ok(tic) => tic,
 		Err(error) => {
+			if action == Action::Orphan {
+				return Ok(Some(orphaned(
+					claim,
+					payload,
+					format!("policy orphan; no recovery conversion: {error}"),
+					Vec::new(),
+				)));
+			}
 			let refusal = Refusal::Unconvertible(error.to_string());
 			let disposition = configuration.refusals.disposition(&refusal);
 			return Ok(Some(Outcome::Refuse {
@@ -350,17 +388,26 @@ fn plan_file(
 
 	// The companion is published before the TIC which names it.
 	let stem = name.split('.').next().unwrap_or("file").to_owned();
+	let objects = vec![
+		Publication {
+			name,
+			contents: read.data.contents.clone(),
+		},
+		Publication {
+			name: format!("{stem}.tic"),
+			contents: tic.into_bytes(),
+		},
+	];
+	if action == Action::Orphan {
+		return Ok(Some(orphaned(
+			claim,
+			payload,
+			format!("policy orphans {:?}", claim.authentication),
+			objects,
+		)));
+	}
 	Ok(Some(Outcome::Publish {
-		objects: vec![
-			Publication {
-				name,
-				contents: read.data.contents.clone(),
-			},
-			Publication {
-				name: format!("{stem}.tic"),
-				contents: tic.into_bytes(),
-			},
-		],
+		objects,
 		note: "TIC distribution".to_owned(),
 		distribution: Some(
 			context
@@ -370,6 +417,31 @@ fn plan_file(
 		),
 		forwardable: is_forwardable(claim.authentication),
 	}))
+}
+
+fn orphaned(
+	claim: &Claimed,
+	payload: &[u8],
+	reason: String,
+	recovery: Vec<Publication>,
+) -> Outcome {
+	Outcome::Orphan {
+		reason,
+		authentication: authentication_name(claim.authentication).to_owned(),
+		payload: payload.to_vec(),
+		recovery,
+	}
+}
+
+const fn authentication_name(authentication: ItemAuthentication) -> &'static str {
+	match authentication {
+		ItemAuthentication::Unsigned => "Unsigned",
+		ItemAuthentication::SignedOriginInvalid => "SignedOrigin-Invalid",
+		ItemAuthentication::SignedOriginValid => "SignedOrigin-Valid",
+		ItemAuthentication::OriginInvalid => "Origin-Invalid",
+		ItemAuthentication::OriginValid => "Origin-Valid",
+		ItemAuthentication::Transport => "Transport",
+	}
 }
 
 fn endpoint_of(context: &Context, origin: bool) -> tith_message_legacy::Endpoint {
@@ -416,8 +488,13 @@ pub fn commit(
 			note.clone(),
 			distribution.clone().unwrap_or_default(),
 		),
-		Outcome::Orphan { reason } => {
-			ledger.stage(&Record {
+		Outcome::Orphan {
+			reason,
+			authentication,
+			payload,
+			recovery,
+		} => {
+			let record = Record {
 				inbound_id: claim.inbound_id.clone(),
 				payload_hash: claim.payload_hash,
 				state: State::Retired,
@@ -427,7 +504,15 @@ pub fn commit(
 				distribution: String::new(),
 				forward_job: String::new(),
 				cleanup: Vec::new(),
-			})?;
+			};
+			let recovery = recovery
+				.iter()
+				.map(|object| QuarantineObject {
+					name: object.name.clone(),
+					contents: object.contents.clone(),
+				})
+				.collect::<Vec<_>>();
+			ledger.stage_orphan(&record, authentication, payload, &recovery)?;
 			return Ok(Ok(()));
 		}
 		// The record is durable before the processor runs, so a redelivery is
@@ -751,6 +836,16 @@ End
 			fixture.ledger.get("I1").unwrap().unwrap().state,
 			State::Retired
 		);
+		let orphan = fixture
+			.ledger
+			.orphan("I1")
+			.unwrap()
+			.expect("the exact orphan is retained");
+		assert_eq!(orphan.authentication, "Origin-Invalid");
+		assert_eq!(orphan.payload, payload);
+		assert_eq!(orphan.objects.len(), 1, "the recovery packet is retained");
+		let packet = Packet::parse(&orphan.objects[0].contents).unwrap();
+		assert!(packet.messages[0].text.starts_with("ERROR:"));
 	}
 
 	/// One encoded `FileRequest` for `wanted.zip`.

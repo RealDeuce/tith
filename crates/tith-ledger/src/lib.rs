@@ -20,6 +20,9 @@ use redb::{Database, ReadableDatabase as _, ReadableTable as _, TableDefinition}
 /// Inbound conversion records, keyed by `InboundID`.
 const INBOUND: TableDefinition<&str, &[u8]> = TableDefinition::new("inbound");
 
+/// Exact administratively owned orphan payloads and recovery objects.
+const QUARANTINE: TableDefinition<&str, &[u8]> = TableDefinition::new("quarantine");
+
 /// A monotonic counter for the stable generated names section 5 requires.
 const COUNTER: TableDefinition<&str, u64> = TableDefinition::new("counter");
 
@@ -28,6 +31,8 @@ pub enum LedgerError {
 	Database(String),
 	/// A stored record could not be decoded.
 	CorruptRecord,
+	/// An `InboundID` already names different quarantined data.
+	QuarantineExists(String),
 }
 
 impl fmt::Display for LedgerError {
@@ -35,6 +40,10 @@ impl fmt::Display for LedgerError {
 		match self {
 			Self::Database(message) => write!(f, "ledger database error: {message}"),
 			Self::CorruptRecord => f.write_str("ledger record is corrupt"),
+			Self::QuarantineExists(inbound_id) => write!(
+				f,
+				"quarantine already contains different data for InboundID {inbound_id}"
+			),
 		}
 	}
 }
@@ -108,6 +117,23 @@ pub struct Object {
 	pub digest: u64,
 }
 
+/// One generated legacy object retained for deliberate administrative export.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct QuarantineObject {
+	pub name: String,
+	pub contents: Vec<u8>,
+}
+
+/// The exact durable administrative ownership taken for an orphaned item.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Orphan {
+	pub inbound_id: String,
+	pub authentication: String,
+	pub reason: String,
+	pub payload: Vec<u8>,
+	pub objects: Vec<QuarantineObject>,
+}
+
 /// The complete inbound conversion record.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Record {
@@ -155,6 +181,7 @@ impl Ledger {
 		{
 			transaction.open_table(INBOUND)?;
 			transaction.open_table(COUNTER)?;
+			transaction.open_table(QUARANTINE)?;
 		}
 		transaction.commit()?;
 		Ok(Self { database })
@@ -169,6 +196,45 @@ impl Ledger {
 		{
 			let mut table = transaction.open_table(INBOUND)?;
 			table.insert(record.inbound_id.as_str(), encode(record).as_slice())?;
+		}
+		transaction.commit()?;
+		Ok(())
+	}
+
+	/// Atomically takes administrative ownership of an exact orphan and records
+	/// its terminal inbound state.
+	pub fn stage_orphan(
+		&self,
+		record: &Record,
+		authentication: &str,
+		payload: &[u8],
+		objects: &[QuarantineObject],
+	) -> Result<(), LedgerError> {
+		let orphan = Orphan {
+			inbound_id: record.inbound_id.clone(),
+			authentication: authentication.to_owned(),
+			reason: record.note.clone(),
+			payload: payload.to_vec(),
+			objects: objects.to_vec(),
+		};
+		let transaction = self.database.begin_write()?;
+		{
+			let quarantine = transaction.open_table(QUARANTINE)?;
+			if let Some(value) = quarantine.get(record.inbound_id.as_str())? {
+				if decode_orphan(value.value())? == orphan {
+					return Ok(());
+				}
+				return Err(LedgerError::QuarantineExists(record.inbound_id.clone()));
+			}
+		}
+		{
+			let mut inbound = transaction.open_table(INBOUND)?;
+			let mut quarantine = transaction.open_table(QUARANTINE)?;
+			inbound.insert(record.inbound_id.as_str(), encode(record).as_slice())?;
+			quarantine.insert(
+				record.inbound_id.as_str(),
+				encode_orphan(&orphan).as_slice(),
+			)?;
 		}
 		transaction.commit()?;
 		Ok(())
@@ -235,6 +301,28 @@ impl Ledger {
 			Some(value) => Ok(Some(decode(value.value())?)),
 			None => Ok(None),
 		}
+	}
+
+	/// One quarantined orphan, if present.
+	pub fn orphan(&self, inbound_id: &str) -> Result<Option<Orphan>, LedgerError> {
+		let transaction = self.database.begin_read()?;
+		let table = transaction.open_table(QUARANTINE)?;
+		match table.get(inbound_id)? {
+			Some(value) => Ok(Some(decode_orphan(value.value())?)),
+			None => Ok(None),
+		}
+	}
+
+	/// Every quarantined orphan in stable `InboundID` order.
+	pub fn orphans(&self) -> Result<Vec<Orphan>, LedgerError> {
+		let transaction = self.database.begin_read()?;
+		let table = transaction.open_table(QUARANTINE)?;
+		let mut orphans = Vec::new();
+		for entry in table.iter()? {
+			let (_, value) = entry?;
+			orphans.push(decode_orphan(value.value())?);
+		}
+		Ok(orphans)
 	}
 
 	/// Every record which has not reached a terminal state.
@@ -314,6 +402,60 @@ fn take_fixed<const N: usize>(input: &mut &[u8]) -> Option<[u8; N]> {
 	let (value, rest) = input.split_at(N);
 	*input = rest;
 	value.try_into().ok()
+}
+
+fn push_bytes(output: &mut Vec<u8>, value: &[u8]) {
+	output.extend_from_slice(&(value.len() as u64).to_le_bytes());
+	output.extend_from_slice(value);
+}
+
+fn take_bytes(input: &mut &[u8]) -> Option<Vec<u8>> {
+	let length = usize::try_from(u64::from_le_bytes(take_fixed::<8>(input)?)).ok()?;
+	if input.len() < length {
+		return None;
+	}
+	let (value, rest) = input.split_at(length);
+	*input = rest;
+	Some(value.to_vec())
+}
+
+fn encode_orphan(orphan: &Orphan) -> Vec<u8> {
+	let mut output = Vec::new();
+	push_bytes(&mut output, orphan.inbound_id.as_bytes());
+	push_bytes(&mut output, orphan.authentication.as_bytes());
+	push_bytes(&mut output, orphan.reason.as_bytes());
+	push_bytes(&mut output, &orphan.payload);
+	output.extend_from_slice(&(orphan.objects.len() as u64).to_le_bytes());
+	for object in &orphan.objects {
+		push_bytes(&mut output, object.name.as_bytes());
+		push_bytes(&mut output, &object.contents);
+	}
+	output
+}
+
+fn decode_orphan(mut input: &[u8]) -> Result<Orphan, LedgerError> {
+	let mut read = || -> Option<Orphan> {
+		let inbound_id = String::from_utf8(take_bytes(&mut input)?).ok()?;
+		let authentication = String::from_utf8(take_bytes(&mut input)?).ok()?;
+		let reason = String::from_utf8(take_bytes(&mut input)?).ok()?;
+		let payload = take_bytes(&mut input)?;
+		let count = usize::try_from(u64::from_le_bytes(take_fixed::<8>(&mut input)?)).ok()?;
+		let mut objects = Vec::new();
+		for _ in 0..count {
+			objects.push(QuarantineObject {
+				name: String::from_utf8(take_bytes(&mut input)?).ok()?,
+				contents: take_bytes(&mut input)?,
+			});
+		}
+		input.is_empty().then_some(Orphan {
+			inbound_id,
+			authentication,
+			reason,
+			payload,
+			objects,
+		})
+	};
+	read().ok_or(LedgerError::CorruptRecord)
 }
 
 fn encode(record: &Record) -> Vec<u8> {
@@ -425,6 +567,51 @@ mod tests {
 		ledger.stage(&value).unwrap();
 		assert_eq!(ledger.get("I1").unwrap().unwrap(), value);
 		assert_eq!(ledger.get("absent").unwrap(), None);
+		std::fs::remove_file(path).unwrap();
+	}
+
+	#[test]
+	fn an_orphan_retains_its_exact_payload_and_recovery_objects() {
+		let path = temporary("orphan");
+		{
+			let ledger = Ledger::open(&path).unwrap();
+			let mut value = record("I1", State::Retired);
+			value.note = "orphan: invalid signature".to_owned();
+			ledger
+				.stage_orphan(
+					&value,
+					"Origin-Invalid",
+					b"exact native TLV",
+					&[
+						QuarantineObject {
+							name: "archive.zip".to_owned(),
+							contents: b"file bytes".to_vec(),
+						},
+						QuarantineObject {
+							name: "00000001.tic".to_owned(),
+							contents: b"Area TEST\r\n".to_vec(),
+						},
+					],
+				)
+				.unwrap();
+			assert!(
+				ledger
+					.stage_orphan(&value, "Origin-Invalid", b"different TLV", &[])
+					.is_err(),
+				"a reused InboundID must not replace its quarantine"
+			);
+		}
+
+		let ledger = Ledger::open(&path).unwrap();
+		let orphan = ledger.orphan("I1").unwrap().unwrap();
+		assert_eq!(orphan.authentication, "Origin-Invalid");
+		assert_eq!(orphan.reason, "orphan: invalid signature");
+		assert_eq!(orphan.payload, b"exact native TLV");
+		assert_eq!(orphan.objects.len(), 2);
+		assert_eq!(orphan.objects[0].name, "archive.zip");
+		assert_eq!(orphan.objects[0].contents, b"file bytes");
+		assert_eq!(orphan.objects[1].name, "00000001.tic");
+		assert_eq!(ledger.orphans().unwrap(), vec![orphan]);
 		std::fs::remove_file(path).unwrap();
 	}
 

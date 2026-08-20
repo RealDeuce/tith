@@ -634,6 +634,23 @@ service supply a missing final U+000A — but two native texts differing only in
 trailing newline would otherwise share one legacy encoding, and only one of them
 could come back.
 
+### Orphan recovery
+
+An `Orphan` policy result publishes nothing to the legacy inbound. Instead the
+ledger retains the exact native item TLV, its authentication result and reason,
+and any legacy objects the adapter could generate for deliberate recovery. The
+item remains quarantined after export; exporting is inspection and recovery,
+not permission to feed an invalid item to the tosser automatically.
+
+```sh
+tith inbound orphan list --config /usr/local/etc/tith/adapter
+tith inbound orphan export --config /usr/local/etc/tith/adapter \
+    INBOUND-ID /var/tmp/orphan-recovery
+```
+
+The export directory must not exist. It receives `payload.tlv`, `reason.txt`,
+and the generated objects beneath `legacy/`. Existing paths are never replaced.
+
 ### Batching
 
 `--batch-window` and `--batch-max` bound how many items one packet may carry.

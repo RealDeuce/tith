@@ -20,7 +20,7 @@ use std::error::Error;
 use std::path::Path;
 use std::process::ExitCode;
 
-const USAGE: &str = "usage: tith (submit ... | nodelist convert ... | netmail scan ... | bso scan ... | inbound run ...)";
+const USAGE: &str = "usage: tith (submit ... | nodelist convert ... | netmail scan ... | bso scan ... | inbound (run ... | orphan ...))";
 
 fn main() -> ExitCode {
 	let mut arguments = std::env::args();
