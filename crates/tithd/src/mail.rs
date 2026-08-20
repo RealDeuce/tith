@@ -285,7 +285,8 @@ fn respond(
 		let value = value.read_owned()?;
 		match value.type_code {
 			types::SIGNED_TLV => {
-				let (responses, returned) = payload_responses(&value, request, mailer)?;
+				let first_hold = holds.len();
+				let responses = payload_responses(&value, request, mailer, holds)?;
 				if !responses.is_empty() {
 					let encoded = reply.payload(responses, &mailer.local_secret)?;
 					writer.write_all(&encoded)?;
@@ -293,13 +294,9 @@ fn respond(
 					// The peer answers a returned value by naming the SignedTLV it
 					// arrived in, which is the one just written.
 					let signed_tlv_hash = hash_tlv(&encoded)?;
-					holds.extend(returned.into_iter().map(|(request_identifier, claim)| {
-						PollHold {
-							signed_tlv_hash,
-							request_identifier,
-							claim,
-						}
-					}));
+					for hold in &mut holds[first_hold..] {
+						hold.signed_tlv_hash = signed_tlv_hash;
+					}
 				}
 			}
 			types::ORIGIN => {
@@ -336,19 +333,17 @@ fn release_holds(holds: &[PollHold], mailer: &Mailer) -> Result<(), Box<dyn Erro
 	Ok(())
 }
 
-/// The responses to one payload `SignedTLV`, and any copies a Poll returned.
-type PayloadResponses = (Vec<OwnedTlv>, Vec<(u64, DeliveryClaim)>);
-
 fn payload_responses(
 	value: &OwnedTlv,
 	request: &IncomingBundle,
 	mailer: &Mailer,
-) -> Result<PayloadResponses, Box<dyn Error>> {
+	holds: &mut Vec<PollHold>,
+) -> Result<Vec<OwnedTlv>, Box<dyn Error>> {
 	let response_to = hash_tlv(&value.encode())?;
 	let payload = match verify_signed_tlv(value, Some(&request.bundle.origin), mailer) {
 		Ok(payload) => payload,
 		Err(BundleError::InvalidSignature) => {
-			return Ok((unauthenticated_responses(value, response_to)?, Vec::new()));
+			return unauthenticated_responses(value, response_to);
 		}
 		Err(error) => return Err(error.into()),
 	};
@@ -357,7 +352,6 @@ fn payload_responses(
 			&& first.value.as_slice() == request.header_hash.as_bytes()
 	});
 	let mut responses = Vec::new();
-	let mut returned = Vec::new();
 	let request_values = if payload
 		.data
 		.first()
@@ -390,11 +384,18 @@ fn payload_responses(
 					// responses are about to be built into.
 					for (offset, claim) in claims.into_iter().enumerate() {
 						let identifier = u64::try_from(offset)? + 1;
+						// Register the claim before parsing or encoding its item. Any
+						// later error reaches `transaction`'s common release path; the
+						// real response hash is filled in after this SignedTLV is sent.
+						holds.push(PollHold {
+							signed_tlv_hash: TlvHash::from_bytes([0; 32]),
+							request_identifier: identifier,
+							claim,
+						});
 						responses.push(set_request_identifier(
-							&single_value(&claim.item)?,
+							&single_value(&holds.last().expect("hold was pushed").claim.item)?,
 							identifier,
 						)?);
-						returned.push((identifier, claim));
 					}
 					responses.push(accepted(item.request_identifier, response_to)?);
 				} else {
@@ -409,7 +410,7 @@ fn payload_responses(
 			Err(_) => responses.push(malformed_rejection(value, response_to)?),
 		}
 	}
-	Ok((responses, returned))
+	Ok(responses)
 }
 
 /// The spool kinds a Poll value asks for.
@@ -952,6 +953,69 @@ mod tests {
 		assert_eq!(
 			rejected_reason(&response, &mailer),
 			RejectionReason::Permanent as u64
+		);
+		drop(mailer);
+		fs::remove_file(database).unwrap();
+	}
+
+	#[test]
+	fn a_poll_build_error_releases_every_claimed_copy() {
+		let (mailer, peer_keys, peer, local, database) = setup();
+		// The store owns only the outer item kind. This deliberately malformed
+		// Message reaches the exchange's parser after the Poll snapshot has been
+		// atomically claimed, which is the failure boundary this test exercises.
+		let item = OwnedTlv::new(types::MESSAGE, vec![0x80]).unwrap().encode();
+		let identity = tith_store::SubmissionIdentity {
+			application: "test".to_owned(),
+			idempotency_key: "malformed-held".to_owned(),
+			digest: hash_tlv(&item).unwrap(),
+		};
+		let job = tith_store::NewOutboundJob {
+			identity: identity.clone(),
+			kind: JobKind::NetMail,
+			target: tith_store::JobTarget::Destination(peer.address.to_string()),
+			local_identity: local.address.to_string(),
+			item,
+			deliveries: vec![tith_store::NewDelivery {
+				local_identity: local.address.to_string(),
+				next_hop: peer.address.to_string(),
+				next_hop_key: None,
+				mode: tith_store::DeliveryMode::Passive,
+				class: "Normal".to_owned(),
+				retry_at: None,
+				policies: std::array::from_fn(|_| tith_store::FailurePolicy::default()),
+			}],
+			sources: Vec::new(),
+			created: now(),
+			forward_inbound: None,
+			forward_claim_token: None,
+		};
+		let outbound = mailer.store.outbound().unwrap();
+		let tith_store::BatchCommit::Committed(committed) = outbound
+			.commit_batch(std::slice::from_ref(&identity), |_, _| Ok(vec![job]))
+			.unwrap()
+		else {
+			panic!("job must commit")
+		};
+		let job_id = match &committed[0] {
+			tith_store::CommitOutcome::New { job_id, .. } => job_id.clone(),
+			tith_store::CommitOutcome::Existing { .. } => panic!("job must be new"),
+		};
+
+		let poll = container(
+			types::POLL_MESSAGES,
+			&[OwnedTlv::new(types::REQUEST_IDENTIFIER, encode_u64(1)).unwrap()],
+		);
+		let request = build_bundle(&peer, &peer_keys.secret, &local, 1, vec![vec![poll]]).unwrap();
+		let (_, completed) = exchange(&request, &mailer);
+		assert!(
+			!completed,
+			"the malformed spool item must fail the exchange"
+		);
+		assert_eq!(
+			outbound.query(&job_id).unwrap().state,
+			tith_store::JobState::Deferred,
+			"the failed exchange must release its Poll snapshot without a restart"
 		);
 		drop(mailer);
 		fs::remove_file(database).unwrap();
