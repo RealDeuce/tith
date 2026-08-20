@@ -8,6 +8,7 @@ use std::error::Error;
 use std::fmt;
 use std::path::Path;
 
+use tith_adapter::address::{AddressError, resolve_destination};
 use tith_ipc::{Document, EnvelopeKind, Field, Line};
 use tith_message_legacy::{AttachStyle, Disposition, StoredMessage};
 
@@ -22,6 +23,8 @@ pub enum BuildError {
 	NotLocalOrigin { origin: String },
 	/// The attachment list could not be resolved.
 	Attach(String),
+	/// The legacy destination forms are incomplete, malformed, or conflicting.
+	Destination(AddressError),
 	/// A named attachment is not present next to the message.
 	MissingAttachment { file: String },
 }
@@ -38,6 +41,7 @@ impl fmt::Display for BuildError {
 				"message origin {origin} is not the configured local identity, so it needs a Signed-Origin this tool cannot supply"
 			),
 			Self::Attach(reason) => write!(f, "{reason}"),
+			Self::Destination(error) => write!(f, "cannot resolve message destination: {error}"),
 			Self::MissingAttachment { file } => {
 				write!(f, "attached file \"{file}\" was not found")
 			}
@@ -46,6 +50,12 @@ impl fmt::Display for BuildError {
 }
 
 impl Error for BuildError {}
+
+impl From<AddressError> for BuildError {
+	fn from(value: AddressError) -> Self {
+		Self::Destination(value)
+	}
+}
 
 fn unquoted(text: &str) -> Field {
 	Field {
@@ -92,6 +102,8 @@ pub struct Context<'a> {
 	/// The legacy 3D or 4D rendering of `origin`, used to recognise our own
 	/// MSGID values. Absent when `origin` is not a listed TTS-0004 address.
 	pub legacy_origin: Option<String>,
+	/// Trusted domain used to complete fixed, INTL, and TOPT addresses.
+	pub domain: Option<&'a str>,
 	pub style: AttachStyle,
 	/// TSP-0004 features the service advertised.
 	pub features: &'a BTreeSet<String>,
@@ -117,10 +129,8 @@ pub struct Submission {
 
 /// Converts one stored message into a complete single-Job Submit request.
 pub fn build(message: &StoredMessage, context: &Context<'_>) -> Result<Submission, BuildError> {
-	let destination = message
-		.control("MSGTO")
-		.map(|control| control.value.clone())
-		.unwrap_or_default();
+	let destination =
+		resolve_destination(&message.controls, message.destination, context.domain)?.to_string();
 
 	// A message whose MSGID origin is not the local identity is in-transit
 	// legacy mail. TSP-0003 keeps such input as unsupported rather than
@@ -280,9 +290,9 @@ pub fn build_packed(
 	if let Some(area) = echo {
 		lines.push(line(vec![unquoted("Area"), quoted(area)]));
 	} else {
-		let destination = message
-			.control("MSGTO")
-			.map_or_else(|| message.destination.to_string(), |c| c.value.clone());
+		let destination =
+			resolve_destination(&message.controls, message.destination, context.domain)?
+				.to_string();
 		lines.push(line(vec![unquoted("Destination"), quoted(&destination)]));
 	}
 	lines.push(line(vec![unquoted("To-User"), quoted(&message.to_user)]));
@@ -509,13 +519,16 @@ fn push_attachments(
 mod tests {
 	use super::*;
 	use std::fs;
-	use tith_ipc::SubmissionRequest;
+	use tith_ipc::{SubmissionBody, SubmissionRequest};
 
 	fn stored(subject: &str, attributes: u16, body: &str) -> Vec<u8> {
 		let mut bytes = vec![0_u8; tith_message_legacy::HEADER_BYTES];
 		bytes[..6].copy_from_slice(b"Sender");
 		bytes[36..45].copy_from_slice(b"Recipient");
 		bytes[72..72 + subject.len()].copy_from_slice(subject.as_bytes());
+		bytes[166..168].copy_from_slice(&4_u16.to_le_bytes());
+		bytes[174..176].copy_from_slice(&2_u16.to_le_bytes());
+		bytes[176..178].copy_from_slice(&1_u16.to_le_bytes());
 		bytes[186..188].copy_from_slice(&attributes.to_le_bytes());
 		bytes.extend_from_slice(body.as_bytes());
 		bytes.push(0);
@@ -546,6 +559,7 @@ mod tests {
 				application: "netmail",
 				origin: "1:2/3",
 				legacy_origin: None,
+				domain: Some("fidonet"),
 				style: AttachStyle::Flags,
 				features: &features(&["Submit.Delete"]),
 				directory: &directory,
@@ -585,6 +599,7 @@ mod tests {
 			application: "netmail",
 			origin: "1:2/3",
 			legacy_origin: None,
+			domain: Some("fidonet"),
 			style: AttachStyle::Flags,
 			features: &features(&[]),
 			directory: &directory,
@@ -619,6 +634,7 @@ mod tests {
 				application: "netmail",
 				origin: "1:2/3",
 				legacy_origin: None,
+				domain: Some("fidonet"),
 				style: AttachStyle::Flags,
 				features: &features(&[]),
 				directory: &directory,
@@ -647,6 +663,7 @@ mod tests {
 				application: "netmail",
 				origin: "1:2/3",
 				legacy_origin: None,
+				domain: Some("fidonet"),
 				style: AttachStyle::Flags,
 				features: &features(&[]),
 				directory: &directory,
@@ -673,6 +690,7 @@ mod tests {
 				application: "netmail",
 				origin: "1:2/3",
 				legacy_origin: None,
+				domain: Some("fidonet"),
 				style: AttachStyle::Flags,
 				features: &features(&[]),
 				directory: &directory,
@@ -683,6 +701,64 @@ mod tests {
 		assert_eq!(built.idempotency_key, "generated:abc");
 		assert!(built.key_is_generated);
 		SubmissionRequest::parse(&built.request).expect("request parses");
+		fs::remove_dir_all(directory).unwrap();
+	}
+
+	#[test]
+	fn resolves_stored_and_packed_fixed_destinations_with_the_trusted_domain() {
+		let directory = temp_dir("fixed-destination");
+		let context = Context {
+			application: "netmail",
+			origin: "fidonet#1:2/3",
+			legacy_origin: Some("1:2/3".to_owned()),
+			domain: Some("fidonet"),
+			style: AttachStyle::Flags,
+			features: &features(&[]),
+			directory: &directory,
+			fallback_key: "generated:fixed",
+		};
+
+		let mut bytes = stored("Subject", 0, "Body");
+		bytes[166..168].copy_from_slice(&24_u16.to_le_bytes());
+		bytes[174..176].copy_from_slice(&200_u16.to_le_bytes());
+		bytes[176..178].copy_from_slice(&2_u16.to_le_bytes());
+		bytes[180..182].copy_from_slice(&5_u16.to_le_bytes());
+		let stored = StoredMessage::parse(&bytes).unwrap();
+		let parsed = SubmissionRequest::parse(&build(&stored, &context).unwrap().request).unwrap();
+		let SubmissionBody::Message(stored_job) = &parsed.jobs[0].body else {
+			panic!("stored conversion did not create a Message")
+		};
+		assert_eq!(stored_job.destination_or_area, "fidonet#2:200/24.5");
+
+		let packed = tith_message_legacy::PackedMessage {
+			origin: tith_message_legacy::Endpoint {
+				zone: 1,
+				net: 2,
+				node: 3,
+				point: 0,
+			},
+			destination: tith_message_legacy::Endpoint {
+				zone: 3,
+				net: 300,
+				node: 30,
+				point: 7,
+			},
+			attributes: 0,
+			date_time: "18 Aug 26  12:00:00".to_owned(),
+			to_user: "Recipient".to_owned(),
+			from_user: "Sender".to_owned(),
+			subject: "Subject".to_owned(),
+			controls: Vec::new(),
+			text: "Body\r".to_owned(),
+			area: None,
+		};
+		let parsed =
+			SubmissionRequest::parse(&build_packed(&packed, &[], &context).unwrap().request)
+				.unwrap();
+		let SubmissionBody::Message(packed_job) = &parsed.jobs[0].body else {
+			panic!("packet conversion did not create a Message")
+		};
+		assert_eq!(packed_job.destination_or_area, "fidonet#3:300/30.7");
 		fs::remove_dir_all(directory).unwrap();
 	}
 }

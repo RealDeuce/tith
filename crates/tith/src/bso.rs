@@ -486,6 +486,7 @@ fn unclaimed_entries(
 			application: &options.application,
 			origin: &options.origin,
 			legacy_origin: options.legacy_origin.clone(),
+			domain: options.domain.as_deref(),
 			style: options.style,
 			features,
 			directory,
@@ -561,6 +562,7 @@ fn request_list(
 			application: &options.application,
 			origin: &options.origin,
 			legacy_origin: options.legacy_origin.clone(),
+			domain: options.domain.as_deref(),
 			style: options.style,
 			features: &features,
 			directory: file.path.parent().unwrap_or(Path::new(".")),
@@ -599,6 +601,7 @@ fn submit_message(
 			application: &options.application,
 			origin: &options.origin,
 			legacy_origin: options.legacy_origin.clone(),
+			domain: options.domain.as_deref(),
 			style: options.style,
 			features,
 			directory,
@@ -733,7 +736,10 @@ mod tests {
 		record.extend_from_slice(b"Recipient\0Sender\0");
 		record.extend_from_slice(subject.as_bytes());
 		record.push(0);
-		record.extend_from_slice(format!("\u{1}MSGID: 1:104/36 {msgid}\rBody\r\n").as_bytes());
+		record.extend_from_slice(
+			format!("\u{1}MSGID: 1:104/36 {msgid}\r\u{1}MSGTO: fidonet#1:104/36\rBody\r\n")
+				.as_bytes(),
+		);
 		record.push(0);
 		bytes.extend_from_slice(&record);
 		bytes.extend_from_slice(&0_u16.to_le_bytes());

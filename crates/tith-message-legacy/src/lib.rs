@@ -76,6 +76,9 @@ pub struct Control {
 pub struct StoredMessage {
 	pub from_user: String,
 	pub to_user: String,
+	/// The fixed legacy destination fields. The native adapter supplies their
+	/// absent domain and may replace them with the complete MSGTO/INTL form.
+	pub destination: Endpoint,
 	/// The raw Subject field. When [`Self::has_file_attached`] is set this is an
 	/// FTS-0001.016 `FileList` rather than a human subject.
 	pub subject: String,
@@ -151,6 +154,12 @@ impl StoredMessage {
 		Ok(Self {
 			from_user: field(bytes, 0, 36)?,
 			to_user: field(bytes, 36, 36)?,
+			destination: Endpoint {
+				zone: u16_at(bytes, 176),
+				net: u16_at(bytes, 174),
+				node: u16_at(bytes, 166),
+				point: u16_at(bytes, 180),
+			},
 			subject: field(bytes, 72, 72)?,
 			date_time: field(bytes, 144, 20)?,
 			attributes: u16_at(bytes, ATTRIBUTE_OFFSET),
@@ -261,6 +270,10 @@ mod tests {
 		bytes[36..45].copy_from_slice(b"Recipient");
 		bytes[72..72 + subject.len()].copy_from_slice(subject.as_bytes());
 		bytes[144..144 + 19].copy_from_slice(b"01 Jan 26  00:00:00");
+		bytes[166..168].copy_from_slice(&24_u16.to_le_bytes());
+		bytes[174..176].copy_from_slice(&200_u16.to_le_bytes());
+		bytes[176..178].copy_from_slice(&2_u16.to_le_bytes());
+		bytes[180..182].copy_from_slice(&5_u16.to_le_bytes());
 		bytes[ATTRIBUTE_OFFSET..ATTRIBUTE_OFFSET + 2].copy_from_slice(&attributes.to_le_bytes());
 		bytes.extend_from_slice(body.as_bytes());
 		bytes.push(0);
@@ -274,6 +287,7 @@ mod tests {
 		assert_eq!(message.to_user, "Recipient");
 		assert_eq!(message.subject, "Hello");
 		assert_eq!(message.date_time, "01 Jan 26  00:00:00");
+		assert_eq!(message.destination.to_string(), "2:200/24.5");
 		assert_eq!(message.text, "Body text");
 		assert!(message.controls.is_empty());
 	}

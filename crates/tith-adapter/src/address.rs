@@ -7,7 +7,7 @@
 
 use std::fmt;
 
-use tith_message_legacy::Endpoint;
+use tith_message_legacy::{Control, Endpoint};
 use tith_wire::Address;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -19,6 +19,10 @@ pub enum AddressError {
 	OutOfRange,
 	/// Not a legacy address.
 	Malformed,
+	/// A partial legacy address has no trusted domain context.
+	MissingDomain,
+	/// Complete and older destination forms disagree.
+	Conflict,
 }
 
 impl fmt::Display for AddressError {
@@ -27,6 +31,8 @@ impl fmt::Display for AddressError {
 			Self::Unlisted => "the unlisted address has no legacy representation",
 			Self::OutOfRange => "an address component does not fit its legacy field",
 			Self::Malformed => "not a legacy address",
+			Self::MissingDomain => "a legacy address has no trusted domain context",
+			Self::Conflict => "legacy destination forms disagree",
 		})
 	}
 }
@@ -127,12 +133,116 @@ pub fn from_endpoint(endpoint: Endpoint, domain: &str) -> Result<Address, Addres
 	.map_err(|_| AddressError::OutOfRange)
 }
 
+/// Resolves a `NetMail` destination from its complete and older legacy forms.
+///
+/// `MSGTO` is complete. Without it, the fixed header supplies the initial
+/// address, `INTL` replaces its zone/net/node, and `TOPT` supplies its point.
+/// Partial forms never supply a domain; that comes only from trusted context.
+/// When `MSGTO` and `INTL` both occur they must identify the same destination.
+pub fn resolve_destination(
+	controls: &[Control],
+	fixed: Endpoint,
+	domain: Option<&str>,
+) -> Result<Address, AddressError> {
+	let singleton = |name: &str| -> Result<Option<&Control>, AddressError> {
+		let mut matching = controls
+			.iter()
+			.filter(|control| control.name.eq_ignore_ascii_case(name));
+		let first = matching.next();
+		if matching.next().is_some() {
+			return Err(AddressError::Malformed);
+		}
+		Ok(first)
+	};
+	let msgto = singleton("MSGTO")?
+		.map(|control| {
+			let address: Address = control.value.parse().map_err(|_| AddressError::Malformed)?;
+			if address.is_unlisted() {
+				return Err(AddressError::Unlisted);
+			}
+			Ok(address)
+		})
+		.transpose()?;
+	let intl = singleton("INTL")?;
+	let topt = singleton("TOPT")?;
+
+	let point = topt
+		.map(|control| {
+			if control.value.is_empty() || !control.value.bytes().all(|byte| byte.is_ascii_digit())
+			{
+				return Err(AddressError::Malformed);
+			}
+			control
+				.value
+				.parse::<u16>()
+				.map_err(|_| AddressError::OutOfRange)
+		})
+		.transpose()?;
+
+	let older = if let Some(control) = intl {
+		let domain = domain.ok_or(AddressError::MissingDomain)?;
+		let mut fields = control.value.split_ascii_whitespace();
+		let destination = fields.next().ok_or(AddressError::Malformed)?;
+		let origin = fields.next().ok_or(AddressError::Malformed)?;
+		if fields.next().is_some() {
+			return Err(AddressError::Malformed);
+		}
+		// The origin half is not returned here, but it is part of the structured
+		// INTL form and must still be syntactically valid.
+		with_domain(origin, domain)?;
+		let destination = with_domain(destination, domain)?;
+		Some(
+			Address::new(
+				destination.domain().to_owned(),
+				destination.zone(),
+				destination.net(),
+				destination.node(),
+				point.unwrap_or(0),
+			)
+			.map_err(|_| AddressError::OutOfRange)?,
+		)
+	} else if msgto.is_none() {
+		let domain = domain.ok_or(AddressError::MissingDomain)?;
+		Some(
+			Address::new(
+				domain.to_owned(),
+				i32::from(fixed.zone),
+				i32::from(fixed.net),
+				i32::from(fixed.node),
+				point.unwrap_or(fixed.point),
+			)
+			.map_err(|_| AddressError::OutOfRange)?,
+		)
+	} else {
+		None
+	};
+
+	if let Some(complete) = msgto {
+		if older.as_ref().is_some_and(|older| older != &complete)
+			|| (intl.is_none() && point.is_some_and(|point| point != complete.point()))
+		{
+			return Err(AddressError::Conflict);
+		}
+		return Ok(complete);
+	}
+	older.ok_or(AddressError::Malformed)
+}
+
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use tith_message_legacy::Control;
 
 	fn address(text: &str) -> Address {
 		text.parse().unwrap()
+	}
+
+	fn control(name: &str, value: &str) -> Control {
+		Control {
+			name: name.to_owned(),
+			value: value.to_owned(),
+			raw: format!("{name}: {value}"),
+		}
 	}
 
 	#[test]
@@ -195,5 +305,51 @@ mod tests {
 		// A domain containing "@" still resolves, because the split is from the
 		// right and a domain may not contain "#" but may contain other bytes.
 		assert!(with_domain("1:104/36", "fidonet").is_ok());
+	}
+
+	#[test]
+	fn resolves_fixed_and_complete_destinations_under_trusted_context() {
+		let fixed = Endpoint {
+			zone: 2,
+			net: 200,
+			node: 24,
+			point: 5,
+		};
+		assert_eq!(
+			resolve_destination(&[], fixed, Some("fidonet")).unwrap(),
+			address("fidonet#2:200/24.5")
+		);
+
+		let controls = [
+			control("MSGTO", "fidonet#3:300/30.7"),
+			control("INTL", "3:300/30 1:100/10"),
+			control("TOPT", "7"),
+		];
+		assert_eq!(
+			resolve_destination(&controls, fixed, Some("fidonet")).unwrap(),
+			address("fidonet#3:300/30.7")
+		);
+	}
+
+	#[test]
+	fn rejects_conflicting_or_unresolvable_destination_forms() {
+		let fixed = Endpoint {
+			zone: 2,
+			net: 200,
+			node: 24,
+			point: 0,
+		};
+		assert_eq!(
+			resolve_destination(&[], fixed, None),
+			Err(AddressError::MissingDomain)
+		);
+		let controls = [
+			control("MSGTO", "fidonet#3:300/30"),
+			control("INTL", "2:200/24 1:100/10"),
+		];
+		assert_eq!(
+			resolve_destination(&controls, fixed, Some("fidonet")),
+			Err(AddressError::Conflict)
+		);
 	}
 }

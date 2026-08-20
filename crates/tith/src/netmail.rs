@@ -17,7 +17,7 @@ use tith_wire::address::Address;
 
 use submission::{Context, build};
 
-const USAGE: &str = "usage: tith netmail scan (--files ROOT | --tcp ADDRESS CLIENT-PUBLIC CLIENT-SECRET-FILE SERVER-PUBLIC | --unix SOCKET | --named-pipe PIPE SERVICE-SID) --origin LOCAL-IDENTITY [--application NAME] [--binkley] [--kill-sent] [--dry-run] [--recover-after SECONDS] DIRECTORY";
+const USAGE: &str = "usage: tith netmail scan (--files ROOT | --tcp ADDRESS CLIENT-PUBLIC CLIENT-SECRET-FILE SERVER-PUBLIC | --unix SOCKET | --named-pipe PIPE SERVICE-SID) --origin LOCAL-IDENTITY [--domain NAME] [--application NAME] [--binkley] [--kill-sent] [--dry-run] [--recover-after SECONDS] DIRECTORY";
 
 /// Marks a message claimed for processing. The suffix deliberately fails the
 /// `###.msg` filter so a concurrent scanner's main pass cannot see it.
@@ -33,6 +33,7 @@ pub fn run(arguments: &mut impl Iterator<Item = String>) -> Result<i32, Box<dyn 
 struct Options {
 	origin: String,
 	legacy_origin: Option<String>,
+	domain: Option<String>,
 	application: String,
 	style: AttachStyle,
 	kill_sent: bool,
@@ -47,6 +48,7 @@ const DEFAULT_RECOVER_AFTER: Duration = Duration::from_mins(10);
 fn options(arguments: &mut impl Iterator<Item = String>) -> Result<Options, Box<dyn Error>> {
 	let mut origin = None;
 	let mut application = "netmail".to_owned();
+	let mut domain = None;
 	let mut style = AttachStyle::Flags;
 	let mut kill_sent = false;
 	let mut dry_run = false;
@@ -55,6 +57,7 @@ fn options(arguments: &mut impl Iterator<Item = String>) -> Result<Options, Box<
 	while let Some(argument) = arguments.next() {
 		match argument.as_str() {
 			"--origin" => origin = Some(arguments.next().ok_or(USAGE)?),
+			"--domain" => domain = Some(arguments.next().ok_or(USAGE)?),
 			"--application" => application = arguments.next().ok_or(USAGE)?,
 			"--binkley" => style = AttachStyle::Binkley,
 			"--kill-sent" => kill_sent = true,
@@ -71,6 +74,7 @@ fn options(arguments: &mut impl Iterator<Item = String>) -> Result<Options, Box<
 	Ok(Options {
 		legacy_origin: legacy_form(&origin),
 		origin,
+		domain,
 		application,
 		style,
 		kill_sent,
@@ -383,6 +387,7 @@ fn context<'a>(
 		application: &options.application,
 		origin: &options.origin,
 		legacy_origin: options.legacy_origin.clone(),
+		domain: options.domain.as_deref(),
 		style: options.style,
 		features,
 		directory: claimed.parent().unwrap_or(Path::new(".")),
@@ -449,6 +454,7 @@ fn submit(
 			application: &options.application,
 			origin: &options.origin,
 			legacy_origin: options.legacy_origin.clone(),
+			domain: options.domain.as_deref(),
 			style: options.style,
 			features,
 			directory,
@@ -551,6 +557,9 @@ mod tests {
 		bytes[..6].copy_from_slice(b"Sender");
 		bytes[36..45].copy_from_slice(b"Recipient");
 		bytes[72..79].copy_from_slice(b"Subject");
+		bytes[166..168].copy_from_slice(&4_u16.to_le_bytes());
+		bytes[174..176].copy_from_slice(&2_u16.to_le_bytes());
+		bytes[176..178].copy_from_slice(&1_u16.to_le_bytes());
 		bytes[186..188].copy_from_slice(&attributes.to_le_bytes());
 		bytes.extend_from_slice(format!("\u{1}MSGID: 1:2/3 {msgid}\rBody\r\n").as_bytes());
 		bytes.push(0);
@@ -572,6 +581,7 @@ mod tests {
 		Options {
 			origin: "fidonet#1:2/3".to_owned(),
 			legacy_origin: Some("1:2/3".to_owned()),
+			domain: Some("fidonet".to_owned()),
 			application: "netmail".to_owned(),
 			style: AttachStyle::Flags,
 			kill_sent: false,
