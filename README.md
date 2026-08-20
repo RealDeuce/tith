@@ -674,6 +674,29 @@ a batch is held under its claim until the whole batch is published.
 
 ### Distribution
 
+Native area fan-out is configured in the TSP-0002 `Areas` file. Each local
+identity has `EchoArea` and `FileArea` blocks whose `Receive-From` lines
+authorize inbound links and whose `Send-To` lines name every outbound link;
+an optional `Class` on `Send-To` selects that copy's delivery class. The two
+directions are deliberately separate. For example:
+
+```text
+Areas fidonet#1:123/45
+EchoArea FSX_GEN
+Receive-From @upstream
+Send-To @upstream
+Send-To @downstream Class Normal
+End
+End
+```
+
+For locally originated `Job EchoMail` and area `Job File` submissions, the
+service creates one direct delivery copy for every applicable `Send-To`. For a
+received distribution item, TSP-0006 `Job Forward` applies the same links after
+excluding the immediate peer and identities already present in `SeenBy`.
+Endpoint availability determines whether each copy is active or held for that
+peer's poll; NetMail routing is never applied to an area copy.
+
 An `Origin-Valid` or `SignedOrigin-Valid` `EchoMail` or file distribution item
 arrives owing onward copies. The adapter always commits a TSP-0006 `Job Forward`
 while the claim is still current. A Forward Job "MUST NOT decode and re-encode,
