@@ -8,6 +8,7 @@ repository.workspace = true
 publish = false
 
 [dependencies]
+same-file.workspace = true
 tith-message-legacy = { path = "../tith-message-legacy" }
 
 [lints]

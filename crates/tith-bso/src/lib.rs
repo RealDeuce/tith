@@ -18,6 +18,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use same_file::Handle;
 use tith_message_legacy::{Attachment, Disposition};
 
 pub use layout::{Flavour, FlowFile, FlowKind, NodeAddress, Outbound, classify_extension};
@@ -189,8 +190,7 @@ static BUSY_OWNER_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 #[derive(Debug)]
 pub struct BusyLock {
 	path: PathBuf,
-	file: File,
-	owner: Vec<u8>,
+	file: Handle,
 	remove_on_drop: bool,
 }
 
@@ -225,8 +225,7 @@ impl BusyLock {
 					}
 					return Ok(Some(Self {
 						path,
-						file,
-						owner,
+						file: Handle::from_file(file)?,
 						remove_on_drop: true,
 					}));
 				}
@@ -254,13 +253,13 @@ impl BusyLock {
 			Self::write_owner(&mut file, &owner)?;
 			// The former owner could have removed this open file immediately before
 			// we acquired its lock. Do not claim a replacement at the same path.
-			if fs::read(&path).ok().as_deref() != Some(owner.as_slice()) {
+			let file = Handle::from_file(file)?;
+			if !Handle::from_path(&path).is_ok_and(|current| current == file) {
 				return Ok(None);
 			}
 			return Ok(Some(Self {
 				path,
 				file,
-				owner,
 				remove_on_drop: true,
 			}));
 		}
@@ -309,11 +308,11 @@ impl Drop for BusyLock {
 	fn drop(&mut self) {
 		// Section 5.1: after the job, successful or not, the file is deleted.
 		if self.remove_on_drop
-			&& fs::read(&self.path).ok().as_deref() == Some(self.owner.as_slice())
+			&& Handle::from_path(&self.path).is_ok_and(|current| current == self.file)
 		{
 			let _ = fs::remove_file(&self.path);
 		}
-		let _ = self.file.unlock();
+		let _ = self.file.as_file().unlock();
 	}
 }
 
