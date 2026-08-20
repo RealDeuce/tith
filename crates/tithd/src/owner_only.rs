@@ -94,7 +94,7 @@ pub fn create_directory(path: &Path) -> io::Result<()> {
 /// which would make the service unable to clean up after itself.
 pub fn seal(path: &Path) -> io::Result<()> {
 	platform::seal_file(path)?;
-	platform::check(path)
+	platform::check_sealed(path)
 }
 
 #[cfg(unix)]
@@ -131,6 +131,19 @@ mod platform {
 		))
 	}
 
+	pub fn check_sealed(path: &Path) -> io::Result<()> {
+		if std::fs::metadata(path)?.permissions().mode() & 0o777 == 0o400 {
+			return Ok(());
+		}
+		Err(io::Error::new(
+			io::ErrorKind::PermissionDenied,
+			format!(
+				"{} is not sealed read-only for its owner; it needs mode 0400",
+				path.display()
+			),
+		))
+	}
+
 	pub fn restrict_directory(path: &Path) -> io::Result<()> {
 		std::fs::set_permissions(path, Permissions::from_mode(0o700))
 	}
@@ -144,6 +157,7 @@ mod platform {
 mod platform {
 	pub use crate::windows::{
 		create_owner_only as create, owner_only_dacl as check, restrict_directory, seal_file,
+		sealed_dacl as check_sealed,
 	};
 }
 
@@ -164,9 +178,15 @@ pub(crate) fn permits_only_owner(sddl: &str) -> bool {
 	// "SY" is LocalSystem and "OW" is OWNER RIGHTS, which Windows evaluates as
 	// whoever currently owns the object. Either may appear as a raw SID.
 	const ALLOWED: [&str; 4] = ["SY", "OW", "S-1-5-18", "S-1-3-4"];
-	let Some(dacl) = sddl.strip_prefix("D:") else {
+	let Some(aces) = protected_aces(sddl) else {
 		return false;
 	};
+	!aces.is_empty() && aces.iter().all(|(_, trustee)| ALLOWED.contains(trustee))
+}
+
+#[cfg(any(windows, test))]
+fn protected_aces(sddl: &str) -> Option<Vec<(&str, &str)>> {
+	let dacl = sddl.strip_prefix("D:")?;
 	let (flags, aces) = match dacl.find('(') {
 		Some(position) => dacl.split_at(position),
 		None => (dacl, ""),
@@ -179,31 +199,88 @@ pub(crate) fn permits_only_owner(sddl: &str) -> bool {
 	// entry which really was inherited carries "ID" in its own flags, and the
 	// per-entry check below rejects any flags at all.
 	if !flags.contains('P') {
-		return false;
+		return None;
 	}
 	let mut remaining = aces;
-	let mut seen = 0;
+	let mut parsed = Vec::new();
 	while let Some(rest) = remaining.strip_prefix('(') {
-		let Some(end) = rest.find(')') else {
-			return false;
-		};
+		let end = rest.find(')')?;
 		let fields: Vec<&str> = rest[..end].split(';').collect();
 		// type;flags;rights;object;inherited-object;trustee
-		let [kind, ace_flags, _rights, _object, _inherited, trustee] = fields.as_slice() else {
-			return false;
+		let [kind, ace_flags, rights, _object, _inherited, trustee] = fields.as_slice() else {
+			return None;
 		};
-		if *kind != "A" || !ace_flags.is_empty() || !ALLOWED.contains(trustee) {
-			return false;
+		if *kind != "A" || !ace_flags.is_empty() {
+			return None;
 		}
-		seen += 1;
+		parsed.push((*rights, *trustee));
 		remaining = &rest[end + 1..];
 	}
-	remaining.is_empty() && seen > 0
+	remaining.is_empty().then_some(parsed)
+}
+
+/// Whether a protected DACL has the exact sealed-export access shape:
+/// `LocalSystem` retains full access while the owner may only read and delete.
+#[cfg(any(windows, test))]
+pub(crate) fn permits_sealed_owner(sddl: &str) -> bool {
+	const SYSTEM: [&str; 2] = ["SY", "S-1-5-18"];
+	const OWNER: [&str; 2] = ["OW", "S-1-3-4"];
+	let Some(aces) = protected_aces(sddl) else {
+		return false;
+	};
+	let mut system = false;
+	let mut owner = false;
+	for (rights, trustee) in aces {
+		if SYSTEM.contains(&trustee) {
+			if !full_access(rights) {
+				return false;
+			}
+			system = true;
+		} else if OWNER.contains(&trustee) {
+			if !read_and_delete(rights) {
+				return false;
+			}
+			owner = true;
+		} else {
+			return false;
+		}
+	}
+	system && owner
+}
+
+#[cfg(any(windows, test))]
+fn full_access(rights: &str) -> bool {
+	rights == "FA" || hexadecimal_rights(rights) == Some(0x001f_01ff)
+}
+
+#[cfg(any(windows, test))]
+fn read_and_delete(rights: &str) -> bool {
+	if hexadecimal_rights(rights) == Some(0x0013_0089) {
+		return true;
+	}
+	let mut read = false;
+	let mut delete = false;
+	let mut chunks = rights.as_bytes().chunks_exact(2);
+	for chunk in &mut chunks {
+		match chunk {
+			b"FR" if !read => read = true,
+			b"SD" if !delete => delete = true,
+			_ => return false,
+		}
+	}
+	chunks.remainder().is_empty() && read && delete
+}
+
+#[cfg(any(windows, test))]
+fn hexadecimal_rights(rights: &str) -> Option<u32> {
+	u32::from_str_radix(rights.strip_prefix("0x")?, 16).ok()
 }
 
 #[cfg(test)]
 mod tests {
-	use super::{create_directory, permits_only_owner, read_file, seal, write_file};
+	use super::{
+		create_directory, permits_only_owner, permits_sealed_owner, read_file, seal, write_file,
+	};
 	use std::io;
 
 	fn directory(name: &str) -> std::path::PathBuf {
@@ -324,6 +401,20 @@ mod tests {
 		std::fs::remove_dir_all(root).unwrap();
 	}
 
+	#[cfg(unix)]
+	#[test]
+	fn sealed_verification_rejects_an_owner_writable_file() {
+		use std::os::unix::fs::PermissionsExt as _;
+
+		let root = directory("seal-verify");
+		let export = root.join("item.tlv");
+		std::fs::write(&export, b"payload").unwrap();
+		std::fs::set_permissions(&export, std::fs::Permissions::from_mode(0o600)).unwrap();
+		let error = super::platform::check_sealed(&export).unwrap_err();
+		assert_eq!(error.kind(), io::ErrorKind::PermissionDenied, "{error}");
+		std::fs::remove_dir_all(root).unwrap();
+	}
+
 	#[test]
 	fn accepts_only_a_protected_owner_and_system_dacl() {
 		// What `create` writes, in both spellings Windows may return.
@@ -360,5 +451,18 @@ mod tests {
 		assert!(!permits_only_owner("D:P"));
 		assert!(!permits_only_owner(""));
 		assert!(!permits_only_owner("O:BAG:BAD:P(A;;FA;;;OW)"));
+	}
+
+	#[test]
+	fn sealed_dacl_requires_read_and_delete_but_no_owner_write_right() {
+		assert!(permits_sealed_owner("D:P(A;;FA;;;SY)(A;;FRSD;;;OW)"));
+		assert!(permits_sealed_owner(
+			"D:PAI(A;;0x1f01ff;;;S-1-5-18)(A;;0x130089;;;S-1-3-4)"
+		));
+		assert!(!permits_sealed_owner("D:P(A;;FA;;;SY)(A;;FA;;;OW)"));
+		assert!(!permits_sealed_owner("D:P(A;;FA;;;SY)(A;;FR;;;OW)"));
+		assert!(!permits_sealed_owner(
+			"D:P(A;;FA;;;SY)(A;;FRSD;;;OW)(A;;FR;;;WD)"
+		));
 	}
 }

@@ -495,6 +495,22 @@ pub fn owner_only_dacl(path: &Path) -> io::Result<()> {
 	))
 }
 
+/// Confirms that `path` carries the sealed export DACL, including the owner's
+/// lack of every write right and retained ability to delete the file.
+pub fn sealed_dacl(path: &Path) -> io::Result<()> {
+	let stored = dacl(path)?;
+	if crate::owner_only::permits_sealed_owner(&stored) {
+		return Ok(());
+	}
+	Err(io::Error::new(
+		io::ErrorKind::PermissionDenied,
+		format!(
+			"{} is not sealed read-only for its owner; its DACL is \"{stored}\" and must be \"{OWNER_READ_ONLY}\"",
+			path.display()
+		),
+	))
+}
+
 /// The DACL of `path` in SDDL form.
 fn dacl(path: &Path) -> io::Result<String> {
 	let name = wide(path.as_os_str());
