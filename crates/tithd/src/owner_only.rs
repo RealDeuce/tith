@@ -10,14 +10,17 @@
 //! is why every function here is implemented twice instead of being skipped
 //! under a `cfg`.
 //!
-//! Both mechanisms need a filesystem which has one. FAT and exFAT have neither,
-//! and a network mount may have neither, so the state directory, the endpoint
-//! roots, the exports, and the key files all have to live somewhere which does.
-//! That is a real restriction and it is enforced rather than assumed: every
-//! function here reads back what it applied, because a filesystem without
-//! access control accepts the request and ignores it instead of refusing it.
-//! The legacy inbound and outbound directories, which are the ones an operator
-//! is likely to put on a share, are not restricted by anything here.
+//! Both mechanisms need a filesystem which has one, which is not the same as
+//! needing a local one. SMB to an NTFS share carries real ACLs and answers
+//! `SetNamedSecurityInfoW` over a UNC path; NFS version 3 has mode bits and
+//! version 4 has both. What has nothing to apply is FAT and exFAT, and a CIFS
+//! mount whose modes are fixed at mount time so `chmod` is ignored.
+//!
+//! That distinction is enforced rather than assumed, because a filesystem with
+//! no access control accepts the request and ignores it instead of refusing it:
+//! every function here reads back what it applied. The legacy inbound and
+//! outbound directories, the ones an operator is most likely to put on a share,
+//! are not restricted by anything here and hold no secret of ours.
 
 use std::fs::File;
 use std::io;
