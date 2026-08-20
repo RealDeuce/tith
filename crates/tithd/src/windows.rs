@@ -6,8 +6,11 @@
 
 use std::error::Error;
 use std::ffi::c_void;
+use std::fs::File;
 use std::io;
 use std::mem::{size_of, zeroed};
+use std::os::windows::ffi::OsStrExt;
+use std::os::windows::io::FromRawHandle;
 use std::path::Path;
 use std::ptr::null_mut;
 use std::sync::Arc;
@@ -15,19 +18,22 @@ use std::sync::Arc;
 use tith_ipc::{Document, DocumentFramer, EnvelopeKind};
 use tith_wire::integer::{MAX_U64_BYTES, decode_u64, encode_u64};
 use windows_sys::Win32::Foundation::{
-	CloseHandle, ERROR_INSUFFICIENT_BUFFER, ERROR_PIPE_CONNECTED, FILETIME, GetLastError, HANDLE,
-	INVALID_HANDLE_VALUE, LocalFree,
+	CloseHandle, ERROR_INSUFFICIENT_BUFFER, ERROR_PIPE_CONNECTED, ERROR_SUCCESS, FILETIME,
+	GENERIC_WRITE, GetLastError, HANDLE, INVALID_HANDLE_VALUE, LocalFree,
 };
 use windows_sys::Win32::Security::Authorization::{
-	ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1,
+	ConvertSecurityDescriptorToStringSecurityDescriptorW,
+	ConvertStringSecurityDescriptorToSecurityDescriptorW, GetNamedSecurityInfoW, SDDL_REVISION_1,
+	SE_FILE_OBJECT,
 };
 use windows_sys::Win32::Security::{
-	EqualSid, GetTokenInformation, RevertToSelf, SECURITY_ATTRIBUTES, SecurityImpersonation,
-	TOKEN_QUERY, TOKEN_STATISTICS, TOKEN_USER, TokenImpersonationLevel, TokenSessionId,
-	TokenStatistics, TokenUser,
+	DACL_SECURITY_INFORMATION, EqualSid, GetTokenInformation, RevertToSelf, SECURITY_ATTRIBUTES,
+	SecurityImpersonation, TOKEN_QUERY, TOKEN_STATISTICS, TOKEN_USER, TokenImpersonationLevel,
+	TokenSessionId, TokenStatistics, TokenUser,
 };
 use windows_sys::Win32::Storage::FileSystem::{
-	FlushFileBuffers, PIPE_ACCESS_DUPLEX, ReadFile, WriteFile,
+	CREATE_NEW, CreateFileW, FILE_ATTRIBUTE_NORMAL, FILE_SHARE_NONE, FlushFileBuffers,
+	PIPE_ACCESS_DUPLEX, ReadFile, WriteFile,
 };
 use windows_sys::Win32::System::Pipes::{
 	ConnectNamedPipe, CreateNamedPipeW, DisconnectNamedPipe, GetNamedPipeClientProcessId,
@@ -62,7 +68,8 @@ struct LocalSecurityDescriptor(*mut c_void);
 impl Drop for LocalSecurityDescriptor {
 	fn drop(&mut self) {
 		if !self.0.is_null() {
-			// SAFETY: ConvertStringSecurityDescriptor allocated this value with LocalAlloc.
+			// SAFETY: every constructor holds a value the security descriptor and
+			// SDDL conversion calls allocated with LocalAlloc.
 			unsafe { LocalFree(self.0) };
 		}
 	}
@@ -347,6 +354,131 @@ fn write_all(pipe: HANDLE, mut input: &[u8]) -> io::Result<()> {
 		input = &input[usize::try_from(written).expect("u32 fits usize")..];
 	}
 	Ok(())
+}
+
+/// A protected DACL granting full access only to LocalSystem and the object
+/// owner, and nothing else. This is the Windows spelling of POSIX mode 0600;
+/// `create_pipe` builds the same descriptor for the service pipe.
+///
+/// "P" makes the DACL protected, so nothing is inherited from the containing
+/// directory. Without it a key file in a user profile picks up whatever that
+/// profile grants.
+const OWNER_ONLY: &str = "D:P(A;;FA;;;SY)(A;;FA;;;OW)";
+
+/// Creates a file carrying [`OWNER_ONLY`], failing when it already exists.
+pub fn create_owner_only(path: &Path) -> io::Result<File> {
+	let name = wide(path.as_os_str());
+	let sddl: Vec<u16> = OWNER_ONLY.encode_utf16().chain([0]).collect();
+	let mut descriptor = null_mut();
+	if unsafe {
+		ConvertStringSecurityDescriptorToSecurityDescriptorW(
+			sddl.as_ptr(),
+			SDDL_REVISION_1,
+			&mut descriptor,
+			null_mut(),
+		)
+	} == 0
+	{
+		return Err(io::Error::last_os_error());
+	}
+	let descriptor = LocalSecurityDescriptor(descriptor);
+	let attributes = SECURITY_ATTRIBUTES {
+		nLength: u32::try_from(size_of::<SECURITY_ATTRIBUTES>()).expect("a struct size fits u32"),
+		lpSecurityDescriptor: descriptor.0,
+		bInheritHandle: 0,
+	};
+	let handle = unsafe {
+		CreateFileW(
+			name.as_ptr(),
+			GENERIC_WRITE,
+			FILE_SHARE_NONE,
+			&attributes,
+			CREATE_NEW,
+			FILE_ATTRIBUTE_NORMAL,
+			null_mut(),
+		)
+	};
+	if handle == INVALID_HANDLE_VALUE {
+		return Err(io::Error::last_os_error());
+	}
+	// SAFETY: CreateFileW returned one live handle and this is its only owner.
+	Ok(unsafe { File::from_raw_handle(handle) })
+}
+
+/// Confirms that `path` still carries exactly [`OWNER_ONLY`].
+///
+/// This is the counterpart of the POSIX `mode & 0o077` check: it reports a key
+/// another account can reach rather than repairing one, because a key which has
+/// been readable is already a key which may have been read.
+pub fn owner_only_dacl(path: &Path) -> io::Result<()> {
+	let stored = dacl(path)?;
+	if crate::secret::permits_only_owner(&stored) {
+		return Ok(());
+	}
+	Err(io::Error::new(
+		io::ErrorKind::PermissionDenied,
+		format!(
+			"{} is reachable by accounts other than its owner; its DACL is \"{stored}\" and must be \"{OWNER_ONLY}\"",
+			path.display()
+		),
+	))
+}
+
+/// The DACL of `path` in SDDL form.
+fn dacl(path: &Path) -> io::Result<String> {
+	let name = wide(path.as_os_str());
+	let mut descriptor = null_mut();
+	let status = unsafe {
+		GetNamedSecurityInfoW(
+			name.as_ptr(),
+			SE_FILE_OBJECT,
+			DACL_SECURITY_INFORMATION,
+			null_mut(),
+			null_mut(),
+			null_mut(),
+			null_mut(),
+			&mut descriptor,
+		)
+	};
+	if status != ERROR_SUCCESS {
+		return Err(io::Error::from_raw_os_error(
+			i32::try_from(status).unwrap_or(-1),
+		));
+	}
+	let descriptor = LocalSecurityDescriptor(descriptor);
+	let mut text = null_mut();
+	if unsafe {
+		ConvertSecurityDescriptorToStringSecurityDescriptorW(
+			descriptor.0,
+			SDDL_REVISION_1,
+			DACL_SECURITY_INFORMATION,
+			&mut text,
+			null_mut(),
+		)
+	} == 0
+	{
+		return Err(io::Error::last_os_error());
+	}
+	let text = LocalSecurityDescriptor(text.cast());
+	// SAFETY: the call above returned one NUL terminated LocalAlloc'd string.
+	Ok(unsafe { from_wide(text.0.cast::<u16>()) })
+}
+
+fn wide(value: &std::ffi::OsStr) -> Vec<u16> {
+	value.encode_wide().chain([0]).collect()
+}
+
+/// # Safety
+///
+/// `text` must point at a NUL terminated UTF-16 string.
+unsafe fn from_wide(text: *const u16) -> String {
+	let mut length = 0;
+	// SAFETY: the caller guarantees a NUL terminator bounds this walk.
+	while unsafe { *text.add(length) } != 0 {
+		length += 1;
+	}
+	// SAFETY: `length` units precede the NUL the walk above found.
+	String::from_utf16_lossy(unsafe { std::slice::from_raw_parts(text, length) })
 }
 
 #[cfg(test)]

@@ -5,9 +5,9 @@ mod deliver;
 mod filesystem;
 mod framing;
 mod ipc;
-#[cfg(unix)]
 mod mail;
 mod schedule;
+mod secret;
 mod submission;
 mod tcp;
 #[cfg(unix)]
@@ -27,7 +27,6 @@ use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD_NO_PAD;
 use tith_config::ConfigurationSet;
 use tith_config::IdentityRef;
-#[cfg(unix)]
 use tith_crypto::SigningKeyPair;
 use tith_crypto::{KX_PUBLIC_KEY_BYTES, KxKeyPair, KxPublicKey};
 use tith_crypto::{SECRET_KEY_BYTES, SecretKey};
@@ -45,7 +44,6 @@ fn main() {
 fn run() -> Result<(), Box<dyn Error>> {
 	let mut arguments = std::env::args().skip(1);
 	match arguments.next().as_deref() {
-		#[cfg(unix)]
 		Some("generate-node-key") => {
 			let secret = arguments
 				.next()
@@ -58,7 +56,6 @@ fn run() -> Result<(), Box<dyn Error>> {
 			println!("Public-Key {}", STANDARD_NO_PAD.encode(keys.public.as_bytes()));
 			Ok(())
 		}
-		#[cfg(unix)]
 		Some("generate-ipc-key") => {
 			let secret = arguments
 				.next()
@@ -113,14 +110,12 @@ fn run() -> Result<(), Box<dyn Error>> {
 			let configuration = Arc::new(load_config(Path::new(&config_directory))?);
 			let nodelist = Arc::new(Nodelist::parse(&nodelist_domain, &fs::read_to_string(nodelist_file)?)?);
 			let (local_ref, local) = resolve_local(&local_name, &configuration, &nodelist)?;
-			let secret: [u8; SECRET_KEY_BYTES] = fs::read(secret_file)?.try_into().map_err(|_| "node secret key file has the wrong length")?;
 			let submission = Arc::new(submission::SubmissionEngine::new(
 				Arc::clone(&configuration), Arc::clone(&nodelist),
-				[(local_name, submission::LocalSigner { reference: local_ref, identity: local, secret: Arc::new(SecretKey::from_bytes(secret)) })],
+				[(local_name, submission::LocalSigner { reference: local_ref, identity: local, secret: Arc::new(mail::read_secret(Path::new(&secret_file))?) })],
 			));
 			windows::serve(&pipe, Path::new(&database), Path::new(&exports), &application, Some(submission))
 		}
-		#[cfg(unix)]
 		Some("serve-files-mailer") => {
 			let usage = "usage: tithd serve-files-mailer ENDPOINT-ROOT DATABASE EXPORT-DIRECTORY APPLICATION CONFIG-DIRECTORY NODELIST-DOMAIN NODELIST-FILE LOCAL-IDENTITY NODE-SECRET-FILE";
 			let root = arguments.next().ok_or(usage)?;
@@ -193,7 +188,6 @@ fn run() -> Result<(), Box<dyn Error>> {
 				Some(submission),
 			)
 		}
-		#[cfg(unix)]
 		Some("serve-mail") => {
 			let usage = "usage: tithd serve-mail ADDRESS DATABASE APPLICATION CONFIG-DIRECTORY NODELIST-DOMAIN NODELIST-FILE LOCAL-IDENTITY NODE-SECRET-FILE [--listen-only] [--local-offset SECONDS] [--timeout SECONDS]";
 			let address: SocketAddr = arguments.next().ok_or(usage)?.parse()?;

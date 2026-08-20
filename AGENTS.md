@@ -298,6 +298,12 @@ lengths and outstanding-response accounting cannot resolve.
   to be modified in transit becomes gateway-attested; do not make that the
   default. An item TSP-0006 section 6 will not forward owes no native copy.
 - `crates/tithd` is the blocking reference service and contains host bindings.
+  A host mechanism POSIX has and Windows spells differently is implemented for
+  both, never skipped on one. `secret` owns the key files that way: mode 0600
+  and a group-and-other check on POSIX, a protected DACL granting only
+  LocalSystem and the object owner and a check that it still says so on Windows.
+  Its SDDL parsing lives beside the portable half so it has tests which run on
+  every host; only the two calls which fetch the descriptor are Windows-only.
   Its native mail listener accepts only operations whose wire grammar and
   durable behavior are implemented; unsupported work receives an explicit
   response rather than being discarded.

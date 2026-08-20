@@ -1,13 +1,9 @@
 use std::error::Error;
 use std::fs;
-#[cfg(unix)]
-use std::fs::OpenOptions;
 use std::io::Read;
-#[cfg(unix)]
-use std::io::Write;
 use std::net::{SocketAddr, TcpListener, TcpStream};
 #[cfg(unix)]
-use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -19,28 +15,13 @@ use tith_crypto::{KX_SECRET_KEY_BYTES, KxKeyPair, KxPublicKey, KxSecretKey};
 use tith_ipc::EnvelopeKind;
 use tith_ipc_tcp::SecureChannel;
 
-#[cfg(unix)]
 pub fn write_secret(path: &Path, secret: &KxSecretKey) -> Result<(), Box<dyn Error>> {
-	let mut options = OpenOptions::new();
-	options.create_new(true).write(true);
-	#[cfg(unix)]
-	options.mode(0o600);
-	let mut file = options.open(path)?;
-	file.write_all(secret.as_bytes())?;
-	file.sync_all()?;
+	crate::secret::write(path, secret.as_bytes())?;
 	Ok(())
 }
 
 pub fn read_secret(path: &Path) -> Result<KxSecretKey, Box<dyn Error>> {
-	#[cfg(unix)]
-	{
-		let metadata = fs::metadata(path)?;
-		if metadata.permissions().mode() & 0o077 != 0 {
-			return Err("IPC secret key file is accessible by group or other users".into());
-		}
-	}
-	let bytes = fs::read(path)?;
-	let bytes: [u8; KX_SECRET_KEY_BYTES] = bytes
+	let bytes: [u8; KX_SECRET_KEY_BYTES] = crate::secret::read(path)?
 		.try_into()
 		.map_err(|_| "IPC secret key file has the wrong length")?;
 	Ok(KxSecretKey::from_bytes(bytes))

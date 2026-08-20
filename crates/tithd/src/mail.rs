@@ -1,8 +1,6 @@
 use std::error::Error;
-use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::net::{Shutdown, SocketAddr, TcpListener, TcpStream};
-use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
@@ -30,22 +28,12 @@ use tith_wire::tlv::{OwnedTlv, TlvReader, parse_sequence};
 use tith_wire::types;
 
 pub fn write_secret(path: &Path, secret: &SecretKey) -> Result<(), Box<dyn Error>> {
-	let mut file = OpenOptions::new()
-		.create_new(true)
-		.write(true)
-		.mode(0o600)
-		.open(path)?;
-	file.write_all(secret.as_bytes())?;
-	file.sync_all()?;
+	crate::secret::write(path, secret.as_bytes())?;
 	Ok(())
 }
 
 pub fn read_secret(path: &Path) -> Result<SecretKey, Box<dyn Error>> {
-	let metadata = fs::metadata(path)?;
-	if metadata.permissions().mode() & 0o077 != 0 {
-		return Err("node secret key file is accessible by group or other users".into());
-	}
-	let bytes: [u8; SECRET_KEY_BYTES] = fs::read(path)?
+	let bytes: [u8; SECRET_KEY_BYTES] = crate::secret::read(path)?
 		.try_into()
 		.map_err(|_| "node secret key file has the wrong length")?;
 	Ok(SecretKey::from_bytes(bytes))
@@ -591,6 +579,7 @@ fn resolve_hold(
 mod tests {
 	use base64::Engine as _;
 	use base64::engine::general_purpose::STANDARD_NO_PAD;
+	use std::fs;
 	use std::io::{Read, Write};
 	use std::sync::Arc;
 	use std::time::{SystemTime, UNIX_EPOCH};
