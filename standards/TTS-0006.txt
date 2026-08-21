@@ -3,10 +3,10 @@ TITH                                              THIS ISN'T THAT HARD
 **********************************************************************
 
 Publication:  TTS‑0006
-Revision:     6
+Revision:     7
 Title:        Bundle Exchange Protocol
 Author(s):    Stephen Hurd
-Date:         2026‑08‑20
+Date:         2026‑08‑21
 ══════════════════════════════════════════════════════════════════════
 
 Status of this document
@@ -212,8 +212,8 @@ Contents
 
   If every request that requires a response has a valid
   RequestIdentifier, the receiver MUST generate a Rejected response
-  with reason number 2 for each request.  It MUST NOT otherwise
-  process or act upon the unauthenticated contents.
+  with reason number 1 and no Timestamp for each request.  It MUST NOT
+  otherwise process or act upon the unauthenticated contents.
 
   If unauthenticated SignedData does not have valid TLV framing, or a
   request in it that requires a response does not have a valid
@@ -221,9 +221,9 @@ Contents
 
   When an authenticated and completely framed request has a data
   error but contains a valid RequestIdentifier, the receiver MUST
-  generate a Rejected response for that request.  If the request does
-  not contain a valid RequestIdentifier, the receiver MUST close the
-  connection.
+  generate a Rejected response with reason number 1 and no Timestamp
+  for that request.  If the request does not contain a valid
+  RequestIdentifier, the receiver MUST close the connection.
 
   Closing the connection because of an error does not undo any
   Accepted or Rejected responses already completed.  Requests for
@@ -248,7 +248,7 @@ A. References
 
   [TTS‑0004] "Node Addresses", TITH, 2026‑08‑20.
 
-  [TTS‑0005] "Bundle Format", TITH, 2026‑08‑20.
+  [TTS‑0005] "Bundle Format", TITH, 2026‑08‑21.
 
   [TTS‑5000] "The Distribution Nodelist", TITH, 2026‑08‑20.
 
@@ -274,5 +274,9 @@ B. History
    Rev.6, 2026‑08‑20: Distinguished anonymous address grammar from
    listing status and required the TSP‑0015 effective key for every
    non‐anonymous transport identity.
+
+   Rev.7, 2026‑08‑21: Assigned permanent rejection reason 1 without a
+   Timestamp to unauthenticated SignedData and authenticated request
+   data errors.
 
 **********************************************************************

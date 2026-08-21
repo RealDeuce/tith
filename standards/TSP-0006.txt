@@ -482,8 +482,8 @@ Contents
 
   Failure-Policy occurs for NetMail, Peer-File, and FileRequest.
   Absent or Route uses policies resolved by TSP‑0002.  Otherwise it
-  supplies one complete override for the three permanent response
-  kinds in TSP‑0002.
+  supplies one complete override for both permanent response kinds in
+  TSP‑0002.
   Disposition is Dead-Letter or Discard; notification is None, Sender,
   Origin-Sysop, or Both.  An override requires authorization and is
   distinct from Source-Disposition.  A FileRequest has no Origin and no
@@ -636,8 +636,9 @@ Contents
 
   Each attached File contains a Filename equal to its Wire-Filename,
   an optional Timestamp, and exact private copy bytes as Contents.  It
-  relies on the enclosing Message Signature and contains no independent
-  Origin, Signature, RequestIdentifier, Via, or SeenBy.
+  shares the enclosing Message's item authentication state and contains
+  no independent Origin, PublicKey, SignedOrigin, Signature,
+  RequestIdentifier, Via, or SeenBy.
 
   A File Job produces one standalone TTS‑0005 File.  It contains the
   submitted Filename, optional Timestamp, exact private copy bytes as
@@ -1216,13 +1217,13 @@ A. References
   S. Josefsson, 2006‑10.
 
   [TSP‑0002] "Routing and Distribution Configuration", TITH,
-  2026‑08‑20.
+  2026‑08‑21.
 
   [TSP‑0003] "Legacy Data Formats and TITH", TITH, 2026‑08‑20.
 
   [TSP‑0004] "Local IPC Format", TITH, 2026‑08‑17.
 
-  [TSP‑0005] "Durable Outbound Jobs", TITH, 2026‑08‑20.
+  [TSP‑0005] "Durable Outbound Jobs", TITH, 2026‑08‑21.
 
   [TSP‑0007] "Unix‐Domain Socket IPC Binding", TITH, 2026‑08‑17.
 
@@ -1242,7 +1243,7 @@ A. References
 
   [TTS‑0004] "Node Addresses", TITH, 2026‑08‑20.
 
-  [TTS‑0005] "Bundle Format", TITH, 2026‑08‑20.
+  [TTS‑0005] "Bundle Format", TITH, 2026‑08‑21.
 
   [TTS‑0007] "Signed Integer Encoding", TITH, 2026‑08‑16.
 

@@ -432,7 +432,7 @@ A. References
 ─────────────
 
   [TSP‑0002] "Routing and Distribution Configuration", TITH,
-  2026‑08‑20.
+  2026‑08‑21.
 
   [TSP‑0004] "Local IPC Format", TITH, 2026‑08‑17.
 
@@ -452,7 +452,7 @@ A. References
 
   [TTS‑0004] "Node Addresses", TITH, 2026‑08‑20.
 
-  [TTS‑0005] "Bundle Format", TITH, 2026‑08‑20.
+  [TTS‑0005] "Bundle Format", TITH, 2026‑08‑21.
 
 
 B. History

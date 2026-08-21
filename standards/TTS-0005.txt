@@ -3,10 +3,10 @@ TITH                                              THIS ISN'T THAT HARD
 **********************************************************************
 
 Publication:  TTS‑0005
-Revision:     10
+Revision:     11
 Title:        Bundle Format
 Author(s):    Stephen Hurd
-Date:         2026‑08‑20
+Date:         2026‑08‑21
 ══════════════════════════════════════════════════════════════════════
 
 Status of this document
@@ -229,26 +229,27 @@ Contents
   ────────
   A File value has a large number of manditory and optional values.
   The order is specified here as a list, with M indicating Manditory,
-  O indicating Optional, A indicating manditory for a File inside of a
-  Message, T indicating manditory for a File not inside of a Message,
-  directly inside of a SignedTLV, K indicating manditory if the
-  immediately preceding Origin or SignedOrigin is the anonymous address
-  and prohibited otherwise, and F for a file that is part of a
-  distribution network.
+  O indicating Optional, T indicating manditory for a standalone File
+  directly inside of a SignedTLV and prohibited for a File inside a
+  Message, S indicating optional for a standalone File and prohibited
+  for a File inside a Message, K indicating manditory if the immediately
+  preceding Origin or SignedOrigin is the anonymous address and
+  prohibited otherwise, and F for a file that is part of a distribution
+  network.
   O  Filename (Section 4)
   O  Timestamp (TTS‑0003)
   M  Contents (Section 4)
   F  Area (Section 4)
   T  Origin (TTS‑0003)
   K  PublicKey (TTS‑0003)
-  O  SignedOrigin (TTS‑0003)
+  S  SignedOrigin (TTS‑0003)
   K  PublicKey (TTS‑0003)
   O  ShortDescription (Section 4)
   O+ LongDescriptionLine (Section 4)
   O  TearLine (Section 4)
   O  MagicWord (Section 4)
   O  Replaces (Section 4)
-  O  Signature (TTS‑0003)
+  S  Signature (TTS‑0003)
   T  RequestIdentifier (Section 4)
   F+ Via (Section 4)
   F+ SeenBy (Section 4)
@@ -273,10 +274,8 @@ Contents
   A File directly inside a payload SignedTLV has its own Origin and
   optional Signature so its item authentication remains applicable
   when the File is placed in a new Bundle.  A File inside a Message
-  does not require its own Signature because its complete encoded value
-  is covered when the Message has a Signature.  An attached File MAY
-  still contain an Origin, optional SignedOrigin, and Signature to
-  establish independent provenance.
+  relies on the enclosing Message for provenance.  It MUST NOT contain
+  Origin, either conditional PublicKey, SignedOrigin, or Signature.
 
   If a timestamp is present, it represents the time of last
   modification of the file.
@@ -322,26 +321,31 @@ Contents
   The RequestIdentifier is the the one that was in the original
   Message, File, or FileRequest.
 
-  If a Timestamp is present, indicates an expected time at which the
-  same request would not be Rejected.
+  A Timestamp is permitted only with reason 3.  It indicates the
+  earliest expected time at which the receiver may accept the same
+  unchanged TLV value.  Its absence with reason 3 permits retry at the
+  next applicable opportunity.
 
   The number may have one of the following values:
 
-  1 — Indicates that in the current configuration, the TLV value would
-      always be Rejected.  Including it in a future bundle would also
-      be rejected.
-  2 — Indicates that the TLV could not be authenticated.  The receiver
-      did not process or act upon its unauthenticated contents.
-  3 — Indicates that the TLV was conditional, and the condition was
-      not met.  For example, if a Timestamp was included in a
-      FileRequest, but the last modified time of the requested file
-      matches the value of the Timestamp.  If a Timestamp is included
-      in the Rejected value, this is a time at which it is expected
-      that the request would not be Rejected.
-  4 — Indicates that the node is not willing to accept the TLV value
-      at this time.  If a Timestamp is included in the Rejected value,
-      this is a time at which the node expects to be willing to accept
-      the TLV value.
+  1 — Indicates that the fact preventing acceptance is not one which
+      the peer is permitted to change.  The TLV value has permanently
+      failed and MUST NOT be retried.  An unauthenticated payload
+      SignedTLV and an authenticated request with an irreparable data
+      error use this reason when TTS‑0006 permits a response.  This does
+      not change the independent end‐to‐end item authentication states
+      defined in section 3.  A Timestamp is prohibited.
+  2 — Indicates that a condition controlled by the peer was not met.
+      The current request has permanently failed and MUST NOT be
+      retried unchanged; the peer may submit a new request with a
+      permitted change which satisfies the condition.  This reason is
+      used only for a FileRequest whose Timestamp condition is unmet,
+      including when the file's last modified time is equal to or older
+      than that Timestamp.  A Timestamp is prohibited.
+  3 — Indicates that the receiver is not willing to accept the TLV
+      value at this time, but expects the same unchanged value may be
+      accepted later.  The TLV value remains eligible for retry.  Its
+      optional Timestamp has the meaning specified above.
 
   68. Accepted
   ────────────
@@ -672,7 +676,9 @@ Contents
   For each value in the Bundle of the types Message, File, FileRequest,
   PollMessages, PollFiles, PollFileRequests, and PublicKeyRequest,
   exactly one Accepted or Rejected value is included in the same order
-  as in the original Bundle.
+  as in the original Bundle.  Each response applies only to its one
+  request.  Acceptance or rejection of one request MUST NOT determine
+  the response to another request in the Bundle.
 
   A PublicKeyRequest reply MUST use the non‐anonymous Origin PublicKey
   rule in section 2 and MUST contain exactly one payload SignedTLV.  Its
@@ -727,7 +733,7 @@ Contents
   made durable locally.
 
   A File inside a Message is covered by the Message identity.  A File
-  directly inside a payload SignedTLV uses its own Origin and
+  directly inside a payload SignedTLV uses its own Origin and optional
   Signature.  Poll and FileRequest values are repeatable requests and
   do not use signed‐item duplicate identities.
 
@@ -806,5 +812,9 @@ B. History
    Rev.10, 2026‑08‑20: Distinguished anonymous address grammar from
    listing status and applied the TSP‑0015 effective key to all item
    signatures and duplicate identities.
+
+   Rev.11, 2026‑08‑21: Distinguished permanent, peer‐correctable
+   condition, and temporary rejection reasons, and prohibited
+   independent provenance on a File inside a Message.
 
 **********************************************************************

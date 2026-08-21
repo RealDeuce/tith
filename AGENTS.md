@@ -170,8 +170,10 @@ need to guess.
 - SignedData must be authenticated before its contents are processed or acted
   on.  Limited parsing of unauthenticated data is allowed only where the
   enclosing protocol explicitly requires it for error reporting.
-- Messages and standalone Files carry end-to-end item signatures.  A File
-  inside a Message may rely on the enclosing Message signature instead.
+- Messages and standalone Files have independent end-to-end item
+  authentication states.  A File inside a Message shares the enclosing
+  Message's state and carries no independent Origin, PublicKey, SignedOrigin,
+  or Signature.
 - NetMail has a Destination and no Area; Echomail has an Area and no
   Destination.  This lets Echomail replicate without rewriting a signed,
   peer-specific destination.

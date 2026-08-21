@@ -302,13 +302,9 @@ pub fn failure_policies(
 	route_rule: Option<usize>,
 	relay_override: Option<FailurePolicy>,
 	key_sources: (&Nodelist, &impl KeyResolver),
-) -> [FailurePolicy; 3] {
+) -> [FailurePolicy; 2] {
 	let (nodelist, resolver) = key_sources;
-	let kinds = [
-		FailureKind::RelayDenied,
-		FailureKind::Rejected,
-		FailureKind::Authentication,
-	];
+	let kinds = [FailureKind::RelayDenied, FailureKind::Rejected];
 	let selected = route_rule
 		.and_then(|index| routes.routes.get(index))
 		.and_then(|rule| rule.on_failure)

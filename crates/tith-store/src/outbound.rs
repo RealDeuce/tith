@@ -99,7 +99,6 @@ pub struct FailurePolicy {
 pub enum PermanentFailureKind {
 	RelayDenied,
 	Rejected,
-	Authentication,
 }
 
 impl Default for FailurePolicy {
@@ -125,7 +124,7 @@ pub struct NewDelivery {
 	pub mode: DeliveryMode,
 	pub class: String,
 	pub retry_at: Option<u64>,
-	pub policies: [FailurePolicy; 3],
+	pub policies: [FailurePolicy; 2],
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -138,7 +137,7 @@ pub struct DeliveryRecord {
 	pub mode: DeliveryMode,
 	pub class: String,
 	pub retry_at: Option<u64>,
-	pub policies: [FailurePolicy; 3],
+	pub policies: [FailurePolicy; 2],
 	pub state: JobState,
 	pub attempts: u64,
 	pub last_result: String,
@@ -619,10 +618,7 @@ impl OutboundStore {
 		self.control(application, job_id, now, "Retry requested", |job| {
 			let mut changed = false;
 			for copy in &mut job.deliveries {
-				if matches!(
-					copy.state,
-					JobState::Deferred | JobState::Rejected | JobState::Failed
-				) {
+				if matches!(copy.state, JobState::Deferred | JobState::Failed) {
 					copy.state = JobState::Queued;
 					copy.retry_at = None;
 					copy.last_failure = None;
@@ -1204,7 +1200,7 @@ fn decode_event(mut input: &[u8]) -> Result<(String, bool, OutboundEvent), Store
 }
 
 fn encode_job(value: &OutboundJob) -> Vec<u8> {
-	let mut output = vec![2];
+	let mut output = vec![3];
 	for text in [&value.job_id, &value.application, &value.idempotency_key] {
 		put_string(&mut output, text);
 	}
@@ -1278,7 +1274,7 @@ fn encode_job(value: &OutboundJob) -> Vec<u8> {
 
 fn decode_job(mut input: &[u8]) -> Result<OutboundJob, StoreError> {
 	let version = take_byte(&mut input)?;
-	if version != 2 {
+	if version != 3 {
 		return Err(StoreError::UnsupportedRecordVersion {
 			record: "outbound job",
 			version,
@@ -1319,7 +1315,7 @@ fn decode_job(mut input: &[u8]) -> Result<OutboundJob, StoreError> {
 		};
 		let class = take_string(&mut input)?;
 		let retry_at = take_optional_u64(&mut input)?;
-		let mut policies = [FailurePolicy::default(); 3];
+		let mut policies = [FailurePolicy::default(); 2];
 		for policy in &mut policies {
 			policy.disposition = match take_byte(&mut input)? {
 				0 => FailureDisposition::DeadLetter,
@@ -1342,7 +1338,6 @@ fn decode_job(mut input: &[u8]) -> Result<OutboundJob, StoreError> {
 			1 => Some(match take_byte(&mut input)? {
 				0 => PermanentFailureKind::RelayDenied,
 				1 => PermanentFailureKind::Rejected,
-				2 => PermanentFailureKind::Authentication,
 				_ => return Err(StoreError::CorruptRecord),
 			}),
 			_ => return Err(StoreError::CorruptRecord),
@@ -1513,7 +1508,7 @@ mod tests {
 				mode: DeliveryMode::Active,
 				class: "normal".to_owned(),
 				retry_at: None,
-				policies: [FailurePolicy::default(); 3],
+				policies: [FailurePolicy::default(); 2],
 			}],
 			sources: Vec::new(),
 			created: 10,
@@ -1530,15 +1525,15 @@ mod tests {
 			new_job(identity("format", &payload), payload),
 		);
 		let current = encode_job(&job);
-		assert_eq!(current[0], 2);
+		assert_eq!(current[0], 3);
 
 		let mut obsolete = current;
-		obsolete[0] = 1;
+		obsolete[0] = 2;
 		assert!(matches!(
 			decode_job(&obsolete),
 			Err(StoreError::UnsupportedRecordVersion {
 				record: "outbound job",
-				version: 1
+				version: 2
 			})
 		));
 	}
@@ -1683,6 +1678,26 @@ mod tests {
 			ControlOutcome::Completed(JobState::Queued)
 		);
 		assert_eq!(store.events("mailer").unwrap().len(), 3);
+		let claim = store
+			.claim_scheduled(24, |copy| copy.class == "normal")
+			.unwrap()
+			.unwrap();
+		store
+			.finish_delivery(
+				job_id,
+				1,
+				&claim.worker_token,
+				25,
+				DeliveryOutcome::Rejected {
+					kind: PermanentFailureKind::Rejected,
+					result: "terminal".to_owned(),
+				},
+			)
+			.unwrap();
+		assert_eq!(
+			store.retry("mailer", job_id, 26).unwrap(),
+			ControlOutcome::NotPermitted(JobState::Rejected)
+		);
 		drop(store);
 		drop(inbound);
 		std::fs::remove_file(path).unwrap();
@@ -1726,7 +1741,7 @@ mod tests {
 				mode: DeliveryMode::Passive,
 				class: "normal".to_owned(),
 				retry_at: Some(u64::MAX),
-				policies: [FailurePolicy::default(); 3],
+				policies: [FailurePolicy::default(); 2],
 			}],
 			sources: Vec::new(),
 			created,

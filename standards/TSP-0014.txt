@@ -570,9 +570,9 @@ A. References
 
   [TTS‑0004] "Node Addresses", TITH, 2026‑08‑20.
 
-  [TTS‑0005] "Bundle Format", TITH, 2026‑08‑20.
+  [TTS‑0005] "Bundle Format", TITH, 2026‑08‑21.
 
-  [TTS‑0006] "Bundle Exchange Protocol", TITH, 2026‑08‑20.
+  [TTS‑0006] "Bundle Exchange Protocol", TITH, 2026‑08‑21.
 
   [TTS‑5000] "The Distribution Nodelist", TITH, 2026‑08‑20.
 

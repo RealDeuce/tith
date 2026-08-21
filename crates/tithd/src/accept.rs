@@ -232,7 +232,7 @@ impl Acceptance<'_> {
 			.as_ref()
 			.ok_or_else(|| Refusal::permanent("relayed message has no Destination"))?;
 		// TSP-0002 section 6: only an Origin-Valid or SignedOrigin-Valid item may
-		// be relayed, and attempting otherwise fails as Authentication.
+		// be relayed, and the peer cannot repair an end-to-end signature.
 		let signed = match item.authentication {
 			Some(
 				tith_store::ItemAuthentication::OriginValid
@@ -240,9 +240,8 @@ impl Acceptance<'_> {
 			) => item.duplicate_identity.as_ref(),
 			_ => None,
 		};
-		let signed = signed.ok_or_else(|| Refusal {
-			reason: RejectionReason::Authentication,
-			description: "relay requires a valid end-to-end item signature".to_owned(),
+		let signed = signed.ok_or_else(|| {
+			Refusal::permanent("relay requires a valid end-to-end item signature")
 		})?;
 		let routes = routes_for(self.configuration, self.local_ref)
 			.ok_or_else(|| Refusal::permanent("receiving identity has no Routes block"))?;
@@ -648,11 +647,11 @@ mod tests {
 	const ALLOW: &str = "Allow-Relay From All Origin All Destination All\n";
 
 	#[test]
-	fn an_unsigned_netmail_is_refused_as_authentication_and_never_spooled() {
+	fn an_unsigned_netmail_is_permanently_refused_and_never_spooled() {
 		let world = world("unsigned", "");
 		let (response, jobs) =
 			dispatch(&world, &configuration(ALLOW), &netmail(&world, false, &[]));
-		assert_eq!(rejection(&response), RejectionReason::Authentication);
+		assert_eq!(rejection(&response), RejectionReason::Permanent);
 		assert!(
 			jobs.is_empty(),
 			"an unauthenticated item must not be relayed"

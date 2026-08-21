@@ -68,13 +68,13 @@ pub struct ValidatedItem {
 
 /// The detail a Rejected response carries beyond the fact of rejection.
 ///
-/// TSP-0002 section 6 treats each reason differently: 1 fails as Rejected, 2 as
-/// Authentication, 3 completes a conditional request and is not a failure at
-/// all, and 4 retains the item for retry no earlier than `retry_after`.
+/// TSP-0002 section 6 treats each reason differently: 1 and 2 fail as
+/// permanent rejection, while 3 retains the unchanged item for retry no
+/// earlier than `retry_after`.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Rejection {
 	pub reason: RejectionReason,
-	/// The Timestamp a reason 4 rejection may carry. Absent means retry at the
+	/// The Timestamp a reason 3 rejection may carry. Absent means retry at the
 	/// next applicable schedule.
 	pub retry_after: Option<u64>,
 	pub description: String,
@@ -84,9 +84,8 @@ pub struct Rejection {
 #[repr(u64)]
 pub enum RejectionReason {
 	Permanent = 1,
-	Authentication = 2,
-	Condition = 3,
-	Temporary = 4,
+	ConditionUnmet = 2,
+	Temporary = 3,
 }
 
 impl RejectionReason {
@@ -94,9 +93,8 @@ impl RejectionReason {
 	pub const fn from_code(code: u64) -> Option<Self> {
 		Some(match code {
 			1 => Self::Permanent,
-			2 => Self::Authentication,
-			3 => Self::Condition,
-			4 => Self::Temporary,
+			2 => Self::ConditionUnmet,
+			3 => Self::Temporary,
 			_ => return None,
 		})
 	}
@@ -1114,6 +1112,15 @@ fn validate_file(
 		decode_u64(&timestamp.value)?;
 	}
 	cursor.take(types::CONTENTS, "File Contents")?;
+	if !standalone
+		&& children.iter().any(|child| {
+			matches!(
+				child.type_code,
+				types::ORIGIN | types::PUBLIC_KEY | types::SIGNED_ORIGIN | types::SIGNATURE
+			)
+		}) {
+		return Err(BundleError::Unexpected("attached File provenance"));
+	}
 	let area = cursor
 		.optional(types::AREA)
 		.map(|(_, value)| validate_area(value))
@@ -1371,6 +1378,11 @@ fn validate_response(value: &OwnedTlv, accepted: bool) -> Result<ValidatedItem, 
 	let (reason, used_reason) = decode_u64_prefix(&bytes[offset..])?;
 	let reason =
 		RejectionReason::from_code(reason).ok_or(BundleError::Unexpected("Rejected reason"))?;
+	if retry_after.is_some() && reason != RejectionReason::Temporary {
+		return Err(BundleError::Unexpected(
+			"Rejected Timestamp for non-temporary reason",
+		));
+	}
 	offset += used_reason;
 	let description = std::str::from_utf8(&bytes[offset..])
 		.map_err(|_| BundleError::InvalidUtf8)?
@@ -1456,6 +1468,11 @@ pub fn rejected(
 	reason: RejectionReason,
 	description: &str,
 ) -> Result<OwnedTlv, BundleError> {
+	if timestamp.is_some() && reason != RejectionReason::Temporary {
+		return Err(BundleError::Unexpected(
+			"Rejected Timestamp for non-temporary reason",
+		));
+	}
 	let mut value = Vec::new();
 	OwnedTlv::new(
 		types::REQUEST_IDENTIFIER,
@@ -2847,15 +2864,14 @@ mod tests {
 
 	#[test]
 	fn every_rejection_reason_and_its_retry_timestamp_survive_parsing() {
-		// TSP-0002 section 6 gives each reason a different meaning, and reason 4
+		// TSP-0002 section 6 gives each reason a different meaning, and reason 3
 		// carries the instant before which the item must not be retried, so
 		// neither may be discarded by the parser.
 		let hash = TlvHash::from_bytes([3; 32]);
 		for (code, expected) in [
 			(1, RejectionReason::Permanent),
-			(2, RejectionReason::Authentication),
-			(3, RejectionReason::Condition),
-			(4, RejectionReason::Temporary),
+			(2, RejectionReason::ConditionUnmet),
+			(3, RejectionReason::Temporary),
 		] {
 			let value = rejected(7, hash, None, expected, "because").unwrap();
 			let parsed = validate_item(&value, &|_: &Address| None).unwrap().unwrap();
@@ -2879,11 +2895,48 @@ mod tests {
 		assert_eq!(rejection.reason, RejectionReason::Temporary);
 		assert_eq!(rejection.retry_after, Some(1_755_600_000));
 
+		assert!(rejected(10, hash, Some(1), RejectionReason::Permanent, "no").is_err());
+		assert!(rejected(10, hash, Some(1), RejectionReason::ConditionUnmet, "no",).is_err());
+
+		let mut obsolete = rejected(11, hash, None, RejectionReason::Temporary, "").unwrap();
+		*obsolete.value.last_mut().expect("reason byte") = 4;
+		assert!(validate_item(&obsolete, &|_: &Address| None).is_err());
+
+		let mut invalid_timestamp =
+			rejected(12, hash, Some(1), RejectionReason::Temporary, "").unwrap();
+		*invalid_timestamp.value.last_mut().expect("reason byte") = 1;
+		assert!(validate_item(&invalid_timestamp, &|_: &Address| None).is_err());
+
 		// An Accepted has no rejection detail at all.
 		let value = accepted(7, hash).unwrap();
 		let parsed = validate_item(&value, &|_: &Address| None).unwrap().unwrap();
 		assert_eq!(parsed.kind, ItemKind::Accepted);
 		assert!(parsed.rejection.is_none());
+	}
+
+	#[test]
+	fn an_attached_file_cannot_carry_independent_provenance() {
+		let base = [
+			OwnedTlv::new(types::FILENAME, b"attached.bin".to_vec()).unwrap(),
+			OwnedTlv::new(types::CONTENTS, b"contents".to_vec()).unwrap(),
+		];
+		let valid = OwnedTlv::new(types::FILE, concatenate(&base)).unwrap();
+		assert!(validate_file(&valid, false, &|_: &Address| None).is_ok());
+
+		for forbidden in [
+			OwnedTlv::new(types::ORIGIN, b"fidonet#1:2/3".to_vec()).unwrap(),
+			OwnedTlv::new(types::PUBLIC_KEY, vec![1; 32]).unwrap(),
+			OwnedTlv::new(types::SIGNED_ORIGIN, b"fidonet#1:2/3".to_vec()).unwrap(),
+			OwnedTlv::new(types::SIGNATURE, vec![2; 64]).unwrap(),
+		] {
+			let mut children = base.to_vec();
+			children.push(forbidden);
+			let file = OwnedTlv::new(types::FILE, concatenate(&children)).unwrap();
+			assert!(matches!(
+				validate_file(&file, false, &|_: &Address| None),
+				Err(BundleError::Unexpected("attached File provenance"))
+			));
+		}
 	}
 
 	#[test]

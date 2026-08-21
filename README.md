@@ -398,9 +398,9 @@ effective signer — its Origin when that address has an applicable key and its
 SignedOrigin otherwise — and `Destination` the ultimate Destination.
 
 Only an `Origin-Valid` or `SignedOrigin-Valid` item is relayed. Anything else is
-refused with rejection reason 2, so an item that cannot be authenticated end to
+refused with rejection reason 1, so an item that cannot be authenticated end to
 end is never passed on as though it could. A denial, an unroutable destination,
-and a routing loop are each refused with reason 1. Every refusal is logged
+and a routing loop use the same reason. Every refusal is logged
 locally and answered to the peer, which keeps responsibility with the sender so
 the origin can dead-letter and notify its user.
 
@@ -433,10 +433,11 @@ falling back to the usable TITH endpoints in its nodelist entry.
 
 Responses are applied per TSP-0002 section 6. Rejected reason 1 from an
 intermediate next hop fails as Relay-Denied, while the same response from the
-ultimate Destination fails as Rejected. Reason 2 fails as Authentication;
-reason 3 completes a conditional request and is not a failure; reason 4 retries
-no earlier than its Timestamp, or at the next activation of the schedule when
-it carries none. A request with no complete response stays eligible and does
+ultimate Destination fails as Rejected. Reason 2 permanently fails an unmet
+conditional FileRequest, which may be replaced by a new request with a changed
+condition. Reason 3 retries the same value no earlier than its Timestamp, or at
+the next activation of the schedule when it carries none. A request with no
+complete response stays eligible and does
 not invoke permanent failure policy, which is also what happens to every copy
 in a connection that fails outright. Copies left claimed by a killed daemon
 are returned to the queue at startup.

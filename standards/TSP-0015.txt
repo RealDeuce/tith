@@ -193,14 +193,14 @@ A. References
 ─────────────
 
   [TSP‑0002] "Routing and Distribution Configuration", TITH,
-  2026‑08‑20.
+  2026‑08‑21.
 
   [TSP‑0014] "Signed Mail From Legacy‐Only Systems", TITH,
   2026‑08‑20.
 
   [TTS‑0004] "Node Addresses", TITH, 2026‑08‑20.
 
-  [TTS‑0005] "Bundle Format", TITH, 2026‑08‑20.
+  [TTS‑0005] "Bundle Format", TITH, 2026‑08‑21.
 
   [TTS‑5000] "The Distribution Nodelist", TITH, 2026‑08‑20.
 

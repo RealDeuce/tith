@@ -3,10 +3,10 @@ TITH                                              THIS ISN'T THAT HARD
 **********************************************************************
 
 Publication:  TSP‑0002
-Revision:     10
+Revision:     11
 Title:        Routing and Distribution Configuration
 Author(s):    Stephen Hurd
-Date:         2026‑08‑20
+Date:         2026‑08‑21
 ══════════════════════════════════════════════════════════════════════
 
 Status of this document
@@ -355,7 +355,7 @@ Contents
         <disposition> Notify <notification>
 
   Each Failure is one physical line.  Kind is one of Any,
-  Relay-Denied, Rejected, or Authentication.  An All Destination
+  Relay-Denied, or Rejected.  An All Destination
   selector also matches an EchoMail Message or distribution File which
   has an Area instead of a Destination.  Another Destination selector
   does not match an item without a Destination.  A peer‐addressed
@@ -390,9 +390,9 @@ Contents
     5. Dead-Letter with notification None.
 
   For a delivery copy which is successfully created, the policy for
-  Relay-Denied, Rejected, and Authentication is resolved and stored
-  with that copy at creation.  Unroutable and Loop prevent copy
-  creation and are not delivery‐copy failure kinds.
+  Relay-Denied and Rejected is resolved and stored with that copy at
+  creation.  Unroutable and Loop prevent copy creation and are not
+  delivery‐copy failure kinds.
 
   A receiving node MUST NOT answer Accepted for a relayed Message
   until its outbound delivery copy is durable, or until it recognizes
@@ -411,12 +411,15 @@ Contents
   Rejected reason 1 from an intermediate next hop fails as
   Relay-Denied; reason 1 from the ultimate Destination fails as
   Rejected.  Exact identity comparison includes the PublicKey of an
-  anonymous address.  Reason 2 fails as Authentication.  Reason 3
-  completes a conditional request and is not a failure.  Reason 4
-  retains the item for retry no earlier than its Timestamp, or for the
-  next applicable schedule when no Timestamp is present.  A request
-  for which no complete response was received remains eligible for
-  retry and does not invoke permanent failure policy.
+  anonymous address.  Reason 2 fails as Rejected.  It applies only to
+  the conditional FileRequest which received that response; a peer
+  which can satisfy the condition submits a new changed request.
+  Reason 3 retains the unchanged item for retry no earlier than its
+  Timestamp, or for the next applicable schedule when no Timestamp is
+  present.  A request for which no complete response was received
+  remains eligible for retry and does not invoke permanent failure
+  policy.  Every response applies independently to its one request and
+  does not determine the outcome of another request in the Bundle.
 
 
 7. EchoMail and File Distribution
@@ -785,9 +788,9 @@ A. References
 
   [TTS‑0004] "Node Addresses", TITH, 2026‑08‑20.
 
-  [TTS‑0005] "Bundle Format", TITH, 2026‑08‑20.
+  [TTS‑0005] "Bundle Format", TITH, 2026‑08‑21.
 
-  [TTS‑0006] "Bundle Exchange Protocol", TITH, 2026‑08‑20.
+  [TTS‑0006] "Bundle Exchange Protocol", TITH, 2026‑08‑21.
 
   [TTS‑5000] "The Distribution Nodelist", TITH, 2026‑08‑20.
 
@@ -839,5 +842,9 @@ B. History
    Rev.10, 2026‑08‑20: Distinguished anonymous address grammar from
    listing status and used the TSP‑0015 effective key throughout
    identity, routing, and authorization decisions.
+
+   Rev.11, 2026‑08‑21: Reduced permanent failure policy to relay denial
+   and rejection, made an unmet condition a terminal rejection, and
+   assigned reason 3 to retryable temporary refusal.
 
 **********************************************************************

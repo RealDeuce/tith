@@ -575,7 +575,7 @@ fn unauthenticated_responses(
 			identifier,
 			response_to,
 			None,
-			RejectionReason::Authentication,
+			RejectionReason::Permanent,
 			"payload SignedTLV authentication failed",
 		)?);
 	}
@@ -986,7 +986,7 @@ mod tests {
 		assert_eq!(response_kind(&response, &mailer), ItemKind::Rejected);
 		assert_eq!(
 			rejected_reason(&response, &mailer),
-			RejectionReason::Authentication as u64
+			RejectionReason::Permanent as u64
 		);
 		assert!(matches!(
 			mailer

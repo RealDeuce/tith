@@ -3,10 +3,10 @@ TITH                                              THIS ISN'T THAT HARD
 **********************************************************************
 
 Publication:  TSP‑0005
-Revision:     6
+Revision:     7
 Title:        Durable Outbound Jobs
 Author(s):    Stephen Hurd
-Date:         2026‑08‑20
+Date:         2026‑08‑21
 ══════════════════════════════════════════════════════════════════════
 
 Status of this document
@@ -112,9 +112,9 @@ Contents
   cleanup record.
 
   The complete item, including every Contents value, forms one delivery
-  unit.  A File inside a Message relies on the enclosing Message
-  Signature and is not independently delivered, retried, rejected, or
-  reported as successful.
+  unit.  A File inside a Message shares the enclosing Message's item
+  authentication state and is not independently delivered, retried,
+  rejected, or reported as successful.
 
   The Job also records every post‐delivery Source cleanup obligation
   created by its submission.  A cleanup record contains Keep, Delete,
@@ -155,11 +155,11 @@ Contents
   itself takes it as its own.  Such a copy never uses a NetMail Route
   method and is never relayed.
 
-  The permanent response kinds are Relay-Denied, Rejected, and
-  Authentication as defined by TSP‑0002.  Their policies are
-  resolved and stored separately for every delivery copy when it is
-  created.  An explicit complete override may assign the same
-  disposition and notification to every kind of a NetMail copy.
+  The permanent response kinds are Relay-Denied and Rejected as
+  defined by TSP‑0002.  Their policies are resolved and stored
+  separately for every delivery copy when it is created.  An explicit
+  complete override may assign the same disposition and notification
+  to both kinds of a NetMail copy.
 
   Active‐mode work may be claimed by an applicable schedule.  Passive
   work MUST NOT be claimed by a schedule.  An authenticated Poll may
@@ -204,7 +204,7 @@ Contents
 
   Deferred means delivery was not confirmed and retry is delayed.  A
   connection failure, incomplete response, transient local failure, or
-  TTS‑0005 Rejected reason 4 produces Deferred without changing the
+  TTS‑0005 Rejected reason 3 produces Deferred without changing the
   committed route.  A response Timestamp becomes the delivery retry
   Timestamp when present.
 
@@ -220,15 +220,15 @@ Contents
   part of this Job, and an accepted request which returns none is still
   Delivered.
 
-  A complete Rejected response with reason 3 completes a conditional
-  request rather than failing it, as TSP‑0002 section 6 requires.  It
-  arises only for a FileRequest carrying a condition Timestamp.  Such a
-  copy becomes Delivered with the returned reason and description
-  recorded as its result, and MUST NOT be retried.
+  A complete Rejected response with reason 2 arises only for a
+  FileRequest carrying a condition Timestamp.  It permanently fails
+  that copy, which becomes Rejected and MUST NOT be retried unchanged.
+  The Application may submit a new Job with a changed or absent
+  condition Timestamp.
 
   Rejected means a complete remote response permanently rejected that
   copy's item.  TTS‑0005 reasons 1 and 2 produce Rejected; TSP‑0002
-  selects Relay-Denied, Rejected, or Authentication as the policy kind.
+  selects Relay-Denied or Rejected as the policy kind.
   Failed means a permanent local error occurred after commitment.  It
   is retained and reported for administrative handling rather than
   passed through a remote‐response policy.  Both states remain
@@ -316,8 +316,8 @@ Contents
   changed.  It MUST NOT interrupt a live TITH exchange.
 
   Retry atomically changes every Deferred copy to Queued and clears its
-  delivery retry Timestamp.  It may change Rejected or Failed copies to
-  Queued only while immutable contents remain.  Delivered and Cancelled
+  delivery retry Timestamp.  It may change Failed copies to Queued only
+  while immutable contents remain.  Rejected, Delivered, and Cancelled
   copies remain unchanged.  Retry preserves every local AKA, next hop,
   mode, Class, WireFilename, failure policy, cleanup obligation, item,
   and Source.  It is NotPermitted when no copy can be changed.
@@ -342,7 +342,7 @@ Contents
   without replacing the existing delivery copy or any of its policies.
 
   Failure-Policy absent or Route resolves current TSP‑0002 policies.
-  An explicit policy applies to all three permanent response kinds and
+  An explicit policy applies to both permanent response kinds and
   requires authorization.  Reroute atomically commits the resulting
   exact next hop, mode, and policies before changing the Job to Queued.
   It preserves JobID, Application, local AKA, ultimate Destination,
@@ -404,7 +404,6 @@ Contents
     Class "<configuration-name>"
     Failure-Policy Relay-Denied <disposition> Notify <notification>
     Failure-Policy Rejected <disposition> Notify <notification>
-    Failure-Policy Authentication <disposition> Notify <notification>
     Created <timestamp>
     Changed <timestamp>
     Attempts <unsigned-integer>
@@ -446,7 +445,6 @@ Contents
     Class "<configuration-name>"
     Failure-Policy Relay-Denied <disposition> Notify <notification>
     Failure-Policy Rejected <disposition> Notify <notification>
-    Failure-Policy Authentication <disposition> Notify <notification>
     Attempts <unsigned-integer>
     Last-Result "<UTF-8-string>"
     End]...
@@ -655,7 +653,7 @@ A. References
 ─────────────
 
   [TSP‑0002] "Routing and Distribution Configuration", TITH,
-  2026‑08‑20.
+  2026‑08‑21.
 
   [TSP‑0004] "Local IPC Format", TITH, 2026‑08‑17.
 
@@ -665,7 +663,7 @@ A. References
 
   [TTS‑0003] "Common TLV Types", TITH, 2026‑08‑20.
 
-  [TTS‑0005] "Bundle Format", TITH, 2026‑08‑20.
+  [TTS‑0005] "Bundle Format", TITH, 2026‑08‑21.
 
 
 B. History
@@ -689,5 +687,9 @@ B. History
 
    Rev.6, 2026‑08‑20: Replaced address‐shape uses of listed and unlisted
    with non‐anonymous and anonymous identity terminology.
+
+   Rev.7, 2026‑08‑21: Removed the Authentication failure policy,
+   treated an unmet FileRequest condition as terminal rejection, and
+   assigned reason 3 to deferred retry.
 
 **********************************************************************

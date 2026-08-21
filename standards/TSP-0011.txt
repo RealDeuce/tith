@@ -467,13 +467,13 @@ A. References
   https://github.com/jedisct1/libhydrogen/wiki
 
   [TSP‑0002] "Routing and Distribution Configuration", TITH,
-  2026‑08‑20.
+  2026‑08‑21.
 
   [TSP‑0003] "Legacy Data Formats and TITH", TITH, 2026‑08‑20.
 
   [TSP‑0004] "Local IPC Format", TITH, 2026‑08‑17.
 
-  [TSP‑0005] "Durable Outbound Jobs", TITH, 2026‑08‑20.
+  [TSP‑0005] "Durable Outbound Jobs", TITH, 2026‑08‑21.
 
   [TSP‑0006] "Outbound Job Submission", TITH, 2026‑08‑20.
 
@@ -488,9 +488,9 @@ A. References
 
   [TTS‑0004] "Node Addresses", TITH, 2026‑08‑20.
 
-  [TTS‑0005] "Bundle Format", TITH, 2026‑08‑20.
+  [TTS‑0005] "Bundle Format", TITH, 2026‑08‑21.
 
-  [TTS‑0006] "Bundle Exchange Protocol", TITH, 2026‑08‑20.
+  [TTS‑0006] "Bundle Exchange Protocol", TITH, 2026‑08‑21.
 
   [Policy] "FidoNet Policy Document", Version 4.07, 1989‑06‑09.
 

@@ -110,7 +110,6 @@ pub enum FailureKind {
 	Any,
 	RelayDenied,
 	Rejected,
-	Authentication,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -683,7 +682,6 @@ fn parse_routes(input: &str) -> Result<Vec<Routes>, ConfigError> {
 						Some("Any") => FailureKind::Any,
 						Some("Relay-Denied") => FailureKind::RelayDenied,
 						Some("Rejected") => FailureKind::Rejected,
-						Some("Authentication") => FailureKind::Authentication,
 						_ => return Err(err(file, line.number, "invalid failure kind")),
 					};
 					if f.get(2) != Some(&"Origin") {
@@ -1157,8 +1155,8 @@ mod tests {
 	}
 
 	#[test]
-	fn precommit_routing_failures_are_not_delivery_policy_kinds() {
-		for kind in ["Unroutable", "Loop"] {
+	fn unsupported_failures_are_not_delivery_policy_kinds() {
+		for kind in ["Unroutable", "Loop", "Authentication"] {
 			let routes = format!(
 				"Routes fidonet#1\nFailure {kind} Origin All Destination All Dead-Letter Notify None\nEnd\n"
 			);
