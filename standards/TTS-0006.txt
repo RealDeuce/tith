@@ -3,7 +3,7 @@ TITH                                              THIS ISN'T THAT HARD
 **********************************************************************
 
 Publication:  TTS‑0006
-Revision:     7
+Revision:     8
 Title:        Bundle Exchange Protocol
 Author(s):    Stephen Hurd
 Date:         2026‑08‑21
@@ -201,6 +201,15 @@ Contents
   as a response and the receiver MUST close the connection.  Requests
   in such a payload are handled as authenticated data errors below.
 
+  Before processing or acting upon any request in one payload
+  SignedTLV, or generating a response to one, the receiver MUST verify
+  that its request values have distinct RequestIdentifiers.  If two
+  request values have the same RequestIdentifier, the receiver MUST
+  NOT process or act upon any request in that SignedTLV, MUST NOT
+  generate a response to any of them, and MUST close the connection.
+  This rule applies to both authenticated and unauthenticated
+  SignedData.
+
   When a SignedTLV cannot be authenticated but its SignedData has
   valid TLV framing, the receiver MAY parse the SignedData only far
   enough to identify its request and response values and the
@@ -278,5 +287,9 @@ B. History
    Rev.7, 2026‑08‑21: Assigned permanent rejection reason 1 without a
    Timestamp to unauthenticated SignedData and authenticated request
    data errors.
+
+   Rev.8, 2026‑08‑21: Required distinct RequestIdentifiers within each
+   directional payload SignedTLV and removed any dependence on response
+   order.
 
 **********************************************************************

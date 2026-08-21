@@ -1,5 +1,6 @@
 //! Structural and end-to-end validation of TTS-0005 payload values.
 
+use std::collections::HashSet;
 use std::fmt;
 
 use tith_crypto::{
@@ -1956,10 +1957,21 @@ pub fn validate_payload(
 	resolver: &impl KeyResolver,
 ) -> Result<Vec<ValidatedItem>, PayloadError> {
 	let mut validated = Vec::new();
+	let mut request_identifiers = HashSet::new();
 	for (index, item) in payload.data.iter().enumerate().skip(1) {
 		let result = validate_item(item, resolver);
 		match result {
-			Ok(Some(item)) => validated.push(item),
+			Ok(Some(validated_item)) => {
+				if types::is_request(item.type_code)
+					&& !request_identifiers.insert(validated_item.request_identifier)
+				{
+					return Err(PayloadError {
+						item_index: index,
+						source: BundleError::Duplicate("request identifier"),
+					});
+				}
+				validated.push(validated_item);
+			}
 			Ok(None) => {}
 			Err(source) => {
 				return Err(PayloadError {
@@ -2021,6 +2033,38 @@ mod tests {
 		let items = validate_payload(&parsed.payloads[0], &resolver).unwrap();
 		assert_eq!(items[0].kind, ItemKind::PollMessages);
 		assert_eq!(items[0].request_identifier, 7);
+	}
+
+	#[test]
+	fn request_identifiers_are_unique_within_one_directional_payload() {
+		let origin_keys = SigningKeyPair::from_seed(&[20; 32]).unwrap();
+		let destination_keys = SigningKeyPair::from_seed(&[21; 32]).unwrap();
+		let origin = Identity {
+			address: "fidonet#1/20".parse().unwrap(),
+			public_key: origin_keys.public,
+		};
+		let destination = Identity {
+			address: "fidonet#1/21".parse().unwrap(),
+			public_key: destination_keys.public,
+		};
+		let identifier = OwnedTlv::new(types::REQUEST_IDENTIFIER, vec![7]).unwrap();
+		let polls = vec![
+			container(types::POLL_MESSAGES, std::slice::from_ref(&identifier)),
+			container(types::POLL_FILES, &[identifier]),
+		];
+		let bundle =
+			build_bundle(&origin, &origin_keys.secret, &destination, 1, vec![polls]).unwrap();
+		let resolver = |address: &Address| {
+			(address == &origin.address)
+				.then_some(origin.public_key)
+				.or_else(|| (address == &destination.address).then_some(destination.public_key))
+		};
+		let parsed = Bundle::parse(&bundle, &resolver).unwrap();
+		let error = validate_payload(&parsed.payloads[0], &resolver).unwrap_err();
+		assert!(matches!(
+			error.source,
+			BundleError::Duplicate("request identifier")
+		));
 	}
 
 	#[test]

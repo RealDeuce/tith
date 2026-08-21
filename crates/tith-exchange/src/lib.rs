@@ -72,7 +72,6 @@ pub enum ExchangeError {
 	WrongReplyDestination,
 	UnexpectedResponse,
 	DuplicateResponse,
-	ResponseOutOfOrder,
 	IncompleteResponse { expected: usize, received: usize },
 	Io(io::Error),
 }
@@ -90,7 +89,6 @@ impl fmt::Display for ExchangeError {
 				f.write_str("response does not identify an outstanding request")
 			}
 			Self::DuplicateResponse => f.write_str("request received more than one response"),
-			Self::ResponseOutOfOrder => f.write_str("responses are not in request order"),
 			Self::IncompleteResponse { expected, received } => {
 				write!(f, "response ended after {received} of {expected} requests")
 			}
@@ -228,17 +226,29 @@ impl ResponseTracker {
 				{
 					return Err(ExchangeError::UnexpectedResponse);
 				}
-				if position < self.completed.len() {
+				if self.completed.iter().any(|completed| {
+					completed.request.signed_tlv_hash == response_hash
+						&& completed.request.request_identifier == item.request_identifier
+				}) {
 					return Err(ExchangeError::DuplicateResponse);
 				}
-				if position != self.completed.len() {
-					return Err(ExchangeError::ResponseOutOfOrder);
-				}
-				self.completed.push(CompletedResponse {
+				let completed = CompletedResponse {
 					request: self.outstanding[position].clone(),
 					response,
 					rejection,
+				};
+				let insertion = self.completed.partition_point(|existing| {
+					let existing_position = self
+						.outstanding
+						.iter()
+						.position(|request| {
+							request.signed_tlv_hash == existing.request.signed_tlv_hash
+								&& request.request_identifier == existing.request.request_identifier
+						})
+						.expect("completed responses name outstanding requests");
+					existing_position < position
 				});
+				self.completed.insert(insertion, completed);
 			}
 		}
 		Ok(())
@@ -473,7 +483,7 @@ mod tests {
 	}
 
 	#[test]
-	fn tracks_response_by_signed_tlv_hash_and_identifier() {
+	fn tracks_unordered_responses_by_signed_tlv_hash_and_identifier() {
 		let a_keys = SigningKeyPair::from_seed(&[21; 32]).unwrap();
 		let b_keys = SigningKeyPair::from_seed(&[22; 32]).unwrap();
 		let a = Identity {
@@ -484,11 +494,22 @@ mod tests {
 			address: "fidonet#1/22".parse().unwrap(),
 			public_key: b_keys.public,
 		};
-		let poll = container(
+		let poll_messages = container(
 			types::POLL_MESSAGES,
 			&[OwnedTlv::new(types::REQUEST_IDENTIFIER, encode_u64(9)).unwrap()],
 		);
-		let request_bytes = build_bundle(&a, &a_keys.secret, &b, 1, vec![vec![poll]]).unwrap();
+		let poll_files = container(
+			types::POLL_FILES,
+			&[OwnedTlv::new(types::REQUEST_IDENTIFIER, encode_u64(10)).unwrap()],
+		);
+		let request_bytes = build_bundle(
+			&a,
+			&a_keys.secret,
+			&b,
+			1,
+			vec![vec![poll_messages, poll_files]],
+		)
+		.unwrap();
 		let resolver = |address: &Address| {
 			if address == &a.address {
 				Some(a.public_key)
@@ -503,17 +524,33 @@ mod tests {
 		assert!(tracker.requires_return_bundle());
 
 		let request_hash = tracker.outstanding[0].signed_tlv_hash;
-		let accepted = container(
+		let accepted_second = container(
+			types::ACCEPTED,
+			&[
+				OwnedTlv::new(types::REQUEST_IDENTIFIER, encode_u64(10)).unwrap(),
+				OwnedTlv::new(types::TLV_HASH, request_hash.as_bytes().to_vec()).unwrap(),
+			],
+		);
+		let accepted_first = container(
 			types::ACCEPTED,
 			&[
 				OwnedTlv::new(types::REQUEST_IDENTIFIER, encode_u64(9)).unwrap(),
 				OwnedTlv::new(types::TLV_HASH, request_hash.as_bytes().to_vec()).unwrap(),
 			],
 		);
-		let reply_bytes = build_bundle(&b, &b_keys.secret, &a, 2, vec![vec![accepted]]).unwrap();
+		let reply_bytes = build_bundle(
+			&b,
+			&b_keys.secret,
+			&a,
+			2,
+			vec![vec![accepted_second, accepted_first]],
+		)
+		.unwrap();
 		let reply = Bundle::parse(&reply_bytes, &resolver).unwrap();
 		tracker.observe_reply(&reply, &resolver).unwrap();
 		assert!(tracker.is_complete());
+		assert_eq!(tracker.completed()[0].request.request_identifier, 9);
+		assert_eq!(tracker.completed()[1].request.request_identifier, 10);
 		assert_eq!(tracker.completed()[0].response, ResponseKind::Accepted);
 	}
 }

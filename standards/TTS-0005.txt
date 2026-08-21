@@ -3,7 +3,7 @@ TITH                                              THIS ISN'T THAT HARD
 **********************************************************************
 
 Publication:  TTS‑0005
-Revision:     11
+Revision:     12
 Title:        Bundle Format
 Author(s):    Stephen Hurd
 Date:         2026‑08‑21
@@ -437,10 +437,20 @@ Contents
   98. RequestIdentifier
   ─────────────────────
   Contains a number encoded using the same method as the Type and
-  Length values as defined by TTS‑0002.  This number MUST be unique
-  for each SignedTLV from the Origin to the Destination, and is used
-  to correlate a status or file from the Destination with a specific
-  request.
+  Length values as defined by TTS‑0002.  Every request value in one
+  payload SignedTLV MUST have a RequestIdentifier distinct from every
+  other request value in that SignedTLV.  These identifiers form the
+  request namespace for that SignedTLV in the direction in which its
+  Bundle is sent.
+
+  An Accepted or Rejected value does not allocate an identifier in the
+  reply direction.  It repeats the RequestIdentifier from the request
+  direction and combines it with the TLVHash of the payload SignedTLV
+  that contained that request.  A Message, File, or FileRequest
+  returned by a Poll or FileRequest is itself a new request in the
+  reverse direction and has a RequestIdentifier in that direction's
+  namespace.  Equal numbers in opposite‐direction namespaces have no
+  relationship.
 
   99. TLVHash
   ───────────
@@ -675,10 +685,11 @@ Contents
 
   For each value in the Bundle of the types Message, File, FileRequest,
   PollMessages, PollFiles, PollFileRequests, and PublicKeyRequest,
-  exactly one Accepted or Rejected value is included in the same order
-  as in the original Bundle.  Each response applies only to its one
-  request.  Acceptance or rejection of one request MUST NOT determine
-  the response to another request in the Bundle.
+  exactly one Accepted or Rejected value is included.  These response
+  values may occur in any order.  Each response applies only to the
+  request identified by its TLVHash and RequestIdentifier.  Acceptance
+  or rejection of one request MUST NOT determine the response to
+  another request in the Bundle.
 
   A PublicKeyRequest reply MUST use the non‐anonymous Origin PublicKey
   rule in section 2 and MUST contain exactly one payload SignedTLV.  Its
@@ -690,11 +701,12 @@ Contents
 
   When a Poll or FileRequest is Accepted, every value returned in
   response to it MUST be in the same SignedTLV as its Accepted value.
-  The returned values and the Accepted value may occur in any order
-  within that SignedTLV.  The end of the SignedTLV therefore marks the
-  end of the returned values; no count is required.  In particular, an
-  Accepted FileRequest does not require exactly one File: zero or more
-  Files may be returned.
+  Every such returned value MUST occur before that Accepted value.
+  Returned values and responses belonging to different requests need
+  not be contiguous and have no relative ordering requirement.  The
+  end of the SignedTLV therefore bounds the returned values; no count
+  is required.  In particular, an Accepted FileRequest does not
+  require exactly one File: zero or more Files may be returned.
 
   The sender of the original Bundle therefore knows how many responses
   to expect.  An Accepted or Rejected response is not complete until
@@ -816,5 +828,9 @@ B. History
    Rev.11, 2026‑08‑21: Distinguished permanent, peer‐correctable
    condition, and temporary rejection reasons, and prohibited
    independent provenance on a File inside a Message.
+
+   Rev.12, 2026‑08‑21: Defined directional RequestIdentifier
+   namespaces, removed response ordering, and required returned values
+   to precede their Accepted response.
 
 **********************************************************************

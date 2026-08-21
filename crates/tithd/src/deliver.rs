@@ -19,8 +19,8 @@ use std::time::Duration;
 use tith_config::{ConfigurationSet, IdentityRef, Schedule};
 use tith_crypto::{PublicKey, SecretKey, TlvHash, hash_tlv};
 use tith_exchange::{
-	ClientSession, CompletedResponse, ExchangeError, ExchangeIo, ResponseKind, ResponseTracker,
-	SessionState, send_bundle,
+	ClientSession, CompletedResponse, ExchangeError, ExchangeIo, RequestKind, ResponseKind,
+	ResponseTracker, SessionState, send_bundle,
 };
 use tith_nodelist::Nodelist;
 use tith_router::selector_matches;
@@ -108,6 +108,13 @@ impl PassSummary {
 			DeliveryOutcome::Rejected { .. } | DeliveryOutcome::Failed(_) => self.failed += 1,
 		}
 	}
+
+	pub fn add(&mut self, other: Self) {
+		self.connections += other.connections;
+		self.delivered += other.delivered;
+		self.retained += other.retained;
+		self.failed += other.failed;
+	}
 }
 
 impl Outbound {
@@ -177,15 +184,20 @@ impl Outbound {
 	///
 	/// A peer which cannot be reached is reported through the returned summary
 	/// rather than stopping the round.
-	#[must_use]
-	pub fn run_polls(&self, schedule: &Schedule, now: u64) -> PollSummary {
+	pub fn run_polls(
+		&self,
+		schedule: &Schedule,
+		now: u64,
+		next_attempt: u64,
+	) -> (PollSummary, PassSummary) {
 		let mut summary = PollSummary::default();
+		let mut pass = PassSummary::default();
 		let Some(local) = self.local_for(&schedule.origin) else {
-			return summary;
+			return (summary, pass);
 		};
 		for name in &schedule.polls {
 			summary.attempted += 1;
-			match self.poll_peer(local, name, now) {
+			match self.poll_peer(local, schedule, name, now, next_attempt, &mut pass) {
 				Ok(received) => summary.received += received,
 				Err(error) => {
 					summary.failed += 1;
@@ -193,15 +205,18 @@ impl Outbound {
 				}
 			}
 		}
-		summary
+		(summary, pass)
 	}
 
 	/// Runs one poll exchange, returning how many values the peer sent back.
 	fn poll_peer(
 		&self,
 		local: &LocalIdentity,
+		schedule: &Schedule,
 		name: &str,
 		now: u64,
+		next_attempt: u64,
+		pass: &mut PassSummary,
 	) -> Result<usize, Box<dyn Error>> {
 		let peer = self
 			.configuration
@@ -223,58 +238,28 @@ impl Outbound {
 			address: peer.address.clone(),
 			public_key,
 		};
-		let mut polls = Vec::with_capacity(3);
-		for (offset, type_code) in [
-			types::POLL_MESSAGES,
-			types::POLL_FILES,
-			types::POLL_FILE_REQUESTS,
-		]
-		.into_iter()
-		.enumerate()
-		{
-			let identifier =
-				OwnedTlv::new(types::REQUEST_IDENTIFIER, encode_u64(offset as u64 + 1))?;
-			polls.push(OwnedTlv::new(type_code, identifier.encode())?);
+		let group = self.claim_group_for(schedule, local, &destination, now)?;
+		if !group.is_empty() {
+			pass.connections += 1;
 		}
-		let encoded = build_bundle(
-			&local.identity,
-			&local.secret,
-			&destination,
-			now,
-			vec![polls.clone()],
-		)?;
-		let bundle = Bundle::parse(&encoded, self)?;
-		let mut session = ClientSession::new(ResponseTracker::for_bundle(&bundle, self)?);
-		let mut stream = self.connect(&destination)?;
-		let exchange = match self.converse(&mut stream, &encoded, &mut session, local, &destination)
-		{
-			Ok(exchange) => exchange,
-			Err(error) if !destination.address.is_anonymous() && is_signature_failure(&*error) => {
-				let key = self.discover_key(
-					local,
-					&destination.address,
-					Some(destination.public_key),
-					now,
-				)?;
-				let destination = Identity {
-					address: destination.address.clone(),
-					public_key: key,
-				};
-				let encoded = build_bundle(
-					&local.identity,
-					&local.secret,
-					&destination,
-					now,
-					vec![polls],
-				)?;
-				let bundle = Bundle::parse(&encoded, self)?;
-				let mut retry = ClientSession::new(ResponseTracker::for_bundle(&bundle, self)?);
-				let mut stream = self.connect(&destination)?;
-				self.converse(&mut stream, &encoded, &mut retry, local, &destination)?
+		match self.exchange_to(local, &destination, &group, true, now, next_attempt) {
+			Ok((outcomes, received)) => {
+				self.finish_group(&group, outcomes, now, pass)?;
+				Ok(received)
 			}
-			Err(error) => return Err(error),
-		};
-		Ok(exchange.returned)
+			Err(error) => {
+				let result = format!("delivery attempt failed: {error}");
+				let outcomes = group
+					.iter()
+					.map(|_| DeliveryOutcome::Deferred {
+						retry_at: next_attempt,
+						result: result.clone(),
+					})
+					.collect();
+				self.finish_group(&group, outcomes, now, pass)?;
+				Err(error)
+			}
+		}
 	}
 
 	/// Claims one connection's worth of compatible copies.
@@ -300,6 +285,29 @@ impl Outbound {
 					&& copy.next_hop == next_hop
 					&& copy.next_hop_key == next_hop_key
 					&& self.selects(schedule, origin, copy)
+			})?
+			else {
+				break;
+			};
+			group.push(next);
+		}
+		Ok(group)
+	}
+
+	/// Claims one connection group for an explicitly polled peer.
+	fn claim_group_for(
+		&self,
+		schedule: &Schedule,
+		local: &LocalIdentity,
+		destination: &Identity,
+		now: u64,
+	) -> Result<Vec<DeliveryClaim>, StoreError> {
+		let origin = local.identity.address.to_string();
+		let mut group = Vec::new();
+		while group.len() < MAX_GROUP {
+			let Some(next) = self.store.claim_scheduled(now, |copy| {
+				self.selects(schedule, &origin, copy)
+					&& self.next_hop(copy).as_ref() == Some(destination)
 			})?
 			else {
 				break;
@@ -474,6 +482,16 @@ impl Outbound {
 					.collect()
 			}
 		};
+		self.finish_group(group, outcomes, now, summary)
+	}
+
+	fn finish_group(
+		&self,
+		group: &[DeliveryClaim],
+		outcomes: Vec<DeliveryOutcome>,
+		now: u64,
+		summary: &mut PassSummary,
+	) -> Result<(), StoreError> {
 		for (claim, outcome) in group.iter().zip(outcomes) {
 			summary.record(&outcome);
 			self.store.finish_delivery(
@@ -498,6 +516,19 @@ impl Outbound {
 		let destination = self
 			.next_hop(&group[0].delivery)
 			.ok_or("next hop has no resolvable public key")?;
+		self.exchange_to(local, &destination, group, false, now, next_attempt)
+			.map(|(outcomes, _)| outcomes)
+	}
+
+	fn exchange_to(
+		&self,
+		local: &LocalIdentity,
+		destination: &Identity,
+		group: &[DeliveryClaim],
+		include_polls: bool,
+		now: u64,
+		next_attempt: u64,
+	) -> Result<(Vec<DeliveryOutcome>, usize), Box<dyn Error>> {
 		let mut values = Vec::with_capacity(group.len());
 		for claim in group {
 			let mut parsed = parse_sequence(&claim.item)?;
@@ -505,7 +536,7 @@ impl Outbound {
 				return Err("spooled item is not a single TLV value".into());
 			}
 			let value = parsed.remove(0);
-			let relayed = is_relay_delivery(&value, &destination, self)?;
+			let relayed = is_relay_delivery(&value, destination, self)?;
 			values.push((value, relayed));
 		}
 		// TTS-0005 section 2 RECOMMENDS the first payload SignedTLV hold every
@@ -517,38 +548,42 @@ impl Outbound {
 			.into_iter()
 			.enumerate()
 			.partition(|(_, (value, _))| value.type_code == types::FILE_REQUEST);
-		let split = !ordered.is_empty() && !rest.is_empty();
+		let first_count = ordered.len();
 		ordered.append(&mut rest);
 
-		let mut items = Vec::with_capacity(ordered.len());
-		for (position, (_, (value, _))) in ordered.iter().enumerate() {
-			// Every request in a Bundle needs its own RequestIdentifier, and these
-			// were numbered when they were spooled, independently of each other.
-			let identifier = u64::try_from(position).map_err(|_| "group is too large")? + 1;
-			items.push(set_request_identifier(value, identifier)?);
-		}
-		let payloads = if split {
-			let requests = ordered
-				.iter()
-				.filter(|(_, (value, _))| value.type_code == types::FILE_REQUEST)
-				.count();
-			let remainder = items.split_off(requests);
-			vec![items, remainder]
+		let mut first = if include_polls {
+			poll_values()?
 		} else {
-			vec![items]
+			Vec::new()
+		};
+		for (_, (value, _)) in &ordered[..first_count] {
+			let identifier = u64::try_from(first.len()).map_err(|_| "group is too large")? + 1;
+			first.push(set_request_identifier(value, identifier)?);
+		}
+		let mut second = Vec::with_capacity(ordered.len().saturating_sub(first_count));
+		for (_, (value, _)) in &ordered[first_count..] {
+			let identifier = u64::try_from(second.len()).map_err(|_| "group is too large")? + 1;
+			second.push(set_request_identifier(value, identifier)?);
+		}
+		let payloads = if first.is_empty() {
+			vec![second]
+		} else if second.is_empty() {
+			vec![first]
+		} else {
+			vec![first, second]
 		};
 		let encoded = build_bundle(
 			&local.identity,
 			&local.secret,
-			&destination,
+			destination,
 			now,
 			payloads.clone(),
 		)?;
 		let bundle = Bundle::parse(&encoded, self)?;
 		let tracker = ResponseTracker::for_bundle(&bundle, self)?;
 		let mut session = ClientSession::new(tracker);
-		let mut stream = self.connect(&destination)?;
-		let exchange = match self.converse(&mut stream, &encoded, &mut session, local, &destination)
+		let mut stream = self.connect(destination)?;
+		let exchange = match self.converse(&mut stream, &encoded, &mut session, local, destination)
 		{
 			Ok(exchange) => exchange,
 			Err(error) if !destination.address.is_anonymous() && is_signature_failure(&*error) => {
@@ -576,7 +611,23 @@ impl Outbound {
 			.into_iter()
 			.map(|(index, (_, relayed))| (index, relayed))
 			.collect();
-		Ok(Self::outcomes(&sent, &exchange.responses, next_attempt))
+		let copy_responses = exchange
+			.responses
+			.iter()
+			.filter(|response| {
+				!matches!(
+					response.request.kind,
+					RequestKind::PollMessages
+						| RequestKind::PollFiles
+						| RequestKind::PollFileRequests
+				)
+			})
+			.cloned()
+			.collect::<Vec<_>>();
+		Ok((
+			Self::outcomes(&sent, &copy_responses, next_attempt),
+			exchange.returned,
+		))
 	}
 
 	fn connect(&self, destination: &Identity) -> Result<TcpStream, Box<dyn Error>> {
@@ -632,44 +683,60 @@ impl Outbound {
 		local: &LocalIdentity,
 		destination: &Identity,
 	) -> Result<Exchange, Box<dyn Error>> {
-		let mut io = StreamIo(stream.try_clone()?);
 		let keep_open = session.requires_return_bundle();
-		send_bundle(&mut io, encoded, keep_open)?;
+		let writer = if keep_open {
+			let mut io = StreamIo(stream.try_clone()?);
+			let encoded = encoded.to_vec();
+			Some(std::thread::spawn(move || {
+				send_bundle(&mut io, &encoded, true)
+			}))
+		} else {
+			let mut io = StreamIo(stream.try_clone()?);
+			send_bundle(&mut io, encoded, false)?;
+			None
+		};
 		session.initial_sent();
 
-		let mut reader = TlvReader::new(stream.try_clone()?);
-		let reply = read_header(&mut reader, None, self)?
-			.ok_or("peer closed before sending a Reply Header")?;
-		let mut answers = Vec::new();
-		let mut returned = 0;
-		while session.state() == SessionState::AwaitingResponses {
-			let Some(value) = reader.read_next()? else {
-				break;
-			};
-			let value = value.read_owned()?;
-			match value.type_code {
-				types::SIGNED_TLV => {
-					let mut bytes = reply.prefix.clone();
-					bytes.extend_from_slice(&value.encode());
-					let payload = Bundle::parse(&bytes, self)?;
-					if keep_open {
-						let response_to = hash_tlv(&value.encode())?;
-						returned += self.dispatch_returned(
-							&payload,
-							response_to,
-							local,
-							&reply.bundle.origin,
-							&mut answers,
-						)?;
+		let received = (|| -> Result<(Vec<OwnedTlv>, usize), Box<dyn Error>> {
+			let mut reader = TlvReader::new(stream.try_clone()?);
+			let reply = read_header(&mut reader, None, self)?
+				.ok_or("peer closed before sending a Reply Header")?;
+			let mut answers = Vec::new();
+			let mut returned = 0;
+			while session.state() == SessionState::AwaitingResponses {
+				let Some(value) = reader.read_next()? else {
+					break;
+				};
+				let value = value.read_owned()?;
+				match value.type_code {
+					types::SIGNED_TLV => {
+						let mut bytes = reply.prefix.clone();
+						bytes.extend_from_slice(&value.encode());
+						let payload = Bundle::parse(&bytes, self)?;
+						if keep_open {
+							let response_to = hash_tlv(&value.encode())?;
+							returned += self.dispatch_returned(
+								&payload,
+								response_to,
+								local,
+								&reply.bundle.origin,
+								&mut answers,
+							)?;
+						}
+						session.reply_received(&payload, self)?;
 					}
-					session.reply_received(&payload, self)?;
+					type_code if types::is_defined(type_code) => {
+						return Err("unexpected defined value in a reply".into());
+					}
+					_ => {}
 				}
-				type_code if types::is_defined(type_code) => {
-					return Err("unexpected defined value in a reply".into());
-				}
-				_ => {}
 			}
+			Ok((answers, returned))
+		})();
+		if let Some(writer) = writer {
+			writer.join().map_err(|_| "Bundle writer panicked")??;
 		}
+		let (answers, returned) = received?;
 		if keep_open {
 			// TTS-0005 section 6: one Accepted or Rejected for every value the
 			// peer returned, in a Reply Bundle of our own.
@@ -680,6 +747,7 @@ impl Outbound {
 				crate::now(),
 				vec![answers],
 			)?;
+			let mut io = StreamIo(stream.try_clone()?);
 			send_bundle(&mut io, &final_reply, false)?;
 			session.final_reply_sent();
 		}
@@ -750,6 +818,22 @@ impl Outbound {
 		}
 		outcomes
 	}
+}
+
+fn poll_values() -> Result<Vec<OwnedTlv>, BundleError> {
+	[
+		types::POLL_MESSAGES,
+		types::POLL_FILES,
+		types::POLL_FILE_REQUESTS,
+	]
+	.into_iter()
+	.enumerate()
+	.map(|(offset, type_code)| {
+		let identifier = u64::try_from(offset).expect("three Poll values fit in u64") + 1;
+		let identifier = OwnedTlv::new(types::REQUEST_IDENTIFIER, encode_u64(identifier))?;
+		OwnedTlv::new(type_code, identifier.encode()).map_err(Into::into)
+	})
+	.collect()
 }
 
 fn is_signature_failure(error: &(dyn Error + 'static)) -> bool {

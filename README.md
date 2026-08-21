@@ -450,6 +450,11 @@ queued for it, sending one `PollMessages`, one `PollFiles`, and one
 incoming connection uses — the same authorization, the same duplicate handling —
 and answered in the final Reply Bundle.
 
+When compatible work is queued for that Peer, the reference driver carries it
+in the same Bundle. The first payload SignedTLV contains the Polls and any
+FileRequests; a second contains Messages and Files. The driver reads the peer's
+reply while that second SignedTLV is still being sent.
+
 Inbound Poll is answered the same way in reverse. The snapshot is claimed
 atomically: every held value matching the authenticated Bundle Origin, or none,
 never part of the set. A value committed after that claim waits for a later

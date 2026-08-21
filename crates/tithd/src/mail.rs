@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::error::Error;
 use std::io::{Read, Write};
 use std::net::{Shutdown, SocketAddr, TcpListener, TcpStream};
@@ -202,18 +203,23 @@ fn start_outbound(
 	)?;
 	let mut clock = Scheduler::new(&schedules, now(), options.local_offset)?;
 	std::thread::spawn(move || {
-		let mut open: Vec<Activation> = Vec::new();
+		let mut open: Vec<(Activation, bool)> = Vec::new();
 		loop {
-			open.extend(clock.poll(&schedules, now()));
+			open.extend(
+				clock
+					.poll(&schedules, now())
+					.into_iter()
+					.map(|activation| (activation, true)),
+			);
 			let mut still_open = Vec::new();
-			for activation in open.drain(..) {
+			for (activation, poll) in open.drain(..) {
 				let schedule = &schedules[activation.schedule];
 				let next_attempt = clock
 					.next_beginning(activation.schedule)
 					.unwrap_or_else(|| now().saturating_add(60));
-				run_activation(&driver, schedule, next_attempt);
+				run_activation(&driver, schedule, next_attempt, poll);
 				if activation.is_open(now()) {
-					still_open.push(activation);
+					still_open.push((activation, false));
 				} else {
 					clock.finished(&activation, now());
 				}
@@ -235,20 +241,38 @@ fn start_outbound(
 	Ok(())
 }
 
-fn run_activation(driver: &Outbound, schedule: &tith_config::Schedule, next_attempt: u64) {
-	let polled = driver.run_polls(schedule, now());
-	if polled.attempted > 0 {
-		eprintln!(
-			"tithd: schedule {} polled {} peer(s), received {} value(s), {} failed",
-			schedule.name, polled.attempted, polled.received, polled.failed
-		);
+fn run_activation(
+	driver: &Outbound,
+	schedule: &tith_config::Schedule,
+	next_attempt: u64,
+	poll: bool,
+) {
+	let mut combined = crate::deliver::PassSummary::default();
+	if poll {
+		let (polled, pass) = driver.run_polls(schedule, now(), next_attempt);
+		combined.add(pass);
+		if polled.attempted > 0 {
+			eprintln!(
+				"tithd: schedule {} polled {} peer(s), received {} value(s), {} failed",
+				schedule.name, polled.attempted, polled.received, polled.failed
+			);
+		}
 	}
 	match driver.run_pass(schedule, now(), next_attempt) {
-		Ok(summary) if summary.connections > 0 => eprintln!(
-			"tithd: schedule {} made {} connection(s): {} delivered, {} retained, {} failed",
-			schedule.name, summary.connections, summary.delivered, summary.retained, summary.failed
-		),
-		Ok(_) => {}
+		Ok(summary) => {
+			combined.add(summary);
+			if combined.connections == 0 {
+				return;
+			}
+			eprintln!(
+				"tithd: schedule {} made {} connection(s): {} delivered, {} retained, {} failed",
+				schedule.name,
+				combined.connections,
+				combined.delivered,
+				combined.retained,
+				combined.failed
+			);
+		}
 		Err(error) => eprintln!("tithd: schedule {} delivery failed: {error}", schedule.name),
 	}
 }
@@ -435,12 +459,6 @@ fn payload_responses(
 		}
 		Err(error) => return Err(error.into()),
 	};
-	let correct_header = payload.data.first().is_some_and(|first| {
-		first.type_code == types::TLV_HASH
-			&& first.value.as_slice() == request.header_hash.as_bytes()
-	});
-	let mut responses = Vec::new();
-	let mut returned_identifier = 0u64;
 	let request_values = if payload
 		.data
 		.first()
@@ -450,6 +468,13 @@ fn payload_responses(
 	} else {
 		payload.data.as_slice()
 	};
+	require_distinct_request_identifiers(request_values)?;
+	let correct_header = payload.data.first().is_some_and(|first| {
+		first.type_code == types::TLV_HASH
+			&& first.value.as_slice() == request.header_hash.as_bytes()
+	});
+	let mut responses = Vec::new();
+	let mut returned_identifier = 0u64;
 	for value in request_values {
 		if matches!(value.type_code, types::ACCEPTED | types::REJECTED) {
 			return Err("an initial Bundle contains a response value".into());
@@ -564,6 +589,7 @@ fn unauthenticated_responses(
 	{
 		return Err("unauthenticated SignedData contains a response".into());
 	}
+	require_distinct_request_identifiers(&data)?;
 	let mut responses = Vec::new();
 	for value in data
 		.iter()
@@ -580,6 +606,22 @@ fn unauthenticated_responses(
 		)?);
 	}
 	Ok(responses)
+}
+
+/// Rejects a payload whose request direction cannot be correlated uniquely.
+fn require_distinct_request_identifiers(values: &[OwnedTlv]) -> Result<(), Box<dyn Error>> {
+	let mut identifiers = HashSet::new();
+	for value in values
+		.iter()
+		.filter(|value| types::is_request(value.type_code))
+	{
+		if let Some(identifier) = request_identifier(value)
+			&& !identifiers.insert(identifier)
+		{
+			return Err("payload SignedTLV contains duplicate RequestIdentifiers".into());
+		}
+	}
+	Ok(())
 }
 
 fn malformed_rejection(value: &OwnedTlv, response_to: TlvHash) -> Result<OwnedTlv, Box<dyn Error>> {
@@ -655,8 +697,8 @@ fn validate_final_reply<R: Read>(
 
 /// Applies one peer response to the copy it answers.
 ///
-/// TTS-0005 section 6 requires exactly one response per returned value in the
-/// original order, so only the first outstanding hold can be answered next.
+/// TTS-0005 section 6 permits responses in any order, so the hash and identifier
+/// select the outstanding hold directly.
 fn resolve_hold(
 	item: &ValidatedItem,
 	holds: &mut Vec<PollHold>,
@@ -665,12 +707,14 @@ fn resolve_hold(
 	let response_to = item
 		.response_to
 		.ok_or("final Reply Bundle response has no ResponseTo")?;
-	let hold = holds
-		.first()
-		.ok_or("final Reply Bundle has an unexpected extra response")?;
-	if hold.signed_tlv_hash != response_to || hold.request_identifier != item.request_identifier {
-		return Err("final Reply Bundle responses are missing, duplicated, or out of order".into());
-	}
+	let position = holds
+		.iter()
+		.position(|hold| {
+			hold.signed_tlv_hash == response_to
+				&& hold.request_identifier == item.request_identifier
+		})
+		.ok_or("final Reply Bundle has a duplicate or unexpected response")?;
+	let hold = &holds[position];
 	let outcome = match item.kind {
 		ItemKind::Accepted => DeliveryOutcome::Delivered("accepted by poll".to_owned()),
 		_ => crate::deliver::rejection_outcome(item.rejection.as_ref(), now(), hold.relayed),
@@ -682,7 +726,7 @@ fn resolve_hold(
 		now(),
 		outcome,
 	)?;
-	holds.remove(0);
+	holds.remove(position);
 	Ok(())
 }
 
@@ -1096,6 +1140,50 @@ mod tests {
 			rejected_reason(&response, &mailer),
 			RejectionReason::Permanent as u64
 		);
+		drop(mailer);
+		fs::remove_file(database).unwrap();
+	}
+
+	#[test]
+	fn duplicate_request_identifiers_close_without_responses() {
+		let (mailer, peer_keys, peer, local, database) = setup();
+		let duplicate_polls = || {
+			[types::POLL_MESSAGES, types::POLL_FILES]
+				.into_iter()
+				.map(|type_code| {
+					container(
+						type_code,
+						&[OwnedTlv::new(types::REQUEST_IDENTIFIER, encode_u64(10)).unwrap()],
+					)
+				})
+				.collect::<Vec<_>>()
+		};
+
+		let authenticated =
+			build_bundle(&peer, &peer_keys.secret, &local, 1, vec![duplicate_polls()]).unwrap();
+		let (response, completed) = exchange(&authenticated, &mailer);
+		assert!(!completed);
+		assert!(
+			Bundle::parse(&response, mailer.as_ref())
+				.unwrap()
+				.payloads
+				.is_empty()
+		);
+
+		let unauthenticated =
+			build_bundle(&peer, &peer_keys.secret, &local, 1, vec![duplicate_polls()]).unwrap();
+		let mut top = parse_sequence(&unauthenticated).unwrap();
+		*top.last_mut().unwrap().value.last_mut().unwrap() ^= 1;
+		let unauthenticated = top.iter().flat_map(OwnedTlv::encode).collect::<Vec<_>>();
+		let (response, completed) = exchange(&unauthenticated, &mailer);
+		assert!(!completed);
+		assert!(
+			Bundle::parse(&response, mailer.as_ref())
+				.unwrap()
+				.payloads
+				.is_empty()
+		);
+
 		drop(mailer);
 		fs::remove_file(database).unwrap();
 	}
@@ -1542,7 +1630,7 @@ mod tests {
 			&list,
 		);
 		let polling = schedule(&sender.mailer.local_ref, vec!["remote".to_owned()]);
-		let poll = driver(&sender).run_polls(&polling, now());
+		let (poll, _) = driver(&sender).run_polls(&polling, now(), now() + 60);
 		assert_eq!(poll.failed, 0);
 		assert_eq!(
 			sender
@@ -1754,7 +1842,7 @@ mod tests {
 
 	/// Two Polls in one request payload must not reuse returned-value identifiers.
 	#[test]
-	fn returned_values_share_one_request_identifier_sequence_per_signed_tlv() {
+	fn returned_requests_use_the_reverse_direction_identifier_namespace() {
 		let (mailer, peer_keys, peer, local, database) = setup();
 		let message_job = submit(
 			&Node {
@@ -1813,11 +1901,11 @@ mod tests {
 
 		let poll_messages = container(
 			types::POLL_MESSAGES,
-			&[OwnedTlv::new(types::REQUEST_IDENTIFIER, encode_u64(10)).unwrap()],
+			&[OwnedTlv::new(types::REQUEST_IDENTIFIER, encode_u64(1)).unwrap()],
 		);
 		let poll_files = container(
 			types::POLL_FILES,
-			&[OwnedTlv::new(types::REQUEST_IDENTIFIER, encode_u64(11)).unwrap()],
+			&[OwnedTlv::new(types::REQUEST_IDENTIFIER, encode_u64(2)).unwrap()],
 		);
 		let request = build_bundle(
 			&peer,
@@ -1829,9 +1917,19 @@ mod tests {
 		.unwrap();
 		let (response, _) = exchange(&request, &mailer);
 		let reply = Bundle::parse(&response, mailer.as_ref()).unwrap();
-		let identifiers: Vec<_> = validate_payload(&reply.payloads[0], mailer.as_ref())
-			.unwrap()
-			.into_iter()
+		let items = validate_payload(&reply.payloads[0], mailer.as_ref()).unwrap();
+		assert_eq!(
+			items.iter().map(|item| item.kind).collect::<Vec<_>>(),
+			vec![
+				ItemKind::NetMail,
+				ItemKind::Accepted,
+				ItemKind::File,
+				ItemKind::Accepted,
+			],
+			"each Poll's returned request must precede its Accepted response"
+		);
+		let identifiers: Vec<_> = items
+			.iter()
 			.filter(|item| {
 				matches!(
 					item.kind,
@@ -1841,6 +1939,12 @@ mod tests {
 			.map(|item| item.request_identifier)
 			.collect();
 		assert_eq!(identifiers, vec![1, 2]);
+		let statuses = items
+			.iter()
+			.filter(|item| matches!(item.kind, ItemKind::Accepted | ItemKind::Rejected))
+			.map(|item| item.request_identifier)
+			.collect::<Vec<_>>();
+		assert_eq!(statuses, vec![1, 2]);
 		drop(mailer);
 		fs::remove_file(database).unwrap();
 	}
@@ -1937,23 +2041,22 @@ mod tests {
 	}
 
 	#[test]
-	fn final_reply_responses_must_follow_the_returned_value_order() {
+	fn final_reply_responses_may_reverse_the_returned_value_order() {
 		let (node, peer_keys, peer, request, response_to, mut holds) = final_reply_fixture();
-		assert!(
-			check_final_reply(
-				&node,
-				&peer_keys,
-				&peer,
-				&request,
-				&mut holds,
-				vec![
-					accepted(2, response_to).unwrap(),
-					accepted(1, response_to).unwrap(),
-				],
-				&[],
-			)
-			.is_err()
-		);
+		check_final_reply(
+			&node,
+			&peer_keys,
+			&peer,
+			&request,
+			&mut holds,
+			vec![
+				accepted(2, response_to).unwrap(),
+				accepted(1, response_to).unwrap(),
+			],
+			&[],
+		)
+		.unwrap();
+		assert!(holds.is_empty());
 	}
 
 	#[test]
@@ -2057,13 +2160,28 @@ mod tests {
 			"Routes fidonet#1\nEnd\n",
 			&list,
 		);
+		let outbound_job = submit(
+			&poller,
+			"fidonet#1/2",
+			"Active \"@remote\"",
+			"sent-with-poll",
+		);
 		let schedule = schedule(&poller.mailer.local_ref, vec!["remote".to_owned()]);
-		let summary = driver(&poller).run_polls(&schedule, now());
+		let (summary, pass) = driver(&poller).run_polls(&schedule, now(), now() + 3600);
 		server.join().unwrap();
 
 		assert_eq!(summary.attempted, 1);
 		assert_eq!(summary.failed, 0);
 		assert_eq!(summary.received, 1, "the poll returned the held Message");
+		assert_eq!(
+			pass.connections, 1,
+			"queued work shared the Poll connection"
+		);
+		assert_eq!(pass.delivered, 1);
+		assert_eq!(
+			job_state(&poller, &outbound_job),
+			tith_store::JobState::Delivered
+		);
 		assert_eq!(
 			job_state(&holder, &job),
 			tith_store::JobState::Delivered,
@@ -2073,6 +2191,10 @@ mod tests {
 		assert_eq!(
 			parse_sequence(&stored).unwrap()[0].type_code,
 			types::MESSAGE
+		);
+		assert!(
+			stored_item(&holder, "combined").is_some(),
+			"the second payload SignedTLV delivered queued work"
 		);
 	}
 }
