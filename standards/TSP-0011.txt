@@ -491,9 +491,9 @@ A. References
 
   [TSP‑0015] "Public Key Trust and Continuity", TITH, 2026‑08‑20.
 
-  [TTS‑0003] "Common TLV Types", TITH, 2026‑08‑20.
+  [TTS‑0003] "Common TLV Types", TITH, 2026‑08‑21.
 
-  [TTS‑0004] "Node Addresses", TITH, 2026‑08‑20.
+  [TTS‑0004] "Node Addresses", TITH, 2026‑08‑21.
 
   [TTS‑0005] "Bundle Format", TITH, 2026‑08‑21.
 

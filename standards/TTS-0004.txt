@@ -3,10 +3,10 @@ TITH                                              THIS ISN'T THAT HARD
 **********************************************************************
 
 Publication:  TTS‑0004
-Revision:     3
+Revision:     4
 Title:        Node Addresses
 Author(s):    Stephen Hurd
-Date:         2026‑08‑20
+Date:         2026‑08‑21
 ══════════════════════════════════════════════════════════════════════
 
 Status of this document
@@ -162,18 +162,21 @@ Contents
   "fidonet#1.5" would represent fidonet, Z1, N1, O0, P5
   "fidonet#-1" would represent fidonet, Z−1, N−1, O−1, P0.
 
+  A public key, for the purposes of a TITH identity, is the 32 binary
+  bytes of a Libhydrogen signing public key.
+
   The address whose Zone is negative one (−1) is the anonymous address
   for its Domain and MUST NOT appear in a nodelist.  Since it does not
-  uniquely identify a system, protocols using it MUST associate it
-  with a public key as specified in TTS‑0003 and TTS‑0005.  A
-  prospective node may use the anonymous address while applying for a
-  non‐anonymous address.  In the "p2p" Domain it is instead the
-  permanent address of every system.
+  uniquely identify a system, it MUST be associated with a public key
+  whenever it is used to identify a system.  A prospective node may
+  use the anonymous address while applying for a non‐anonymous address.
+  In the "p2p" Domain it is instead the permanent address of every
+  system.
 
   An address is anonymous or non‐anonymous solely according to this
   encoding.  A non‐anonymous identity is identified by its address.
   An anonymous identity is the exact pair of its anonymous address and
-  associated PublicKey.  Different PublicKeys at the same anonymous
+  associated public key.  Different public keys at the same anonymous
   address identify different systems.
 
   Listing is a separate, observer‐relative trust state.  An identity is
@@ -181,7 +184,7 @@ Contents
   nodelist or its exact identity has an effective local key pin
   established by explicit trust policy.  It is unlisted otherwise.  A
   nodelist entry lists its identity whether or not the entry contains a
-  PublicKey.  Merely receiving an accompanying PublicKey MUST NOT by
+  public key.  Merely receiving an accompanying public key MUST NOT by
   itself establish a pin.  Consequently an anonymous identity may be
   either listed or unlisted, and a non‐anonymous identity absent from a
   nodelist may likewise be listed by a pin.
@@ -287,13 +290,12 @@ A. References
   [FTA‑1006.002] "Key words to indicate requirement levels" FTSC,
   1998‑01‑17.
 
-  [TTS‑0003] "Common TLV Types", TITH, 2026‑08‑20.
-
-  [TTS‑0005] "Bundle Format", TITH, 2026‑08‑21.
-
   [TTS‑5000] "The Distribution Nodelist", TITH, 2026‑08‑21.
 
   [TRD‑0003] "A Nodelist‐Free Peer Network", TITH, 2026‑08‑20.
+
+  [Libhydrogen] Version 1,
+  https://github.com/jedisct1/libhydrogen/wiki
 
 
 B. History
@@ -307,5 +309,9 @@ B. History
 
    Rev.3, 2026‑08‑20: Distinguished the anonymous address encoding from
    observer‐relative listed and unlisted identity trust states.
+
+   Rev.4, 2026‑08‑21: Defined public keys independently of their TLV
+   representation and made the anonymous identity definition
+   self‐contained.
 
 **********************************************************************

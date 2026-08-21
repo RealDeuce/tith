@@ -3,10 +3,10 @@ TITH                                              THIS ISN'T THAT HARD
 **********************************************************************
 
 Publication:  TTS‑0003
-Revision:     4
+Revision:     5
 Title:        Common TLV Types
 Author(s):    Stephen Hurd
-Date:         2026‑08‑20
+Date:         2026‑08‑21
 ══════════════════════════════════════════════════════════════════════
 
 Status of this document
@@ -186,11 +186,11 @@ Contents
       specified by TTS‑0004.
 
   8.  PublicKey
-      The value MUST be the 32 binary bytes of a Libhydrogen signing
-      public key.  A PublicKey does not by itself establish that its
-      holder has been assigned an address.  The enclosing standard
-      defines the address with which the key is associated and how the
-      key is used.
+      The value MUST contain a public key as defined in TTS‑0004: its
+      32 binary bytes with no additional encoding.  A PublicKey does
+      not by itself establish that its holder has been assigned an
+      address.  The enclosing standard defines the address with which
+      the key is associated and how the key is used.
 
   9.  SignedOrigin
       This type contains the 5D address specified by TTS‑0004 whose key
@@ -211,7 +211,7 @@ A. References
 
   [TTS‑0002] "Type Length Value Encoding" TITH, 2026‑08‑16.
 
-  [TTS‑0004] "Node Addresses", TITH, 2026‑08‑20.
+  [TTS‑0004] "Node Addresses", TITH, 2026‑08‑21.
 
   [TTS‑0005] "Bundle Format", TITH, 2026‑08‑21.
 
@@ -243,5 +243,8 @@ B. History
 
    Rev.4, 2026‑08‑20: Applied the TSP‑0015 effective key consistently
    to non‐anonymous Origin and SignedOrigin values.
+
+   Rev.5, 2026‑08‑21: Made PublicKey the TLV representation of the
+   public key defined by TTS‑0004.
 
 **********************************************************************
