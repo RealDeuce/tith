@@ -112,7 +112,7 @@ fn run() -> Result<(), Box<dyn Error>> {
 			let (local_ref, local) = resolve_local(&local_name, &configuration, &nodelist)?;
 			let submission = Arc::new(submission::SubmissionEngine::new(
 				Arc::clone(&configuration), Arc::clone(&nodelist),
-				[(local_name, submission::LocalSigner { reference: local_ref, identity: local, secret: Arc::new(mail::read_secret(Path::new(&secret_file))?) })],
+				[submission::LocalSigner { reference: local_ref, identity: local, secret: Arc::new(mail::read_secret(Path::new(&secret_file))?) }],
 			));
 			windows::serve(&pipe, Path::new(&database), Path::new(&exports), &application, Some(submission))
 		}
@@ -133,7 +133,7 @@ fn run() -> Result<(), Box<dyn Error>> {
 			let (local_ref, local) = resolve_local(&local_name, &configuration, &nodelist)?;
 			let submission = Arc::new(submission::SubmissionEngine::new(
 				Arc::clone(&configuration), Arc::clone(&nodelist),
-				[(local_name, submission::LocalSigner { reference: local_ref, identity: local, secret: Arc::new(mail::read_secret(Path::new(&secret_file))?) })],
+				[submission::LocalSigner { reference: local_ref, identity: local, secret: Arc::new(mail::read_secret(Path::new(&secret_file))?) }],
 			));
 			filesystem::serve(Path::new(&root), Path::new(&database), Path::new(&exports), application, Some(submission))
 		}
@@ -171,14 +171,11 @@ fn run() -> Result<(), Box<dyn Error>> {
 			let submission = Arc::new(submission::SubmissionEngine::new(
 				Arc::clone(&configuration),
 				Arc::clone(&nodelist),
-				[(
-					local_name,
-					submission::LocalSigner {
-						reference: local_ref,
-						identity: local,
-						secret,
-					},
-				)],
+				[submission::LocalSigner {
+					reference: local_ref,
+					identity: local,
+					secret,
+				}],
 			));
 			unix::serve(
 				Path::new(&socket),
@@ -295,7 +292,7 @@ fn run() -> Result<(), Box<dyn Error>> {
 			let submission = Arc::new(submission::SubmissionEngine::new(
 				Arc::clone(&configuration),
 				Arc::clone(&nodelist),
-				[(local_name, submission::LocalSigner { reference: local_ref, identity: local, secret: Arc::new(SecretKey::from_bytes(node_secret)) })],
+				[submission::LocalSigner { reference: local_ref, identity: local, secret: Arc::new(SecretKey::from_bytes(node_secret)) }],
 			));
 			tcp::serve(
 				address,

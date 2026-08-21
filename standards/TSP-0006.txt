@@ -3,10 +3,10 @@ TITH                                              THIS ISN'T THAT HARD
 **********************************************************************
 
 Publication:  TSP‑0006
-Revision:     10
+Revision:     11
 Title:        Outbound Job Submission
 Author(s):    Stephen Hurd
-Date:         2026‑08‑20
+Date:         2026‑08‑21
 ══════════════════════════════════════════════════════════════════════
 
 Status of this document
@@ -325,46 +325,61 @@ Contents
   The original Submit operation always creates Kind NetMail.  Job
   Forward preserves the Kind of its claimed inbound item.
 
-  Without Signed-Origin, Origin identifies one local identity having a
-  TSP‑0002 Routes block.  It uses the local identity syntax defined
-  there, and the service MUST possess its secret signing key.
+  Origin, Signed-Origin, and Signature describe a Message's end‐to‐end
+  item authentication.  For an ordinary Message without Signature,
+  the effective item signer is selected exactly as TTS‑0005 specifies.
+  Without Signed-Origin, Origin identifies a local identity whose
+  secret signing key the Service possesses.  With Signed-Origin,
+  Origin is a canonical non‐anonymous TTS‑0004 address used as the
+  item's originating and reply address, and Signed-Origin identifies
+  the local identity whose secret key signs it.  Origin MUST have no
+  effective key under TSP‑0015, because SignedOrigin cannot override
+  that key.
 
-  A FileRequest has no Origin, SignedOrigin, or Signature of its own,
-  so its Origin line identifies only the local identity whose Bundle
-  carries the request.  Signed-Origin is prohibited for that Kind.
+  For a retained Message carrying Signature, Origin and Signed-Origin
+  are instead the literal remotely signed fields reconstructed under
+  TSP‑0003.  The Service resolves and verifies their effective key as
+  TTS‑0005 requires.  It MUST NOT require a remote signer to be a local
+  identity, possess its secret key, or have local Routes or Areas.
 
-  With Signed-Origin, Origin is a canonical non‐anonymous TTS‑0004 address
-  used as the item's originating and reply address.  No public key may
-  be available under TSP‑0015.  Signed-Origin identifies
-  the local identity whose key signs the item and MUST have a Routes
-  block.  If Origin has an effective key, TTS‑0005 ignores
-  SignedOrigin rather than allowing it to override that key.
-
-  Local-Identity identifies the one local identity whose Routes or
-  Areas block, delivery copies, and appended Via apply.  It is
-  RECOMMENDED in every generated Message Job.  For ordinary
-  origination it MUST select the same local signer which Origin or
-  Signed-Origin selects.  For a retained Signature it is independent
-  of the remote effective signer and MUST NOT change Origin or
-  SignedOrigin.
+  A Local-Identity submission field occurs only in a Message Job.  It
+  identifies its one local routing and transport identity.  That
+  identity supplies its Routes or Areas block, delivery copies, Bundle
+  signing identity, appended Via, and SeenBy participation.  It does not
+  select or change the effective item signer and may differ from that
+  signer for either an ordinary or retained Message.  Local-Identity is
+  RECOMMENDED in every Message Job.
 
   When Local-Identity is absent, the Service uses the only configured
   local identity if exactly one exists.  Otherwise, for NetMail it
-  evaluates the configured Routes for the submitted Origin and
-  Destination pair, and for EchoMail it evaluates Areas for the
-  submitted Area.  It may default the line only when that evaluation
-  selects exactly one local identity.  Zero or multiple candidates is
-  Invalid and the result description requires Local-Identity.  The
-  default never combines several local identities on one connection.
+  evaluates the submitted Destination under every authorized local
+  Routes block, and for EchoMail it evaluates the submitted Area under
+  every authorized local Areas block.  It may default the line only
+  when that evaluation selects exactly one local identity.  Zero or
+  multiple candidates is Invalid and the result description requires
+  Local-Identity.  The default never combines several local identities
+  on one connection.
 
-  For EchoMail or File, the local signing identity also has exactly one
-  applicable TSP‑0002 Areas block containing the submitted area and
-  item Kind.  The Service MUST authorize the Application to originate
-  that area and to use both the submitted Origin and Signed-Origin.
+  For an EchoMail Message, Local-Identity has exactly one applicable
+  TSP‑0002 Areas block containing the submitted area and Message Kind.
+  The Service MUST authorize the Application to use that local
+  identity and area and to submit the stated Origin, Signed-Origin,
+  and Signature state.
+
+  A locally originated standalone File has no Local-Identity field.
+  Its Origin and optional Signed-Origin select both its effective item
+  signer and its local routing identity under the ordinary Message
+  rules above.  That identity has exactly one applicable TSP‑0002 Areas
+  block containing the submitted area and File Kind.  The Service MUST
+  possess its secret key and authorize the Application to use it.
 
   A Peer-File or FileRequest is authorized against its Destination
-  rather than an area.  Its local identity requires a Routes block and
-  requires no Areas block at all.
+  rather than an area.  A Peer-File's Origin and optional Signed-Origin
+  likewise select both its effective item signer and local routing
+  identity.  A FileRequest has no Origin, SignedOrigin, or Signature of
+  its own, so its Origin line identifies only the local identity whose
+  Bundle carries the request; Signed-Origin is prohibited.  Either
+  local identity requires a Routes block and no Areas block.
 
   Inbound identifies one current TSP‑0011 item and ClaimToken obtained
   by the same Application through TSP‑0012.  For a New Forward Job, the
@@ -674,11 +689,13 @@ Contents
   all signed children and private Contents are fixed.  It then appends
   RequestIdentifier, and appends the initial Via for every item which
   carries one.  A Peer-File carries none.  A Message next appends the
-  submitted AdditionalKludgeLine values.  The effective local signer,
-  not a distinct reply Origin, supplies routing configuration, Via,
-  SeenBy, and the local AKA recorded with every delivery copy.  A
-  FileRequest is not signed; its local identity supplies only the local
-  AKA and routing configuration.
+  submitted AdditionalKludgeLine values.  For a Message, its effective
+  item signer supplies the end‐to‐end Signature while Local-Identity
+  independently supplies routing configuration, Via, SeenBy, Bundle
+  signing, and the local identity recorded with every delivery copy.
+  For a standalone File, its one selected local identity supplies both
+  roles.  A FileRequest is not signed; its local identity supplies only
+  routing, Bundle signing, and delivery metadata.
 
   For a Message Job carrying Signature, the Service reconstructs the
   canonical TSP‑0003 signed children from the named UTF‑8 fields and
@@ -1286,5 +1303,9 @@ B. History
    Rev.10, 2026‑08‑20: Distinguished anonymous address grammar from
    listing status and used the TSP‑0015 effective key for Signed-Origin
    fallback decisions.
+
+   Rev.11, 2026‑08‑21: Made a Message's local routing and transport
+   identity independent of its end‐to‐end signer, including retained
+   remotely signed Messages.
 
 **********************************************************************

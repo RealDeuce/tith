@@ -1200,7 +1200,7 @@ fn decode_event(mut input: &[u8]) -> Result<(String, bool, OutboundEvent), Store
 }
 
 fn encode_job(value: &OutboundJob) -> Vec<u8> {
-	let mut output = vec![3];
+	let mut output = vec![4];
 	for text in [&value.job_id, &value.application, &value.idempotency_key] {
 		put_string(&mut output, text);
 	}
@@ -1274,7 +1274,7 @@ fn encode_job(value: &OutboundJob) -> Vec<u8> {
 
 fn decode_job(mut input: &[u8]) -> Result<OutboundJob, StoreError> {
 	let version = take_byte(&mut input)?;
-	if version != 3 {
+	if version != 4 {
 		return Err(StoreError::UnsupportedRecordVersion {
 			record: "outbound job",
 			version,
@@ -1525,15 +1525,15 @@ mod tests {
 			new_job(identity("format", &payload), payload),
 		);
 		let current = encode_job(&job);
-		assert_eq!(current[0], 3);
+		assert_eq!(current[0], 4);
 
 		let mut obsolete = current;
-		obsolete[0] = 2;
+		obsolete[0] = 3;
 		assert!(matches!(
 			decode_job(&obsolete),
 			Err(StoreError::UnsupportedRecordVersion {
 				record: "outbound job",
-				version: 2
+				version: 3
 			})
 		));
 	}

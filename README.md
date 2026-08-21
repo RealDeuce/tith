@@ -426,8 +426,9 @@ the interval. Missed activations coalesce to the most recent, and a schedule
 never has two activations at once.
 
 One connection carries the copies TSP-0002 section 9 calls compatible: the same
-local AKA and the same exact next-hop identity, including the `PublicKey` when
-that identity is anonymous. Copies for different local AKAs are never combined.
+local identity and the same exact next-hop identity, including the `PublicKey`
+when that identity is anonymous. Copies for different local identities are
+never combined.
 Endpoints come from the next hop's configured `Endpoint` lines in file order,
 falling back to the usable TITH endpoints in its nodelist entry.
 

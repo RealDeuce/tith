@@ -822,7 +822,7 @@ fn take_string(input: &mut &[u8]) -> Result<String, StoreError> {
 }
 
 pub(crate) fn encode_record(value: &InboundRecord) -> Vec<u8> {
-	let mut out = Vec::new();
+	let mut out = vec![1];
 	for text in [
 		&value.inbound_id,
 		&value.application,
@@ -878,6 +878,13 @@ pub(crate) fn encode_record(value: &InboundRecord) -> Vec<u8> {
 	out
 }
 pub(crate) fn decode_record(mut input: &[u8]) -> Result<InboundRecord, StoreError> {
+	let version = take_byte(&mut input)?;
+	if version != 1 {
+		return Err(StoreError::UnsupportedRecordVersion {
+			record: "inbound item",
+			version,
+		});
+	}
 	let inbound_id = take_string(&mut input)?;
 	let application = take_string(&mut input)?;
 	let local_identity = take_string(&mut input)?;
@@ -1081,6 +1088,17 @@ mod tests {
 			last_result: None,
 			forward_job: None,
 		};
+		let current = encode_record(&record);
+		assert_eq!(current[0], 1);
+		let mut obsolete = current;
+		obsolete[0] = 0;
+		assert!(matches!(
+			decode_record(&obsolete),
+			Err(StoreError::UnsupportedRecordVersion {
+				record: "inbound item",
+				version: 0
+			})
+		));
 		for authentication in [
 			ItemAuthentication::Unsigned,
 			ItemAuthentication::SignedOriginInvalid,

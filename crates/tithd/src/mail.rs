@@ -1432,14 +1432,11 @@ mod tests {
 		let engine = crate::submission::SubmissionEngine::new(
 			Arc::clone(&node.mailer.configuration),
 			Arc::clone(&node.mailer.nodelist),
-			[(
-				node.mailer.local.address.to_string(),
-				crate::submission::LocalSigner {
-					reference: node.mailer.local_ref.clone(),
-					identity: node.mailer.local.clone(),
-					secret: Arc::clone(&node.mailer.local_secret),
-				},
-			)],
+			[crate::submission::LocalSigner {
+				reference: node.mailer.local_ref.clone(),
+				identity: node.mailer.local.clone(),
+				secret: Arc::clone(&node.mailer.local_secret),
+			}],
 		);
 		let request = tith_ipc::SubmissionRequest::parse(
 			format!(

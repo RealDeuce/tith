@@ -178,6 +178,35 @@ pub fn build_originated_message(
 		.signer
 		.as_ref()
 		.ok_or(BundleError::Missing("Message signing identity"))?;
+	build_originated_message_for_delivery(
+		data,
+		provenance,
+		secret,
+		effective_signer,
+		request_identifier,
+		via_timestamp,
+		software,
+		seen_by,
+	)
+}
+
+/// Constructs and signs a new Message while recording a distinct local
+/// identity as its first delivery hop.
+///
+/// `provenance` and `secret` own the end-to-end item signature. `local_via`
+/// independently identifies the local routing identity whose delivery state
+/// and Bundle signature carry the Message to its next hop.
+#[allow(clippy::too_many_arguments)]
+pub fn build_originated_message_for_delivery(
+	data: &MessageData,
+	provenance: &ItemProvenance,
+	secret: &SecretKey,
+	local_via: &Identity,
+	request_identifier: u64,
+	via_timestamp: u64,
+	software: &str,
+	seen_by: &[Address],
+) -> Result<OwnedTlv, BundleError> {
 	validate_originated_message_data(data)?;
 	let mut signed = message_signed_children(data, provenance)?;
 	let signature = sign_tlv(&concatenate(&signed), secret)?;
@@ -190,7 +219,7 @@ pub fn build_originated_message(
 		signed,
 		&MessageSuffix {
 			existing_vias: &[],
-			local_via: effective_signer,
+			local_via,
 			request_identifier,
 			via_timestamp,
 			software,

@@ -311,7 +311,7 @@ A. References
 
   [TSP‑0005] "Durable Outbound Jobs", TITH, 2026‑08‑21.
 
-  [TSP‑0006] "Outbound Job Submission", TITH, 2026‑08‑20.
+  [TSP‑0006] "Outbound Job Submission", TITH, 2026‑08‑21.
 
   [TSP‑0007] "Unix‐Domain Socket IPC Binding", TITH, 2026‑08‑17.
 

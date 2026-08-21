@@ -29,8 +29,8 @@ use tith_wire::address::Address;
 use tith_wire::bundle::{Identity, KeyResolver};
 use tith_wire::item::{
 	AttachmentData, ItemProvenance, MessageData, MessageSuffix, StandaloneFileData, ViaData,
-	build_file_request, build_originated_file, build_originated_message, build_retained_message,
-	forward_item, validate_item,
+	build_file_request, build_originated_file, build_originated_message_for_delivery,
+	build_retained_message, forward_item, validate_item,
 };
 
 pub const SOFTWARE: &str = "tithd 0.1.0";
@@ -52,12 +52,15 @@ impl SubmissionEngine {
 	pub fn new(
 		configuration: Arc<ConfigurationSet>,
 		nodelist: Arc<Nodelist>,
-		signers: impl IntoIterator<Item = (String, LocalSigner)>,
+		signers: impl IntoIterator<Item = LocalSigner>,
 	) -> Self {
 		Self {
 			configuration,
 			nodelist,
-			signers: signers.into_iter().collect(),
+			signers: signers
+				.into_iter()
+				.map(|signer| (signer.reference.to_string(), signer))
+				.collect(),
 		}
 	}
 
@@ -162,7 +165,7 @@ impl SubmissionEngine {
 		let signer = self
 			.signers
 			.values()
-			.find(|signer| signer.identity.address.to_string() == job.local_identity)
+			.find(|signer| signer.reference.to_string() == job.local_identity)
 			.ok_or_else(|| {
 				failure(BuildFailure::invalid(
 					"Job local identity is no longer configured",
@@ -235,7 +238,7 @@ impl SubmissionEngine {
 			(&self.nodelist, self.nodelist.as_ref()),
 		);
 		Ok(NewDelivery {
-			local_identity: signer.identity.address.to_string(),
+			local_identity: signer.reference.to_string(),
 			next_hop: target.address.to_string(),
 			next_hop_key: anonymous_key(&target),
 			mode,
@@ -289,9 +292,9 @@ impl SubmissionEngine {
 		effective_keys: &BTreeMap<Address, PublicKey>,
 	) -> Result<NewOutboundJob, BuildFailure> {
 		let retained = message.signature.is_some();
-		let (signer, provenance) = if retained {
-			let signer = self.message_local_signer(message, effective_keys)?;
-			(signer, Self::retained_provenance(message, effective_keys)?)
+		let local_identity = self.message_local_identity(message, effective_keys)?;
+		let (item_signer, provenance) = if retained {
+			(None, Self::retained_provenance(message, effective_keys)?)
 		} else {
 			if message.signed_origin_public_key.is_some()
 				|| !message.vias.is_empty()
@@ -301,19 +304,12 @@ impl SubmissionEngine {
 					"retained Message fields require Signature",
 				));
 			}
-			let resolved = self.item_provenance(
+			let (signer, provenance) = self.item_provenance(
 				&message.origin,
 				message.signed_origin.as_deref(),
 				effective_keys,
 			)?;
-			if let Some(local) = message.local_identity.as_deref()
-				&& !std::ptr::eq(self.signer(local)?, resolved.0)
-			{
-				return Err(BuildFailure::invalid(
-					"Local-Identity does not match the originating signer",
-				));
-			}
-			resolved
+			(Some(signer), provenance)
 		};
 		if message.kind == MessageKind::EchoMail {
 			validate_area_name(&message.destination_or_area)?;
@@ -351,10 +347,8 @@ impl SubmissionEngine {
 			MessageKind::NetMail => {
 				let destination =
 					self.resolve_identity_with(&message.destination_or_area, effective_keys)?;
-				let routes =
-					routes_for(&self.configuration, &signer.reference).ok_or_else(|| {
-						BuildFailure::permanent("local signing identity has no Routes block")
-					})?;
+				let routes = routes_for(&self.configuration, &local_identity.reference)
+					.ok_or_else(|| BuildFailure::permanent("local identity has no Routes block"))?;
 				let (next_hop, mode, route_rule) =
 					match message.next_hop.as_ref().unwrap_or(&NextHop::Route) {
 						NextHop::Route => {
@@ -398,14 +392,14 @@ impl SubmissionEngine {
 				let configured = failure_policies(
 					&self.configuration,
 					routes,
-					&signer.identity,
+					&local_identity.identity,
 					&next_hop,
 					route_rule,
 					None,
 					(&self.nodelist, &key_lookup),
 				);
 				let delivery = NewDelivery {
-					local_identity: signer.identity.address.to_string(),
+					local_identity: local_identity.reference.to_string(),
 					next_hop: next_hop.address.to_string(),
 					next_hop_key: anonymous_key(&next_hop),
 					mode,
@@ -423,8 +417,8 @@ impl SubmissionEngine {
 			}
 			MessageKind::EchoMail => {
 				let deliveries = self.area_deliveries(
-					&signer.reference,
-					&signer.identity,
+					&local_identity.reference,
+					&local_identity.identity,
 					&message.destination_or_area,
 					false,
 					effective_keys,
@@ -434,10 +428,10 @@ impl SubmissionEngine {
 					JobTarget::Area(message.destination_or_area.clone()),
 					None,
 					// An anonymous local identity is not representable in SeenBy.
-					if signer.identity.address.is_anonymous() {
+					if local_identity.identity.address.is_anonymous() {
 						Vec::new()
 					} else {
-						vec![signer.identity.address.clone()]
+						vec![local_identity.identity.address.clone()]
 					},
 					deliveries,
 				)
@@ -508,7 +502,7 @@ impl SubmissionEngine {
 				signature,
 				&MessageSuffix {
 					existing_vias: &vias,
-					local_via: &signer.identity,
+					local_via: &local_identity.identity,
 					request_identifier: random_u64()?,
 					via_timestamp: timestamp,
 					software: SOFTWARE,
@@ -516,10 +510,12 @@ impl SubmissionEngine {
 				},
 			)
 		} else {
-			build_originated_message(
+			let item_signer = item_signer.expect("ordinary Message has a local signer");
+			build_originated_message_for_delivery(
 				&data,
 				&provenance,
-				&signer.secret,
+				&item_signer.secret,
+				&local_identity.identity,
 				random_u64()?,
 				timestamp,
 				SOFTWARE,
@@ -540,7 +536,7 @@ impl SubmissionEngine {
 			identity,
 			kind,
 			target,
-			local_identity: signer.identity.address.to_string(),
+			local_identity: local_identity.reference.to_string(),
 			item: item.encode(),
 			deliveries,
 			sources,
@@ -613,7 +609,7 @@ impl SubmissionEngine {
 			identity,
 			kind,
 			target,
-			local_identity: signer.identity.address.to_string(),
+			local_identity: signer.reference.to_string(),
 			item: item.encode(),
 			deliveries,
 			sources: vec![source_record],
@@ -648,7 +644,7 @@ impl SubmissionEngine {
 			identity,
 			kind: JobKind::FileRequest,
 			target,
-			local_identity: signer.identity.address.to_string(),
+			local_identity: signer.reference.to_string(),
 			item: item.encode(),
 			deliveries: vec![delivery],
 			sources: Vec::new(),
@@ -690,7 +686,7 @@ impl SubmissionEngine {
 			(Some(IpcDeliveryMode::Passive), _) | (None, false) => DeliveryMode::Passive,
 		};
 		let routes = routes_for(&self.configuration, &signer.reference)
-			.ok_or_else(|| BuildFailure::permanent("local signing identity has no Routes block"))?;
+			.ok_or_else(|| BuildFailure::permanent("local identity has no Routes block"))?;
 		let configured = failure_policies(
 			&self.configuration,
 			routes,
@@ -704,7 +700,7 @@ impl SubmissionEngine {
 		Ok((
 			JobTarget::Destination(destination.address.to_string()),
 			NewDelivery {
-				local_identity: signer.identity.address.to_string(),
+				local_identity: signer.reference.to_string(),
 				next_hop: destination.address.to_string(),
 				next_hop_key: anonymous_key(&destination),
 				mode,
@@ -741,7 +737,7 @@ impl SubmissionEngine {
 		let signer = self
 			.signers
 			.values()
-			.find(|signer| signer.identity.address.to_string() == inbound.record.local_identity)
+			.find(|signer| signer.reference.to_string() == inbound.record.local_identity)
 			.ok_or_else(|| {
 				BuildFailure::invalid("inbound receiving identity is no longer configured")
 			})?;
@@ -831,7 +827,7 @@ impl SubmissionEngine {
 			identity,
 			kind,
 			target: JobTarget::Area(area),
-			local_identity: signer.identity.address.to_string(),
+			local_identity: signer.reference.to_string(),
 			item: item.encode(),
 			deliveries,
 			sources: Vec::new(),
@@ -847,7 +843,7 @@ impl SubmissionEngine {
 			.ok_or_else(|| BuildFailure::invalid("unknown or unauthorized Origin"))
 	}
 
-	fn message_local_signer<'a>(
+	fn message_local_identity<'a>(
 		&'a self,
 		message: &MessageSubmission,
 		effective_keys: &BTreeMap<Address, PublicKey>,
@@ -1100,7 +1096,7 @@ impl SubmissionEngine {
 			.areas
 			.iter()
 			.find(|areas| &areas.local == local)
-			.ok_or_else(|| BuildFailure::permanent("local signing identity has no Areas block"))?;
+			.ok_or_else(|| BuildFailure::permanent("local identity has no Areas block"))?;
 		let area = areas
 			.areas
 			.iter()
@@ -1110,7 +1106,7 @@ impl SubmissionEngine {
 			return Err(BuildFailure::permanent("area has no Send-To link"));
 		}
 		let routes = routes_for(&self.configuration, local)
-			.ok_or_else(|| BuildFailure::permanent("local signing identity has no Routes block"))?;
+			.ok_or_else(|| BuildFailure::permanent("local identity has no Routes block"))?;
 		area.send_to
 			.iter()
 			.map(|link| {
@@ -1127,7 +1123,7 @@ impl SubmissionEngine {
 						.or_else(|| self.nodelist.public_key(address))
 				};
 				Ok(NewDelivery {
-					local_identity: local_identity.address.to_string(),
+					local_identity: local.to_string(),
 					next_hop: identity.address.to_string(),
 					next_hop_key: anonymous_key(&identity),
 					mode: if peer.endpoints.is_empty() {
@@ -1452,7 +1448,7 @@ mod tests {
 	use base64::engine::general_purpose::STANDARD_NO_PAD;
 	use tith_crypto::SigningKeyPair;
 	use tith_store::{CommitOutcome, InboundStore};
-	use tith_wire::item::{ItemKind, validate_item};
+	use tith_wire::item::{ItemKind, build_originated_message, validate_item};
 	use tith_wire::tlv::parse_sequence;
 
 	#[test]
@@ -1480,14 +1476,11 @@ mod tests {
 		let engine = SubmissionEngine::new(
 			Arc::clone(&configuration),
 			Arc::new(Nodelist::default()),
-			[(
-				"@local".to_owned(),
-				LocalSigner {
-					reference: IdentityRef::Peer("local".to_owned()),
-					identity: origin,
-					secret: Arc::new(origin_keys.secret),
-				},
-			)],
+			[LocalSigner {
+				reference: IdentityRef::Peer("local".to_owned()),
+				identity: origin,
+				secret: Arc::new(origin_keys.secret),
+			}],
 		);
 		let request = SubmissionRequest::parse(
 			b"TITH-IPC 1\nSubmit\nJob\nApplication \"mailer\"\nIdempotency-Key \"one\"\nOrigin \"@local\"\nDestination \"@destination\"\nTo-User \"You\"\nFrom-User \"Me\"\nSubject \"Hello\"\nMessage-Text \"World\"\nEnd\nEnd\n",
@@ -1572,6 +1565,97 @@ mod tests {
 	}
 
 	#[test]
+	fn message_signer_and_exact_anonymous_local_identity_are_independent() {
+		let item_keys = SigningKeyPair::from_seed(&[11; 32]).unwrap();
+		let transport_keys = SigningKeyPair::from_seed(&[12; 32]).unwrap();
+		let destination_keys = SigningKeyPair::from_seed(&[13; 32]).unwrap();
+		let peers = format!(
+			"Peer item\nAddress p2p#-1\nPublic-Key {}\nEnd\n\
+			 Peer transport\nAddress p2p#-1\nPublic-Key {}\nEnd\n\
+			 Peer destination\nAddress p2p#-1\nPublic-Key {}\nEndpoint localhost 24555\nEnd\n",
+			STANDARD_NO_PAD.encode(item_keys.public.as_bytes()),
+			STANDARD_NO_PAD.encode(transport_keys.public.as_bytes()),
+			STANDARD_NO_PAD.encode(destination_keys.public.as_bytes()),
+		);
+		let configuration = Arc::new(
+			ConfigurationSet::parse(
+				&peers,
+				"Routes @transport\nRoute All Using Direct Hold\nEnd\n",
+				"",
+				"",
+			)
+			.unwrap(),
+		);
+		let anonymous = Address::anonymous("p2p".to_owned()).unwrap();
+		let engine = SubmissionEngine::new(
+			configuration,
+			Arc::new(Nodelist::default()),
+			[
+				LocalSigner {
+					reference: IdentityRef::Peer("item".to_owned()),
+					identity: Identity {
+						address: anonymous.clone(),
+						public_key: item_keys.public,
+					},
+					secret: Arc::new(item_keys.secret),
+				},
+				LocalSigner {
+					reference: IdentityRef::Peer("transport".to_owned()),
+					identity: Identity {
+						address: anonymous,
+						public_key: transport_keys.public,
+					},
+					secret: Arc::new(transport_keys.secret),
+				},
+			],
+		);
+		let request = SubmissionRequest::parse(
+			b"TITH-IPC 1\nSubmit\nJob\nApplication \"mailer\"\nIdempotency-Key \"separate-identities\"\nOrigin \"@item\"\nLocal-Identity \"@transport\"\nDestination \"@destination\"\nTo-User \"You\"\nFrom-User \"Me\"\nMessage-Text \"Body\"\nEnd\nEnd\n",
+		)
+		.unwrap();
+		let unique = SystemTime::now()
+			.duration_since(UNIX_EPOCH)
+			.unwrap()
+			.as_nanos();
+		let path = std::env::temp_dir().join(format!("tith-identities-{unique}.redb"));
+		let inbound = InboundStore::create(&path).unwrap();
+		let store = inbound.outbound().unwrap();
+		let BatchCommit::Committed(outcomes) = engine.submit(&request, &store).unwrap() else {
+			panic!("commit expected");
+		};
+		let CommitOutcome::New { job_id, .. } = &outcomes[0] else {
+			panic!("new job expected");
+		};
+		let job = store.query(job_id).unwrap();
+		assert_eq!(job.local_identity, "@transport");
+		assert_eq!(job.deliveries[0].local_identity, "@transport");
+
+		let encoded = store.item(job_id).unwrap();
+		let message = parse_sequence(&encoded).unwrap().remove(0);
+		let read = tith_wire::item::read_message(&message, &|_: &Address| None).unwrap();
+		assert_eq!(read.signing.origin_key, Some(item_keys.public));
+		let via = read.vias.last().unwrap();
+		assert_eq!(via.address, Address::anonymous("p2p".to_owned()).unwrap());
+		assert_eq!(via.public_key, Some(transport_keys.public));
+
+		let defaulted = SubmissionRequest::parse(
+			b"TITH-IPC 1\nSubmit\nJob\nApplication \"mailer\"\nIdempotency-Key \"defaulted-identity\"\nOrigin \"@item\"\nDestination \"@destination\"\nTo-User \"You\"\nFrom-User \"Me\"\nMessage-Text \"Body\"\nEnd\nEnd\n",
+		)
+		.unwrap();
+		let BatchCommit::Committed(outcomes) = engine.submit(&defaulted, &store).unwrap() else {
+			panic!("defaulted commit expected");
+		};
+		let CommitOutcome::New { job_id, .. } = &outcomes[0] else {
+			panic!("new defaulted job expected");
+		};
+		assert_eq!(store.query(job_id).unwrap().local_identity, "@transport");
+
+		drop(store);
+		drop(inbound);
+		std::fs::remove_file(path).unwrap();
+	}
+
+	#[test]
 	fn effective_origin_pin_blocks_signed_origin_for_messages_and_files() {
 		let local_keys = SigningKeyPair::from_seed(&[21; 32]).unwrap();
 		let pinned_keys = SigningKeyPair::from_seed(&[22; 32]).unwrap();
@@ -1586,17 +1670,14 @@ mod tests {
 		let engine = SubmissionEngine::new(
 			configuration,
 			Arc::new(Nodelist::default()),
-			[(
-				"@local".to_owned(),
-				LocalSigner {
-					reference: IdentityRef::Peer("local".to_owned()),
-					identity: Identity {
-						address: Address::anonymous("p2p".to_owned()).unwrap(),
-						public_key: local_keys.public,
-					},
-					secret: Arc::new(local_keys.secret),
+			[LocalSigner {
+				reference: IdentityRef::Peer("local".to_owned()),
+				identity: Identity {
+					address: Address::anonymous("p2p".to_owned()).unwrap(),
+					public_key: local_keys.public,
 				},
-			)],
+				secret: Arc::new(local_keys.secret),
+			}],
 		);
 		let unique = SystemTime::now()
 			.duration_since(UNIX_EPOCH)
@@ -1634,11 +1715,12 @@ mod tests {
 	}
 
 	#[test]
-	fn retained_message_preserves_signed_bytes_and_rejects_forgery() {
+	fn retained_signed_origin_message_preserves_remote_authentication() {
 		let local_keys = SigningKeyPair::from_seed(&[31; 32]).unwrap();
 		let author_keys = SigningKeyPair::from_seed(&[32; 32]).unwrap();
 		let destination_keys = SigningKeyPair::from_seed(&[33; 32]).unwrap();
 		let local: Address = "fidonet#1:104/36".parse().unwrap();
+		let reply_origin: Address = "fidonet#1:104/98".parse().unwrap();
 		let author: Address = "fidonet#1:104/99".parse().unwrap();
 		let destination: Address = "fidonet#1:104/1".parse().unwrap();
 		let configuration = Arc::new(
@@ -1671,17 +1753,14 @@ mod tests {
 		let engine = SubmissionEngine::new(
 			Arc::clone(&configuration),
 			Arc::clone(&nodelist),
-			[(
-				local.to_string(),
-				LocalSigner {
-					reference: IdentityRef::Address(local.clone()),
-					identity: Identity {
-						address: local.clone(),
-						public_key: local_keys.public,
-					},
-					secret: Arc::new(local_keys.secret),
+			[LocalSigner {
+				reference: IdentityRef::Address(local.clone()),
+				identity: Identity {
+					address: local.clone(),
+					public_key: local_keys.public,
 				},
-			)],
+				secret: Arc::new(local_keys.secret),
+			}],
 		);
 		let original = build_originated_message(
 			&MessageData {
@@ -1705,7 +1784,7 @@ mod tests {
 				additional_kludge_lines: Vec::new(),
 			},
 			&ItemProvenance {
-				origin: author.clone(),
+				origin: reply_origin.clone(),
 				signer: Some(Identity {
 					address: author.clone(),
 					public_key: author_keys.public,
@@ -1721,7 +1800,7 @@ mod tests {
 		let original_read = tith_wire::item::read_message(&original, nodelist.as_ref()).unwrap();
 		let signature = STANDARD_NO_PAD.encode(original_read.signing.signature.unwrap().as_bytes());
 		let request_text = format!(
-			"TITH-IPC 1\nSubmit\nJob\nApplication \"gateway\"\nIdempotency-Key \"retained\"\nOrigin \"{author}\"\nLocal-Identity \"{local}\"\nDestination \"{destination}\"\nTo-User \"Recipient\"\nFrom-User \"Author\"\nTimestamp 1755500000\nSubject \"Retained\"\nMessage-Text \"Body\\n\"\nLegacy-Attributes 4096\nMessage-ID \"fidonet#1:104/99 12345678\"\nSignature \"{signature}\"\nEnd\nEnd\n"
+			"TITH-IPC 1\nSubmit\nJob\nApplication \"gateway\"\nIdempotency-Key \"retained\"\nOrigin \"{reply_origin}\"\nLocal-Identity \"{local}\"\nSigned-Origin \"{author}\"\nDestination \"{destination}\"\nTo-User \"Recipient\"\nFrom-User \"Author\"\nTimestamp 1755500000\nSubject \"Retained\"\nMessage-Text \"Body\\n\"\nLegacy-Attributes 4096\nMessage-ID \"fidonet#1:104/99 12345678\"\nSignature \"{signature}\"\nEnd\nEnd\n"
 		);
 		let request = SubmissionRequest::parse(request_text.as_bytes()).unwrap();
 		let unique = SystemTime::now()
@@ -1745,6 +1824,8 @@ mod tests {
 			original_read.signing.signed_region
 		);
 		assert_eq!(retained.signing.signature, original_read.signing.signature);
+		assert_eq!(retained.signing.origin, reply_origin);
+		assert_eq!(retained.signing.signed_origin, Some(author));
 		assert_eq!(retained.vias.last().unwrap().address, local);
 
 		let forged = request_text
@@ -1881,17 +1962,14 @@ mod tests {
 		let engine = SubmissionEngine::new(
 			Arc::clone(&configuration),
 			Arc::clone(&nodelist),
-			[(
-				local.to_string(),
-				LocalSigner {
-					reference: IdentityRef::Address(local.clone()),
-					identity: Identity {
-						address: local.clone(),
-						public_key: local_keys.public,
-					},
-					secret: Arc::new(local_keys.secret),
+			[LocalSigner {
+				reference: IdentityRef::Address(local.clone()),
+				identity: Identity {
+					address: local.clone(),
+					public_key: local_keys.public,
 				},
-			)],
+				secret: Arc::new(local_keys.secret),
+			}],
 		);
 		let request = SubmissionRequest::parse(
 			format!(
@@ -1976,17 +2054,14 @@ mod tests {
 		let engine = SubmissionEngine::new(
 			Arc::clone(&configuration),
 			Arc::new(Nodelist::default()),
-			[(
-				"@local".to_owned(),
-				LocalSigner {
-					reference: IdentityRef::Peer("local".to_owned()),
-					identity: Identity {
-						address: local.clone(),
-						public_key: local_keys.public,
-					},
-					secret: Arc::new(local_keys.secret),
+			[LocalSigner {
+				reference: IdentityRef::Peer("local".to_owned()),
+				identity: Identity {
+					address: local.clone(),
+					public_key: local_keys.public,
 				},
-			)],
+				secret: Arc::new(local_keys.secret),
+			}],
 		);
 
 		let unique = SystemTime::now()

@@ -32,6 +32,15 @@ pub enum IdentityRef {
 	Peer(String),
 }
 
+impl fmt::Display for IdentityRef {
+	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+		match self {
+			Self::Address(address) => address.fmt(f),
+			Self::Peer(name) => write!(f, "@{name}"),
+		}
+	}
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Endpoint {
 	pub server: String,
@@ -1102,6 +1111,18 @@ impl ConfigurationSet {
 #[cfg(test)]
 mod tests {
 	use super::*;
+
+	#[test]
+	fn identity_references_have_one_canonical_local_form() {
+		assert_eq!(
+			IdentityRef::Address("fidonet#1:104/36".parse().unwrap()).to_string(),
+			"fidonet#1:104/36"
+		);
+		assert_eq!(
+			IdentityRef::Peer("anonymous-local".to_owned()).to_string(),
+			"@anonymous-local"
+		);
+	}
 
 	#[test]
 	fn parses_atomic_set_and_defaults() {

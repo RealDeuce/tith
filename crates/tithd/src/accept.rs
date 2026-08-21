@@ -153,7 +153,7 @@ impl Acceptance<'_> {
 		let result = self.store.accept(
 			NewInbound {
 				application: self.application,
-				local_identity: &self.local.address.to_string(),
+				local_identity: &self.local_ref.to_string(),
 				peer: &peer.address.to_string(),
 				peer_key: peer.public_key,
 				received: crate::now(),
@@ -304,10 +304,10 @@ impl Acceptance<'_> {
 				identity: identity.clone(),
 				kind: JobKind::NetMail,
 				target: JobTarget::Destination(destination.address.to_string()),
-				local_identity: self.local.address.to_string(),
+				local_identity: self.local_ref.to_string(),
 				item: relayed.encode(),
 				deliveries: vec![NewDelivery {
-					local_identity: self.local.address.to_string(),
+					local_identity: self.local_ref.to_string(),
 					next_hop: commitment.next_hop.address.to_string(),
 					next_hop_key: commitment
 						.next_hop
@@ -457,6 +457,7 @@ mod tests {
 
 	use tith_crypto::{SigningKeyPair, sign_tlv};
 	use tith_store::{ClaimResult, JobState};
+	use tith_wire::address::Address;
 	use tith_wire::integer::encode_u64;
 	use tith_wire::item::validate_item;
 	use tith_wire::tlv::parse_sequence;
@@ -730,6 +731,40 @@ mod tests {
 		assert_eq!(response.type_code, types::ACCEPTED);
 		assert!(jobs.is_empty(), "a FileRequest is never spooled onward");
 		assert!(stored_inbound(&world), "it is stored for its consumer");
+	}
+
+	#[test]
+	fn inbound_item_records_the_exact_anonymous_local_reference() {
+		let world = world("anonymous-local", "");
+		let request = tith_wire::item::build_file_request("nodediff.zip", None, 1).unwrap();
+		let validated = validate_item(&request, world.resolver()).unwrap().unwrap();
+		let keys = SigningKeyPair::from_seed(&[20; 32]).unwrap();
+		let local = Identity {
+			address: Address::anonymous("p2p".to_owned()).unwrap(),
+			public_key: keys.public,
+		};
+		let local_ref = IdentityRef::Peer("anonymous-local".to_owned());
+		let configuration = configuration(ALLOW);
+		let acceptance = Acceptance {
+			store: &world.store,
+			application: "tosser",
+			configuration: &configuration,
+			nodelist: &world.nodelist,
+			local_ref: &local_ref,
+			local: &local,
+		};
+		let response = acceptance
+			.dispatch(&validated, hash_tlv(b"payload").unwrap(), world.peer())
+			.unwrap();
+		assert_eq!(response.type_code, types::ACCEPTED);
+		let ClaimResult::Completed(claim) = world
+			.store
+			.claim("tosser", "worker", crate::now() + 1, 60)
+			.unwrap()
+		else {
+			panic!("stored item expected");
+		};
+		assert_eq!(claim.record.local_identity, "@anonymous-local");
 	}
 
 	#[test]

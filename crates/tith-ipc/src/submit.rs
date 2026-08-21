@@ -76,7 +76,8 @@ pub enum MessageKind {
 pub struct MessageSubmission {
 	pub kind: MessageKind,
 	pub origin: String,
-	/// The one local identity whose routing configuration and Via apply.
+	/// The independent local identity whose routing state, delivery copies, and
+	/// appended Via apply.
 	pub local_identity: Option<String>,
 	pub signed_origin: Option<String>,
 	/// Present only when a retained Signed-Origin is the anonymous address.

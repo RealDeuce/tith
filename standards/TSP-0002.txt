@@ -3,7 +3,7 @@ TITH                                              THIS ISN'T THAT HARD
 **********************************************************************
 
 Publication:  TSP‑0002
-Revision:     12
+Revision:     13
 Title:        Routing and Distribution Configuration
 Author(s):    Stephen Hurd
 Date:         2026‑08‑21
@@ -159,11 +159,15 @@ Contents
   next hop and collect held traffic by polling.
 
   Where this document requires a local identity, its syntax is a
-  canonical non‐anonymous address or a peer reference naming an anonymous
-  Peer.  The host MUST have the corresponding secret signing key.  For
-  a non‐anonymous address, its public half MUST equal the effective key
-  resolved according to TSP‑0015.  For an anonymous Peer, it MUST equal
-  that Peer's Public-Key.
+  canonical non‐anonymous address or a peer reference naming an
+  anonymous Peer.  The host MUST have the corresponding secret signing
+  key.  For a non‐anonymous address, its public half MUST equal the
+  effective key resolved according to TSP‑0015.  For an anonymous Peer,
+  it MUST equal that Peer's Public-Key.
+
+  Every local identity is distinct.  Controlling more than one does not
+  designate a primary identity or permit their keys, configuration,
+  trust, held work, or delivery state to be shared.
 
 
 4. Selectors
@@ -210,10 +214,10 @@ Contents
 ─────────────────
 
   The routes file contains one or more Routes blocks.  A Routes block
-  begins with "Routes", one separator, and a local identity identifying
-  one local AKA.  There MUST NOT be two Routes blocks for the same
-  local identity.  It contains the Route, relay, and failure directives
-  defined in sections 5 and 6.
+  begins with "Routes", one separator, and one local identity.  There
+  MUST NOT be two Routes blocks for the same local identity.  It
+  contains the Route, relay, and failure directives defined in sections
+  5 and 6.
 
   A Route line has the following form:
 
@@ -248,9 +252,9 @@ Contents
   non‐anonymous Destination it is eligible only when a Peer with the
   same address or the nodelist provides a usable TITH server endpoint.
   That nodelist entry is not Pvt, Hold, or Down, and its caller
-  restrictions permit the local AKA.  In particular, an LO node is not
-  eligible for a direct call from an anonymous AKA.  For an anonymous
-  Destination,
+  restrictions permit the local identity.  In particular, an LO node is
+  not eligible for a direct call from an anonymous identity.  For an
+  anonymous Destination,
   Direct is eligible only when a Peer with the same address and public
   key provides an Endpoint.
 
@@ -506,7 +510,7 @@ Contents
 
   Origin MUST occur exactly once and identify a local identity having
   a Routes block.  A schedule can claim only deliveries having this
-  local AKA.
+  local identity.
 
   Class MAY occur more than once.  The schedule selects deliveries
   having any named class.  If Class does not occur, it selects class
@@ -599,7 +603,7 @@ Contents
   every required NetMail delivery or area distribution copy MUST be
   durably recorded with:
 
-    • its local AKA;
+    • its local identity;
     • its exact next‐hop address and anonymous PublicKey, if any;
     • its delivery class;
     • its retry Timestamp, if any; and
@@ -619,10 +623,10 @@ Contents
   directly to their ultimate Destination, which is also their next hop.
   Copies MAY be
   aggregated with compatible copies from other source Bundles.
-  Compatible copies have the same local AKA and exact next‐hop
+  Compatible copies have the same local identity and exact next‐hop
   identity and are concurrently eligible for the same connection.
   A connection MUST NOT combine delivery copies from different local
-  AKAs.
+  identities.
 
   Route commitment belongs to each delivery copy, not to a particular
   storage container.  An implementation MAY compact or repackage
@@ -641,9 +645,9 @@ Contents
 
   Routing, area, and failure policy changes apply only to delivery
   copies created after the new configuration takes effect.  Existing
-  copies keep their AKA, next hop, anonymous key, class, and resolved
-  policies.  Current schedules determine when their classes run, and
-  current Endpoints determine how their Peer is contacted.  A
+  copies keep their local identity, next hop, anonymous key, class, and
+  resolved policies.  Current schedules determine when their classes
+  run, and current Endpoints determine how their Peer is contacted.  A
   non‐anonymous next hop uses the current trusted key resolved
   according to TSP‑0015.  A configured key cannot override that
   effective key.
@@ -779,7 +783,7 @@ A. References
 
   [TSP‑0005] "Durable Outbound Jobs", TITH, 2026‑08‑21.
 
-  [TSP‑0006] "Outbound Job Submission", TITH, 2026‑08‑20.
+  [TSP‑0006] "Outbound Job Submission", TITH, 2026‑08‑21.
 
   [TSP‑0011] "Durable Inbound Delivery Items", TITH, 2026‑08‑21.
 
@@ -853,5 +857,8 @@ B. History
 
    Rev.12, 2026‑08‑21: Distinguished retirement of an Accepted delivery
    copy from retirement of shared Job contents and Source cleanup.
+
+   Rev.13, 2026‑08‑21: Made every local identity independent and
+   removed any implied primary or alias relationship between them.
 
 **********************************************************************

@@ -5,8 +5,8 @@
 //! the compatible ones, and sends each group in one connection.
 //!
 //! TSP-0002 section 9 sets the grouping rule: compatible copies share the same
-//! local AKA and the same exact next-hop identity, and "A connection MUST NOT
-//! combine delivery copies from different local AKAs". The next-hop identity
+//! local identity and the same exact next-hop identity, and "A connection MUST
+//! NOT combine delivery copies from different local identities". The next-hop identity
 //! includes the anonymous `PublicKey` when there is one, because two anonymous
 //! peers share the address `p2p#-1`.
 
@@ -48,7 +48,7 @@ use crate::framing::read_header;
 /// split across connections instead.
 const MAX_GROUP: usize = 256;
 
-/// A local AKA this node sends as.
+/// One exact local identity this node sends as.
 pub struct LocalIdentity {
 	pub reference: IdentityRef,
 	pub identity: Identity,
@@ -165,7 +165,7 @@ impl Outbound {
 		let Some(local) = self.local_for(&schedule.origin) else {
 			return Ok(summary);
 		};
-		let origin = local.identity.address.to_string();
+		let origin = local.reference.to_string();
 		loop {
 			let group = self.claim_group(schedule, &origin, now)?;
 			if group.is_empty() {
@@ -302,7 +302,7 @@ impl Outbound {
 		destination: &Identity,
 		now: u64,
 	) -> Result<Vec<DeliveryClaim>, StoreError> {
-		let origin = local.identity.address.to_string();
+		let origin = local.reference.to_string();
 		let mut group = Vec::new();
 		while group.len() < MAX_GROUP {
 			let Some(next) = self.store.claim_scheduled(now, |copy| {

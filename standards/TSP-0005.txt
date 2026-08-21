@@ -3,7 +3,7 @@ TITH                                              THIS ISN'T THAT HARD
 **********************************************************************
 
 Publication:  TSP‑0005
-Revision:     8
+Revision:     9
 Title:        Durable Outbound Jobs
 Author(s):    Stephen Hurd
 Date:         2026‑08‑21
@@ -130,7 +130,7 @@ Contents
   Before a Job is committed, it has zero or more TSP‑0002 delivery
   copies.  Every copy is durably recorded with:
 
-    • the selected local signing identity as the local AKA;
+    • the selected local identity;
     • the Job Kind and ultimate Destination or Area;
     • the exact next‐hop address and anonymous PublicKey, if any;
     • Active or Passive delivery mode;
@@ -319,9 +319,9 @@ Contents
   Retry atomically changes every Deferred copy to Queued and clears its
   delivery retry Timestamp.  It may change Failed copies to Queued only
   while immutable contents remain.  Rejected, Delivered, and Cancelled
-  copies remain unchanged.  Retry preserves every local AKA, next hop,
-  mode, Class, WireFilename, failure policy, cleanup obligation, item,
-  and Source.  It is NotPermitted when no copy can be changed.
+  copies remain unchanged.  Retry preserves every local identity, next
+  hop, mode, Class, WireFilename, failure policy, cleanup obligation,
+  item, and Source.  It is NotPermitted when no copy can be changed.
 
   Reroute is the explicit administrative operation permitted by
   TSP‑0002.  It applies only to a NetMail Job.  It is allowed for
@@ -346,7 +346,7 @@ Contents
   An explicit policy applies to both permanent response kinds and
   requires authorization.  Reroute atomically commits the resulting
   exact next hop, mode, and policies before changing the Job to Queued.
-  It preserves JobID, Application, local AKA, ultimate Destination,
+  It preserves JobID, Application, local identity, ultimate Destination,
   Class, item Signature, Sources, WireFilenames, and cleanup
   obligations.
 
@@ -454,16 +454,18 @@ Contents
     [Source-Path <one-based-index> "<local-pathname>"]...
     End
 
-  Local-Identity is the routing AKA recorded with every copy and may
-  differ from the item Origin of a Forward Job.  For an originated item
-  using SignedOrigin, it is that effective signer rather than the reply
-  Origin.  Destination occurs for NetMail, Peer-File, and FileRequest;
-  Area occurs only for EchoMail and File.  A NetMail, Peer-File, or
-  FileRequest Job has exactly one Delivery block.  Other Jobs contain
-  zero or more in stable delivery‐index order.  Zero occurs only for the
-  successful Forward case defined in section 4.
-  The state on a Delivery line is that copy's state, and its Attempts and
-  Last-Result apply only to that copy.
+  Local-Identity is the local routing and transport identity recorded
+  with the Job and every delivery copy.  For a Message it is independent
+  of the effective item signer and may differ for an ordinary, retained,
+  or Forward Job.  It selects the identity used for delivery and Bundle
+  signing, not the identity which produced the end‐to‐end item
+  Signature.  Destination occurs for NetMail, Peer-File, and
+  FileRequest; Area occurs only for EchoMail and File.  A NetMail,
+  Peer-File, or FileRequest Job has exactly one Delivery block.  Other
+  Jobs contain zero or more in stable delivery‐index order.  Zero
+  occurs only for the successful Forward case defined in section 4.
+  The state on a Delivery line is that copy's state, and its Attempts
+  and Last-Result apply only to that copy.
 
   Source lines occur in Attachment order for a locally submitted
   Message.  A locally submitted standalone File of either Kind has
@@ -658,7 +660,7 @@ A. References
 
   [TSP‑0004] "Local IPC Format", TITH, 2026‑08‑17.
 
-  [TSP‑0006] "Outbound Job Submission", TITH, 2026‑08‑20.
+  [TSP‑0006] "Outbound Job Submission", TITH, 2026‑08‑21.
 
   [TSP‑0011] "Durable Inbound Delivery Items", TITH, 2026‑08‑21.
 
@@ -696,5 +698,8 @@ B. History
    Rev.8, 2026‑08‑21: Scoped the every‐copy‐Delivered requirement to
    successful content retirement and Source Delete or Truncate while
    preserving the distinct cancellation, failure, and purge rules.
+
+   Rev.9, 2026‑08‑21: Made the local routing and transport identity
+   independent of a Message's end‐to‐end signer.
 
 **********************************************************************
