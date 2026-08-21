@@ -699,6 +699,10 @@ Contents
   continuity only; it is not revocation of the predecessor or evidence
   that the predecessor was not compromised.
 
+  For a first‑contact reply, the PublicKey in Accepted MUST be identical
+  to the PublicKey immediately following the Reply Bundle's Origin.  A
+  mismatch is a data error.
+
   When a Poll or FileRequest is Accepted, every value returned in
   response to it MUST be in the same SignedTLV as its Accepted value.
   Every such returned value MUST occur before that Accepted value.
