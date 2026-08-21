@@ -3,7 +3,7 @@ TITH                                              THIS ISN'T THAT HARD
 **********************************************************************
 
 Publication:  TSP‑0002
-Revision:     11
+Revision:     12
 Title:        Routing and Distribution Configuration
 Author(s):    Stephen Hurd
 Date:         2026‑08‑21
@@ -631,7 +631,9 @@ Contents
   outside this configuration reload process.
 
   During an exchange, outcomes are applied per Message, File, or
-  FileRequest.  Accepted items are retired.  Permanently Rejected
+  FileRequest.  An Accepted delivery copy becomes Delivered and may be
+  retired as specified in TSP‑0005.  Shared private contents and Source
+  cleanup are governed separately by TSP‑0005.  Permanently Rejected
   items use section 6.  Temporarily Rejected and unacknowledged items
   retain the same route and may be repackaged for retry.  An item with
   a later retry Timestamp MUST NOT block another eligible item for the
@@ -775,6 +777,8 @@ Contents
 A. References
 ─────────────
 
+  [TSP‑0005] "Durable Outbound Jobs", TITH, 2026‑08‑21.
+
   [TSP‑0006] "Outbound Job Submission", TITH, 2026‑08‑20.
 
   [TSP‑0011] "Durable Inbound Delivery Items", TITH, 2026‑08‑21.
@@ -846,5 +850,8 @@ B. History
    Rev.11, 2026‑08‑21: Reduced permanent failure policy to relay denial
    and rejection, made an unmet condition a terminal rejection, and
    assigned reason 3 to retryable temporary refusal.
+
+   Rev.12, 2026‑08‑21: Distinguished retirement of an Accepted delivery
+   copy from retirement of shared Job contents and Source cleanup.
 
 **********************************************************************

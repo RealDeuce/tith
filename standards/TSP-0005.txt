@@ -3,7 +3,7 @@ TITH                                              THIS ISN'T THAT HARD
 **********************************************************************
 
 Publication:  TSP‑0005
-Revision:     7
+Revision:     8
 Title:        Durable Outbound Jobs
 Author(s):    Stephen Hurd
 Date:         2026‑08‑21
@@ -259,9 +259,10 @@ Contents
 ───────────────────────────────────────
 
   A copy's Delivered state and complete Accepted response MUST be
-  durable before that delivery copy is retired.  Every copy MUST be
-  Delivered before private contents are retired or Delete or Truncate
-  cleanup begins.  A cleanup failure does not change Delivered.
+  durable before that delivery copy is retired.  Once every copy is
+  Delivered, the Service MAY retire private contents.  Every copy MUST
+  be Delivered before Delete or Truncate cleanup begins.  A cleanup
+  failure does not change Delivered.
 
   Keep never changes or removes a Source.  Delete removes the verified
   pathname.  Truncate sets the verified regular file length to zero.
@@ -691,5 +692,9 @@ B. History
    Rev.7, 2026‑08‑21: Removed the Authentication failure policy,
    treated an unmet FileRequest condition as terminal rejection, and
    assigned reason 3 to deferred retry.
+
+   Rev.8, 2026‑08‑21: Scoped the every‐copy‐Delivered requirement to
+   successful content retirement and Source Delete or Truncate while
+   preserving the distinct cancellation, failure, and purge rules.
 
 **********************************************************************
