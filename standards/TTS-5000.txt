@@ -3,11 +3,11 @@ TITH                                              THIS ISN'T THAT HARD
 **********************************************************************
 
 Publication:  TTS‑5000
-Revision:     5
+Revision:     6
 Title:        The Distribution Nodelist
 Author(s):    FTSC Members, Administrator, Honoured Guests and
               Stephen Hurd
-Date:         2026‑08‑20
+Date:         2026‑08‑21
 ══════════════════════════════════════════════════════════════════════
 
 Status of this document
@@ -90,11 +90,16 @@ Contents
 
   Unlike most TITH documents, the nodelist standards are not only
   aimed at developers, but also at maintainers of Fidonet (and other
-  Fidonet Technology Networks) nodelist segments.  While nodelist
-  segment maintainers should try to be quite strict in their adherence
-  to this document, it is recommended that software developers be
-  prepared to accept deviations from this standard, especially with
-  regard to field and line size.
+  Fidonet Technology Networks) nodelist segments.  Both producers and
+  consumers MUST use the exact grammar in this document.  A consumer
+  MUST reject a data line which does not conform; compatibility with
+  an FTS‑5000.005 source belongs at an explicit conversion boundary.
+
+  Except where this document specifies a limit, a field or line has no
+  fixed maximum length.  Platform overflow checks, allocation failure,
+  and local resource policy remain valid reasons an implementation may
+  be unable to process a nodelist safely; such a failure does not make
+  otherwise conforming data malformed.
 
   It is assumed you're already familiar with Fidonet structure and
   addressing terminology.
@@ -187,7 +192,7 @@ Contents
 
   Field 1: Keyword
 
-    Type: string;  Length: 1 to 6.
+    Type: string.
 
     The keyword field defines the type of node, and will either be
     empty or contain exactly one of the keywords defined below,
@@ -199,8 +204,10 @@ Contents
     example is the "Point" keyword.  See FTS‑5002.002 for the
     pointlist specification.
 
-    It is recommended that future implementations allow for keywords
-    of unlimited length.
+    A keyword has no independent length limit.  The exact alternatives
+    defined below determine which values are valid in a distribution
+    nodelist.  A private nodelist extension which defines another
+    keyword also defines its meaning and placement in the hierarchy.
 
     Full or Member Nodes — these are the system numbers of individual
     Fidonet members.  See [Policy] for details on Fidonet membership.
@@ -294,7 +301,13 @@ Contents
 
   Field 2: Node number
 
-     Type: integer;  Range: 1 to 32767;  Length: 1 to 5.
+     Type: integer;  Range: 1 to 32767.
+
+     The encoded value is one ASCII digit from U+0031 through U+0039
+     followed by zero or more ASCII digits from U+0030 through U+0039.
+     It contains no sign, whitespace, leading zero, or other code point.
+     The range therefore makes every valid encoding one through five
+     bytes without a separate length restriction.
 
      For member nodes and Hubs (which are treated as member nodes as
      far as addressing goes), this number is the node number, and must
@@ -348,13 +361,14 @@ Contents
 
   Field 6: Phone number (PSTN or ISDN)
 
-     Type: string;  Length: 3 to 29 (theoretically);  Characters:
-     digits and dashes.
+     Type: string;  Encoded length: zero or 3–29 bytes;  Characters:
+     ASCII digits and U+002D HYPHEN-MINUS.
 
-     This field is either empty, or contains two or more numeric
-     subfields separated by dashes (U+2D). The first field is the
-     country code. The rest of the phone number should be formatted
-     according to local practise.
+     This field is either empty, or contains two or more nonempty
+     subfields of ASCII digits separated by one U+002D HYPHEN-MINUS.
+     U+002D is literal syntax.  The first field is the country code.
+     The rest of the phone number should be formatted according to
+     local practise.
 
      The various parts of the phone number may be used to derive cost
      and routing information, as well as what number is to be dialled.
@@ -578,5 +592,9 @@ B. History
    Rev.5, 2026‑08‑20: Distinguished publication in a nodelist from
    observer‐relative listing and identified IIH as the external trust
    anchor used by TSP‑0015 effective key resolution.
+
+   Rev.6, 2026‑08‑21: Made the empty Keyword and Phone alternatives
+   consistent with their field grammars, made the Phone length limit
+   exact, and defined the canonical Node number text encoding.
 
 **********************************************************************

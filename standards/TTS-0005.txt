@@ -770,7 +770,7 @@ A. References
 
   [TTS‑0007] "Signed Integer Encoding", TITH, 2026‑08‑16.
 
-  [TTS‑5000] "The Distribution Nodelist", TITH, 2026‑08‑20.
+  [TTS‑5000] "The Distribution Nodelist", TITH, 2026‑08‑21.
 
 
 B. History

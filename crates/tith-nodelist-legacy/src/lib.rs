@@ -68,6 +68,9 @@ pub enum Warning {
 	/// The node number was absent or outside the range TTS-5000 permits. The
 	/// line is not converted.
 	InvalidNodeNumber { line: usize, value: String },
+	/// The normalized phone number did not have the TTS-5000 field 6 grammar.
+	/// The line is not converted.
+	InvalidPhone { line: usize, value: String },
 	/// A member node appeared before any Zone line, so it has no address.
 	MissingZone { line: usize },
 	/// No table in `flags` matched, so the flag went to TTS-5000 field 11.
@@ -86,6 +89,9 @@ impl fmt::Display for Warning {
 			}
 			Self::InvalidNodeNumber { line, value } => {
 				write!(f, "line {line}: invalid node number \"{value}\", skipping")
+			}
+			Self::InvalidPhone { line, value } => {
+				write!(f, "line {line}: invalid phone number \"{value}\", skipping")
 			}
 			Self::MissingZone { line } => {
 				write!(f, "line {line}: member node before any Zone, skipping")
@@ -238,6 +244,20 @@ fn parse_node_number(value: &str) -> Option<i32> {
 	}
 	let number: i32 = value.parse().ok()?;
 	(1..=32_767).contains(&number).then_some(number)
+}
+
+fn valid_phone(value: &str) -> bool {
+	if value.is_empty() {
+		return true;
+	}
+	if !(3..=29).contains(&value.len()) {
+		return false;
+	}
+	let pieces: Vec<_> = value.split('-').collect();
+	pieces.len() >= 2
+		&& pieces
+			.iter()
+			.all(|piece| !piece.is_empty() && piece.bytes().all(|byte| byte.is_ascii_digit()))
 }
 
 /// Tracks the branch so an override can be matched to a data line.
@@ -397,6 +417,13 @@ pub fn convert(
 		} else {
 			field(5)
 		};
+		if !valid_phone(phone) {
+			warn(Warning::InvalidPhone {
+				line,
+				value: field(5).to_owned(),
+			});
+			continue;
+		}
 		// Field 6 is the FTS-5000.005 DCE speed, which TTS-5000 does not carry.
 
 		let mut buckets = Buckets::default();
@@ -503,6 +530,38 @@ mod tests {
 		let fields: Vec<_> = output.trim_end().split('\t').collect();
 		assert_eq!(fields[5], "1-800-555-0100");
 		assert_eq!(fields[6], "CM");
+	}
+
+	#[test]
+	fn node_numbers_use_the_canonical_tts_spelling() {
+		for value in ["1", "9", "10", "32767"] {
+			assert!(parse_node_number(value).is_some(), "{value}");
+		}
+		for value in ["", "0", "00", "01", "+1", " 1", "1 ", "32768"] {
+			assert!(parse_node_number(value).is_none(), "{value}");
+		}
+	}
+
+	#[test]
+	fn refuses_a_source_phone_which_cannot_become_tts_5000() {
+		let longest = format!("1-{}", "2".repeat(27));
+		let too_long = format!("1-{}", "2".repeat(28));
+		let (output, warnings) = convert_ok(&format!("Zone,1,N,L,S,{longest},300,CM\r\n"));
+		assert_eq!(output.trim_end().split('\t').nth(5), Some(longest.as_str()));
+		assert!(warnings.is_empty());
+
+		for phone in [too_long.as_str(), "1--2"] {
+			let (output, warnings) = convert_ok(&format!("Zone,1,N,L,S,{phone},300,CM\r\n"));
+			assert!(output.is_empty(), "{phone}");
+			assert_eq!(
+				warnings,
+				vec![Warning::InvalidPhone {
+					line: 1,
+					value: phone.to_owned(),
+				}],
+				"{phone}"
+			);
+		}
 	}
 
 	#[test]

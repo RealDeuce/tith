@@ -291,7 +291,7 @@ A. References
 
   [TTS‑0005] "Bundle Format", TITH, 2026‑08‑21.
 
-  [TTS‑5000] "The Distribution Nodelist", TITH, 2026‑08‑20.
+  [TTS‑5000] "The Distribution Nodelist", TITH, 2026‑08‑21.
 
   [TRD‑0003] "A Nodelist‐Free Peer Network", TITH, 2026‑08‑20.
 

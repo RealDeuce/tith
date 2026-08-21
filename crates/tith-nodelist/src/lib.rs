@@ -288,6 +288,9 @@ fn validate_phone(phone: &str) -> bool {
 	if phone.is_empty() {
 		return true;
 	}
+	if !(3..=29).contains(&phone.len()) {
+		return false;
+	}
 	let pieces: Vec<_> = phone.split('-').collect();
 	pieces.len() >= 2
 		&& pieces
@@ -575,6 +578,28 @@ mod tests {
 				..
 			})
 		));
+	}
+
+	#[test]
+	fn node_numbers_use_the_canonical_decimal_spelling() {
+		for value in ["1", "9", "10", "32767"] {
+			assert!(parse_node_number(value).is_some(), "{value}");
+		}
+		for value in ["", "0", "00", "01", "+1", " 1", "1 ", "32768", "１"] {
+			assert!(parse_node_number(value).is_none(), "{value}");
+		}
+	}
+
+	#[test]
+	fn phone_numbers_have_the_documented_grammar_and_bound() {
+		let longest = format!("1-{}", "2".repeat(27));
+		let too_long = format!("1-{}", "2".repeat(28));
+		for value in ["", "1-1", "1-800-555-0100", &longest] {
+			assert!(validate_phone(value), "{value}");
+		}
+		for value in ["1", "-1", "1-", "1--2", "1 2", "1-٢", &too_long] {
+			assert!(!validate_phone(value), "{value}");
+		}
 	}
 
 	#[test]
