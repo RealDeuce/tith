@@ -3,10 +3,10 @@ TITH                                              THIS ISN'T THAT HARD
 **********************************************************************
 
 Publication:  TSP‑0003
-Revision:     8
+Revision:     9
 Title:        Legacy Data Formats and TITH
 Author(s):    Stephen Hurd
-Date:         2026‑08‑20
+Date:         2026‑08‑21
 ════════════════════════════════════════════════════════════════════════
 
 Status of this document
@@ -1388,12 +1388,15 @@ Contents
   Delivering an Unsigned or SignedOrigin-Valid item with a NOTICE tells
   the reader that Origin did not authenticate the text.  Delivering an
   Origin-Invalid or SignedOrigin-Invalid item with an ERROR tells the
-  reader that the received bytes are known not to match the selected
-  signer's authenticated bytes.  The diagnostic is local presentation,
-  not legacy author text.  If it is inserted into an ordinary stored
-  body, it can be quoted, mistaken for content, or destroy a later
-  byte‐exact reconstruction.  The adapter therefore retains the exact
-  native source separately and never prefixes File Contents.
+  reader only that Signature did not verify over the exact received
+  signed bytes under the effective key selected for Origin or
+  SignedOrigin respectively.  That result does not establish why
+  verification failed or that the item was modified in transit.  The
+  diagnostic is local presentation, not legacy author text.  If it is
+  inserted into an ordinary stored body, it can be quoted, mistaken for
+  content, or destroy a later byte‐exact reconstruction.  The adapter
+  therefore retains the exact native source separately and never
+  prefixes File Contents.
 
   An automatic reply to Origin is potentially dangerous.  Unsigned
   Origin is unverified, and a valid SignedOrigin authenticates only the
@@ -1501,7 +1504,7 @@ A. References
   [TSP‑0013] "Legacy Mailer and Tosser IPC Adapters", TITH,
   2026‑08‑20.
 
-  [TSP‑0011] "Durable Inbound Delivery Items", TITH, 2026‑08‑20.
+  [TSP‑0011] "Durable Inbound Delivery Items", TITH, 2026‑08‑21.
 
   [TTS‑0002] "Type Length Value Encoding", TITH, 2026‑08‑16.
 
@@ -1553,5 +1556,9 @@ B. History
    Rev.8, 2026‑08‑20: Distinguished anonymous address grammar from
    listing status and applied the shared effective Origin key to legacy
    import and retained signature reconstruction.
+
+   Rev.9, 2026‑08‑21: Defined invalid final authentication as signature
+   verification failure under the selected effective key without
+   inferring modification in transit.
 
 **********************************************************************

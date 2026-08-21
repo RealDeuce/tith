@@ -69,8 +69,11 @@ pub const fn diagnostic(authentication: ItemAuthentication) -> Option<&'static s
 		ItemAuthentication::SignedOriginValid => {
 			"NOTICE: This message was not signed by its Origin.  Its\nintermediate gateway signature was valid."
 		}
-		ItemAuthentication::SignedOriginInvalid | ItemAuthentication::OriginInvalid => {
-			"ERROR: This signed message or its signature was modified in\ntransit.  It does not match the bytes authenticated by its signer."
+		ItemAuthentication::SignedOriginInvalid => {
+			"ERROR: This message's intermediate gateway signature does not verify\nunder the public key selected for that gateway."
+		}
+		ItemAuthentication::OriginInvalid => {
+			"ERROR: This message's signature does not verify under the public key\nselected for its claimed Origin."
 		}
 		ItemAuthentication::OriginValid | ItemAuthentication::Transport => return None,
 	})
@@ -169,12 +172,27 @@ mod tests {
 				.starts_with("NOTICE:")
 		);
 		assert!(
-			diagnostic(ItemAuthentication::OriginInvalid)
-				.unwrap()
-				.starts_with("ERROR:")
+			diagnostic(ItemAuthentication::OriginInvalid).is_some(),
+			"Origin-Invalid has a diagnostic"
 		);
 		assert_eq!(diagnostic(ItemAuthentication::OriginValid), None);
 		assert_eq!(diagnostic(ItemAuthentication::Transport), None);
+	}
+
+	#[test]
+	fn invalid_states_have_signer_specific_verification_diagnostics() {
+		assert_eq!(
+			diagnostic(ItemAuthentication::SignedOriginInvalid),
+			Some(
+				"ERROR: This message's intermediate gateway signature does not verify\nunder the public key selected for that gateway."
+			)
+		);
+		assert_eq!(
+			diagnostic(ItemAuthentication::OriginInvalid),
+			Some(
+				"ERROR: This message's signature does not verify under the public key\nselected for its claimed Origin."
+			)
+		);
 	}
 
 	#[test]

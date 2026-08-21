@@ -1219,7 +1219,7 @@ A. References
   [TSP‑0002] "Routing and Distribution Configuration", TITH,
   2026‑08‑21.
 
-  [TSP‑0003] "Legacy Data Formats and TITH", TITH, 2026‑08‑20.
+  [TSP‑0003] "Legacy Data Formats and TITH", TITH, 2026‑08‑21.
 
   [TSP‑0004] "Local IPC Format", TITH, 2026‑08‑17.
 
@@ -1233,7 +1233,7 @@ A. References
 
   [TSP‑0010] "Windows Named‐Pipe IPC Binding", TITH, 2026‑08‑17.
 
-  [TSP‑0011] "Durable Inbound Delivery Items", TITH, 2026‑08‑20.
+  [TSP‑0011] "Durable Inbound Delivery Items", TITH, 2026‑08‑21.
 
   [TSP‑0012] "Tosser Consumption IPC", TITH, 2026‑08‑18.
 

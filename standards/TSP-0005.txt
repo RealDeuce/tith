@@ -659,7 +659,7 @@ A. References
 
   [TSP‑0006] "Outbound Job Submission", TITH, 2026‑08‑20.
 
-  [TSP‑0011] "Durable Inbound Delivery Items", TITH, 2026‑08‑20.
+  [TSP‑0011] "Durable Inbound Delivery Items", TITH, 2026‑08‑21.
 
   [TTS‑0003] "Common TLV Types", TITH, 2026‑08‑20.
 

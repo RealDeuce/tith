@@ -558,9 +558,9 @@ A. References
   [RFC‑4648] "The Base16, Base32, and Base64 Data Encodings", IETF,
   2006‑10.
 
-  [TSP‑0003] "Legacy Data Formats and TITH", TITH, 2026‑08‑20.
+  [TSP‑0003] "Legacy Data Formats and TITH", TITH, 2026‑08‑21.
 
-  [TSP‑0011] "Durable Inbound Delivery Items", TITH, 2026‑08‑20.
+  [TSP‑0011] "Durable Inbound Delivery Items", TITH, 2026‑08‑21.
 
   [TSP‑0015] "Public Key Trust and Continuity", TITH, 2026‑08‑20.
 

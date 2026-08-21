@@ -29,8 +29,12 @@ pub enum ItemKind {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ItemAuthentication {
 	Unsigned,
+	/// The signature did not verify under the effective key selected for
+	/// `SignedOrigin`. This result establishes no cause for the failure.
 	SignedOriginInvalid,
 	SignedOriginValid,
+	/// The signature did not verify under the effective key selected for
+	/// `Origin`. This result establishes no cause for the failure.
 	OriginInvalid,
 	OriginValid,
 	Transport,

@@ -3,10 +3,10 @@ TITH                                              THIS ISN'T THAT HARD
 **********************************************************************
 
 Publication:  TSP‑0011
-Revision:     5
+Revision:     6
 Title:        Durable Inbound Delivery Items
 Author(s):    Stephen Hurd
-Date:         2026‑08‑20
+Date:         2026‑08‑21
 ══════════════════════════════════════════════════════════════════════
 
 Status of this document
@@ -116,11 +116,16 @@ Contents
     Origin-Invalid
     Origin-Valid
 
-  Unsigned means the item has no end‐to‐end Signature.  The other four
-  values identify whether Origin or SignedOrigin supplied the
-  applicable key and whether Signature verified.  The value is
-  Transport for a FileRequest, which has no independent item Signature
-  by design.
+  Unsigned means the item has no end‐to‐end Signature.  Origin-Valid and
+  Origin-Invalid mean Origin was the effective signer and Signature
+  respectively did or did not verify over the exact received signed
+  bytes under its effective key.  SignedOrigin-Valid and
+  SignedOrigin-Invalid have the same meanings when SignedOrigin was the
+  effective signer.  A verification failure establishes no cause: it
+  does not establish that the Signature was ever valid, that another
+  byte sequence was authenticated, or that the item or Signature was
+  modified in transit.  The value is Transport for a FileRequest, which
+  has no independent item Signature by design.
 
   None of these values reports Bundle authentication.  Before an item
   reaches this record, its enclosing payload SignedTLV has been
@@ -324,14 +329,16 @@ Contents
     NOTICE: This message was not signed by its Origin.  Its
     intermediate gateway signature was valid.
 
-  SignedOrigin-Invalid and Origin-Invalid use an ERROR.  In both cases
-  the received bytes are known not to match the bytes authenticated by
-  the selected signer.  For Origin-Invalid, this specifically means the
-  item is known not to be what the Origin author signed.  A suitable
-  diagnostic is:
+  SignedOrigin-Invalid and Origin-Invalid use an ERROR.  Each reports
+  only the applicable verification failure defined in section 2; it
+  does not diagnose how that failure arose.  Suitable diagnostics are
+  respectively:
 
-    ERROR: This signed message or its signature was modified in
-    transit.  It does not match the bytes authenticated by its signer.
+    ERROR: This message's intermediate gateway signature does not verify
+    under the public key selected for that gateway.
+
+    ERROR: This message's signature does not verify under the public key
+    selected for its claimed Origin.
 
   A Message diagnostic is prepended to the local user presentation,
   followed by an empty line before MessageText.  It MUST NOT alter the
@@ -469,7 +476,7 @@ A. References
   [TSP‑0002] "Routing and Distribution Configuration", TITH,
   2026‑08‑21.
 
-  [TSP‑0003] "Legacy Data Formats and TITH", TITH, 2026‑08‑20.
+  [TSP‑0003] "Legacy Data Formats and TITH", TITH, 2026‑08‑21.
 
   [TSP‑0004] "Local IPC Format", TITH, 2026‑08‑17.
 
@@ -514,5 +521,9 @@ B. History
 
    Rev.5, 2026‑08‑20: Distinguished anonymous address grammar from
    listing status and recorded the exact effective transport key.
+
+   Rev.6, 2026‑08‑21: Defined invalid item authentication as signature
+   verification failure under the applicable effective key and removed
+   unsupported claims that failure proves modification in transit.
 
 **********************************************************************
