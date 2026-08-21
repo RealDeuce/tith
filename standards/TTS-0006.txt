@@ -181,11 +181,11 @@ Contents
   a later value.
 
   The first SignedTLV in a Bundle is its Header SignedTLV.  If it
-  cannot be authenticated, or its SignedData does not contain exactly
-  a Destination, the conditionally required PublicKey specified by
-  TTS‑0005, and a Timestamp, the receiver MUST close the connection.
-  The unauthenticated request handling below does not apply to a
-  Header SignedTLV.
+  cannot be authenticated, or, ignoring permitted unknown values, its
+  SignedData does not contain exactly one Destination, the conditionally
+  required PublicKey specified by TTS‑0005, and exactly one Timestamp,
+  the receiver MUST close the connection.  The unauthenticated request
+  handling below does not apply to a Header SignedTLV.
 
   After authenticating the Header SignedTLV, the receiver MUST verify
   that its Destination identifies the receiver.  An anonymous address

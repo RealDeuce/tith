@@ -125,8 +125,9 @@ Contents
 
   The Bundle identities and Message identities need not be the same.
   When a Message is forwarded, a new Bundle names the next pair of
-  immediate peers while the enclosed Message is copied byte for byte
-  as required by TTS‑0005.
+  immediate peers while the enclosed Message retains its signed region
+  and Signature byte for byte as required by TTS‑0005.  Its permitted
+  unsigned routing suffix is rebuilt for that hop.
 
 
 5. Message Forwarding

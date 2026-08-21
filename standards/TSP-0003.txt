@@ -407,11 +407,12 @@ Contents
   filename and plus time.  RequestIdentifier is generated on import and
   has no REQ token.  A REQ password and minus time have no TITH field.
 
-  Accepted, Rejected, PollMessages, PollFiles, and PollFileRequests
-  have no stored Message, packed Message, Type‑2+ packet, REQ, or TIC
-  representation.  RequestIdentifier and TLVHash likewise have no
-  independent legacy representation.  A legacy session's silence or
-  returned file is not an exact Accepted or Rejected value.
+  Accepted, Rejected, PollMessages, PollFiles, PollFileRequests, and
+  PublicKeyRequest have no stored Message, packed Message, Type‑2+
+  packet, REQ, or TIC representation.  RequestIdentifier and TLVHash
+  likewise have no independent legacy representation.  A legacy
+  session's silence or returned file is not an exact Accepted or
+  Rejected value.
 
   Bark, WaZOO session negotiation, SRIF, Binkley‐style outbound, and
   session polling are carriage or local‐interface concerns.  TSP‑0013
