@@ -140,11 +140,17 @@ Contents
   Replies may continue to go back and forth until a Reply Bundle is
   sent that does not have a FileRequest or Poll value in it.  If the
   Server sends this Bundle, it SHOULD try to wait for the Client to
-  initiate the close.  If the Client sends this Bundle, it SHOULD
-  send a FIN as described above.  If the Client receives this Bundle,
-  it SHOULD ensure that a FIN is sent and not a RST.  Since this is the
-  standard behaviour, simply calling close() on the socket should do
-  this.
+  initiate the close.  Receipt of this Bundle does not omit the Client
+  Reply Bundle described in the first paragraph when that paragraph
+  calls for one.  The Client sends that Reply Bundle before closing its
+  write side.
+
+  If the Client sends a Bundle without a FileRequest or Poll value, it
+  SHOULD send a FIN as described above after the complete Bundle.  The
+  FIN closes only the Client's write side.  The Client continues reading
+  until every response it expects for that Bundle has been completely
+  received and authenticated, then closes the connection.  It does not
+  use a Server FIN to determine that those responses are complete.
 
   A PublicKeyRequest uses a connection of its own.  The Client MUST
   send a Bundle containing only the dedicated request grammar in
