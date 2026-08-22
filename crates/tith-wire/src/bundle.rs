@@ -9,6 +9,7 @@ use tith_crypto::{
 };
 
 use crate::address::{Address, AddressError};
+pub use crate::identity::Identity;
 use crate::integer::{IntegerError, decode_u64, encode_u64};
 use crate::tlv::{FramingError, OwnedTlv, parse_sequence};
 use crate::types;
@@ -72,12 +73,6 @@ impl From<CryptoError> for BundleError {
 	fn from(value: CryptoError) -> Self {
 		Self::Crypto(value)
 	}
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct Identity {
-	pub address: Address,
-	pub public_key: PublicKey,
 }
 
 pub trait KeyResolver {

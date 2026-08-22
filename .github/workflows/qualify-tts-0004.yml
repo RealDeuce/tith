@@ -6,6 +6,7 @@ on:
       - "crates/tith-wire/src/address.rs"
       - "crates/tith-wire/src/item.rs"
       - "crates/tith-wire/src/bundle.rs"
+      - "crates/tith-wire/src/identity.rs"
       - "crates/tith-crypto/src/lib.rs"
       - "qualification/check_source_coverage.py"
       - ".github/workflows/qualify-tts-0004.yml"
@@ -43,4 +44,5 @@ jobs:
           sha256sum tts-0004-coverage.json
           python3 qualification/check_source_coverage.py \
             tts-0004-coverage.json \
-            crates/tith-wire/src/address.rs
+            crates/tith-wire/src/address.rs \
+            crates/tith-wire/src/identity.rs
