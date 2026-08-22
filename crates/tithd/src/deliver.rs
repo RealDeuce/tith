@@ -941,7 +941,13 @@ impl io::Write for StreamIo {
 
 impl ExchangeIo for StreamIo {
 	fn shutdown_write(&mut self) -> io::Result<()> {
-		self.0.shutdown(Shutdown::Write)
+		match self.0.shutdown(Shutdown::Write) {
+			// The peer may close immediately after reading the final complete
+			// Bundle.  At this binding boundary that already-completed close is
+			// equivalent to completing our own write-side shutdown.
+			Err(error) if error.kind() == io::ErrorKind::NotConnected => Ok(()),
+			result => result,
+		}
 	}
 }
 
