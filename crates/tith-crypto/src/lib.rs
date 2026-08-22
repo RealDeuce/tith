@@ -12,7 +12,10 @@ use std::sync::OnceLock;
 
 use libhydrogen_sys as hydro;
 
-pub const PUBLIC_KEY_BYTES: usize = hydro::hydro_sign_PUBLICKEYBYTES as usize;
+mod public_key;
+
+pub use public_key::{PUBLIC_KEY_BYTES, PublicKey};
+
 pub const SECRET_KEY_BYTES: usize = hydro::hydro_sign_SECRETKEYBYTES as usize;
 pub const SIGNATURE_BYTES: usize = hydro::hydro_sign_BYTES as usize;
 pub const HASH_BYTES: usize = hydro::hydro_hash_BYTES as usize;
@@ -62,27 +65,6 @@ fn initialize() -> Result<(), CryptoError> {
 		Ok(())
 	} else {
 		Err(CryptoError::Initialization)
-	}
-}
-
-#[derive(Clone, Copy, Eq, Hash, PartialEq)]
-pub struct PublicKey([u8; PUBLIC_KEY_BYTES]);
-
-impl PublicKey {
-	#[must_use]
-	pub const fn from_bytes(bytes: [u8; PUBLIC_KEY_BYTES]) -> Self {
-		Self(bytes)
-	}
-
-	#[must_use]
-	pub const fn as_bytes(&self) -> &[u8; PUBLIC_KEY_BYTES] {
-		&self.0
-	}
-}
-
-impl fmt::Debug for PublicKey {
-	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-		f.debug_tuple("PublicKey").field(&self.0).finish()
 	}
 }
 
@@ -167,7 +149,7 @@ impl SigningKeyPair {
 		// SAFETY: hydro_sign_keygen initialized the value.
 		let raw = unsafe { raw.assume_init() };
 		Ok(Self {
-			public: PublicKey(raw.pk),
+			public: PublicKey::from_bytes(raw.pk),
 			secret: SecretKey(raw.sk),
 		})
 	}
@@ -181,7 +163,7 @@ impl SigningKeyPair {
 		// SAFETY: hydro_sign_keygen_deterministic initialized the value.
 		let raw = unsafe { raw.assume_init() };
 		Ok(Self {
-			public: PublicKey(raw.pk),
+			public: PublicKey::from_bytes(raw.pk),
 			secret: SecretKey(raw.sk),
 		})
 	}
@@ -244,7 +226,11 @@ impl TlvSigner {
 	) -> Result<bool, CryptoError> {
 		// SAFETY: all pointers describe correctly sized live values.
 		let result = unsafe {
-			hydro::hydro_sign_final_verify(&mut self.state, signature.0.as_ptr(), public.0.as_ptr())
+			hydro::hydro_sign_final_verify(
+				&mut self.state,
+				signature.0.as_ptr(),
+				public.as_bytes().as_ptr(),
+			)
 		};
 		Ok(result == 0)
 	}
