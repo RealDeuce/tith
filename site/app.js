@@ -4,6 +4,7 @@
   const groupInfo = {
     TTS: { id: "tts", title: "TITH Technical Standards" },
     TSP: { id: "tsp", title: "TITH Standards Proposals" },
+    TPS: { id: "tps", title: "TITH Process Specifications" },
     TRD: { id: "trd", title: "TITH Reference Documents" }
   };
 
@@ -76,7 +77,7 @@
     });
 
     groupsNode.replaceChildren();
-    for (const type of ["TTS", "TSP", "TRD"]) {
+    for (const type of ["TTS", "TSP", "TPS", "TRD"]) {
       const documents = matches.filter((document) => document.type === type);
       if (documents.length > 0) {
         groupsNode.append(renderTable(type, documents));
@@ -114,7 +115,7 @@
         totals[document.type] = (totals[document.type] || 0) + 1;
         return totals;
       }, {});
-      statsNode.textContent = `${counts.TTS || 0} standards · ${counts.TSP || 0} proposals · ${counts.TRD || 0} references`;
+      statsNode.textContent = `${counts.TTS || 0} standards · ${counts.TSP || 0} proposals · ${counts.TPS || 0} process specifications · ${counts.TRD || 0} references`;
       const shortCommit = data.sourceCommit.slice(0, 8);
       buildNode.textContent = `Standards last changed ${formatDate(data.standardsUpdatedAt)} · source ${shortCommit}`;
       render();

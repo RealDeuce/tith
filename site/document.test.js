@@ -43,11 +43,19 @@ const archive = {
       revision: "3",
       title: "Bundle Format",
       date: "2026-08-17"
+    },
+    {
+      filename: "TPS-0001.txt",
+      publication: "TPS-0001",
+      revision: "1",
+      title: "TITH Standards Process",
+      date: "2026-08-22"
     }
   ]
 };
 const source = [
   "See TTS‑0002.",
+  "See TPS‑0001.",
   "See [FTA‑1006.002].",
   "See [FTS‑5000.005].",
   "See [FSP‑1016.003].",
@@ -85,6 +93,7 @@ test("links local, FTSC, and URL references in document text", async () => {
     .map((link) => link.href);
   assert.deepEqual(targets, [
     "document.html?name=TTS-0002.txt",
+    "document.html?name=TPS-0001.txt",
     "http://ftsc.org/docs/fta-1006.002",
     "http://ftsc.org/docs/fts-5000.005",
     "http://ftsc.org/docs/old/fsp-1016.003",

@@ -378,8 +378,12 @@ lengths and outstanding-response accounting cannot resolve.
 - `poc/tith-nodelist.c` is the reusable nodelist parser;
   `poc/nodelist.c` is the conversion utility.
 - `poc/tith-bundle.c` is an incomplete outbound scanner and bundler.
-- `standards/TTS-*.txt` are normative standards, `standards/TSP-*.txt` are
-  proposals, and `standards/TRD-*.txt` is supplemental background.
+- `standards/TTS-*.txt` are normative technical standards,
+  `standards/TSP-*.txt` are technical proposals, `standards/TPS-*.txt` are
+  normative process specifications, and `standards/TRD-*.txt` is
+  supplemental background. `qualification/` contains the version-controlled
+  evidence records required by TPS-0001; project fields and transient CI
+  artifacts are not substitutes for those records.
 - `poc/hydro/` is vendored libhydrogen.  Avoid modifying it for TITH-specific
   behaviour.
 
@@ -455,6 +459,11 @@ type assignments.
   optional dialects into native TITH.
 - TSP documents may retain an informal and opinionated rationale, but any
   proposed wire or file syntax still needs deterministic parsing rules.
+- Follow TPS-0001 for technical qualification, promotion, normative TTS
+  revisions, supersession, withdrawal, and qualified repository tags. Existing
+  pre-TPS TTS documents may be corrected until their first qualification;
+  after qualification, do not publish a normative revision without its
+  complete qualification record.
 
 ## Build and Validation
 

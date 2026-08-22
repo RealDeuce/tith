@@ -79,6 +79,14 @@ global.fetch = async () => ({
         revision: "1",
         title: "FidoNet Technology Network Basics",
         date: "2026-08-16"
+      },
+      {
+        filename: "TPS-0001.txt",
+        type: "TPS",
+        publication: "TPS-0001",
+        revision: "1",
+        title: "TITH Standards Process",
+        date: "2026-08-22"
       }
     ]
   })
@@ -90,11 +98,11 @@ test("renders document tables from the generated archive", async () => {
   await new Promise((resolve) => setImmediate(resolve));
   await new Promise((resolve) => setImmediate(resolve));
 
-  assert.equal(nodes["#document-groups"].children.length, 3);
-  assert.equal(nodes["#search-count"].textContent, "3 documents");
+  assert.equal(nodes["#document-groups"].children.length, 4);
+  assert.equal(nodes["#search-count"].textContent, "4 documents");
   assert.equal(
     nodes["#archive-stats"].textContent,
-    "1 standards · 1 proposals · 1 references"
+    "1 standards · 1 proposals · 1 process specifications · 1 references"
   );
   assert.equal(nodes["#document-search"].disabled, false);
   const firstGroup = nodes["#document-groups"].children[0];

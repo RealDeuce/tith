@@ -49,7 +49,7 @@ def document_metadata(path: Path) -> dict[str, str]:
 
     publication = metadata["publication"].translate(DISPLAY_HYPHENS)
     document_type = path.name.split("-", 1)[0]
-    if document_type not in {"TTS", "TSP", "TRD"}:
+    if document_type not in {"TTS", "TSP", "TPS", "TRD"}:
         raise ValueError(f"{path}: unsupported document type {document_type!r}")
 
     return {

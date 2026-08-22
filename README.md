@@ -22,11 +22,17 @@ into the native protocol.
 - Follow implementation work in the [issue tracker](https://github.com/RealDeuce/tith/issues).
 - Explore the Rust reference implementation under [`crates/`](crates/).
 
-TITH documents use three publication classes:
+TITH documents use four publication classes:
 
 - **TTS** — accepted TITH Technical Standards.
 - **TSP** — Standards Proposals still subject to change.
+- **TPS** — Process Specifications governing publication and maintenance.
 - **TRD** — Reference Documents providing rationale and background.
+
+TPS-0001 defines the qualification evidence required to promote a TSP or
+publish a normative TTS revision. Qualification records live under
+[`qualification/`](qualification/); project-board state is tracking metadata,
+not qualification evidence.
 
 ## Design principles
 
@@ -764,6 +770,8 @@ deferred forever.
 
 - [`standards/`](standards/) contains the versioned normative and supporting
   documents.
+- [`qualification/`](qualification/) contains TPS-0001 qualification records
+  and their working template.
 - [`crates/`](crates/) contains the Rust reference implementation.
 - [`site/`](site/) builds the standards archive deployed by GitHub Pages.
 - [`poc/`](poc/) contains the original C experiment for historical reference.

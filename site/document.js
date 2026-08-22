@@ -6,8 +6,8 @@
   const metaNode = document.querySelector("#document-meta");
   const textNode = document.querySelector("#document-text");
   const rawLink = document.querySelector("#raw-link");
-  const tokenPattern = /https?:\/\/[^\s<>"']+|(?:TTS|TSP|TRD|FTA|FTS|FSP|FSC)[\-‐‑‒–]\d{4}(?:\.\d{3})?/gu;
-  const identifierPattern = /^(TTS|TSP|TRD|FTA|FTS|FSP|FSC)[\-‐‑‒–](\d{4})(?:\.(\d{3}))?$/u;
+  const tokenPattern = /https?:\/\/[^\s<>"']+|(?:TTS|TSP|TPS|TRD|FTA|FTS|FSP|FSC)[\-‐‑‒–]\d{4}(?:\.\d{3})?/gu;
+  const identifierPattern = /^(TTS|TSP|TPS|TRD|FTA|FTS|FSP|FSC)[\-‐‑‒–](\d{4})(?:\.(\d{3}))?$/u;
 
   function normalizedIdentifier(value) {
     return value.replace(/[‐‑‒–]/gu, "-");

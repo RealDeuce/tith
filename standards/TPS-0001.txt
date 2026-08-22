@@ -1,0 +1,442 @@
+**********************************************************************
+TITH                                              THIS ISN'T THAT HARD
+**********************************************************************
+
+Publication:  TPS‑0001
+Revision:     1
+Title:        TITH Standards Process
+Author(s):    Stephen Hurd
+Date:         2026‑08‑22
+══════════════════════════════════════════════════════════════════════
+
+Status of this document
+───────────────────────
+
+  This document is a TITH Process Specification (TPS) — it defines
+  binding requirements for the publication and maintenance of TITH
+  documents.  It does not define technical requirements for conforming
+  TITH implementations.
+
+  This document is released to the public domain, and may be used,
+  copied or modified for any purpose whatever.
+
+Abstract
+────────
+
+  This document defines the TITH document classes and the requirements
+  for developing, qualifying, promoting, revising, superseding, and
+  withdrawing them.
+
+Contents
+────────
+
+  1.  Introduction
+  2.  Terminology
+  3.  Document Classes and Publication
+  4.  Developing a Proposal
+  5.  Qualification Records
+  6.  Technical Qualification
+  7.  Promotion
+  8.  Existing Standards and Later Revisions
+  9.  Supersession and Withdrawal
+  10. Process Specification Revisions
+  11. Qualified Repository Baselines
+
+  A. References
+  B. History
+
+══════════════════════════════════════════════════════════════════════
+
+
+1. Introduction
+───────────────
+
+  A technical specification is not ready merely because its text looks
+  complete.  A conforming implementation must be able to implement the
+  whole specification, its tests must demonstrate every requirement,
+  and its normative dependencies must form a usable foundation.
+
+  This process separates experimental technical proposals from accepted
+  technical standards and separates both from the rules used to publish
+  them.  It also records enough evidence that a later reviewer can
+  determine exactly what was qualified without relying on a project
+  board, an expired test artifact, or an informal assertion.
+
+
+2. Terminology
+──────────────
+
+  Normative Requirement
+  ─────────────────────
+  A normative requirement is any statement which constrains a conforming
+  producer, consumer, implementation, administrator, or publication.
+  The capitalized words MUST, MUST NOT, SHOULD, SHOULD NOT, and MAY make
+  such requirements conspicuous, but a requirement does not cease to be
+  normative merely because it is expressed with other words.
+
+  Normative Dependency
+  ────────────────────
+  Document A has a normative dependency on document B when satisfying a
+  normative requirement in A requires normative text owned by B.  A
+  citation, historical note, rationale, or nonnormative example does not
+  alone create a dependency.
+
+  Conformance Role
+  ────────────────
+  A conformance role is one independently implementable side or use of a
+  specification, such as producer and consumer, Client and Server, or
+  signer and verifier.
+
+  Conformance Surface
+  ───────────────────
+  The conformance surface is the complete TITH‐owned implementation code
+  which can affect conformity to a document.  It includes code directly
+  mapped to a requirement and every transitive TITH‐owned helper whose
+  behaviour can affect that requirement.  Crate, package, file, process,
+  and repository boundaries do not by themselves include or exclude
+  code from the surface.
+
+  Qualification Record
+  ────────────────────
+  A qualification record is the version‐controlled evidence that one
+  exact document revision satisfies this process with one exact
+  reference implementation and test set.
+
+  Normative Revision
+  ──────────────────
+  A normative revision can change the behaviour of a conforming
+  implementation or the data another conforming implementation observes.
+
+  Editorial Revision
+  ──────────────────
+  An editorial revision cannot change conforming behaviour, wire or file
+  data, assigned values, dependency ownership, or the result of any
+  conformance test.  A revision is normative when there is doubt.
+
+
+3. Document Classes and Publication
+───────────────────────────────────
+
+  TITH defines four document classes:
+
+    • A TITH Technical Standard (TTS) defines accepted technical
+      requirements for conforming implementations.
+
+    • A TITH Standard Proposal (TSP) defines experimental technical
+      requirements which may change before acceptance.
+
+    • A TITH Process Specification (TPS) defines binding requirements
+      for publishing and maintaining TITH documents.  A TPS is not part
+      of the technical normative‐dependency graph.
+
+    • A TITH Reference Document (TRD) is supplemental and nonnormative.
+      Nothing in a TRD is part of a technical standard or this process.
+
+  Each identifier consists of its three‐letter class, a HYPHEN-MINUS
+  (U+002D) in filenames or a NON-BREAKING HYPHEN (U+2011) in prose, and
+  four decimal digits.  An assigned number MUST NOT be reused for an
+  unrelated document.  A promoted TSP and its resulting TTS use the same
+  four digits because they are successive states of the same technical
+  specification.
+
+  The files in the repository's published standards directory on its
+  default branch are the published documents.  Work on an unpublished
+  branch or proposed change is not a published revision.
+
+  Every published revision has a positive decimal revision number, a
+  publication date, and a history entry.  A revision number increases by
+  one within its publication class unless section 7 resets it when a TSP
+  becomes a TTS.
+
+
+4. Developing a Proposal
+────────────────────────
+
+  A new technical specification begins as a TSP.  Its normative text MAY
+  change without qualification while it remains experimental.  Every
+  known defect, contradiction, missing requirement, ambiguity, or
+  unresolved assigned value MUST remain recorded in a public issue until
+  a commit resolves it.
+
+  Promotion work begins with a public tracking issue identifying the
+  candidate publication and revision.  The exact candidate text,
+  reference‐implementation source, tests, dependencies, and toolchains
+  used for qualification MUST be frozen for the evidence run.  A
+  change to a pinned input is governed by section 5 and may require new
+  evidence.
+
+  A TSP MAY depend on another TSP while they are developed.  That
+  freedom does not waive the accepted‐dependency requirements in
+  section 6.
+
+
+5. Qualification Records
+────────────────────────
+
+  The evidence for TTS‑NNNN revision R is stored in the repository as
+  "qualification/TTS-NNNN.RRR.md", where RRR is the revision padded to
+  three decimal digits.  The record for a promotion uses the resulting
+  TTS identifier and revision even when the evidence branch still names
+  the candidate TSP.
+
+  A qualification record MUST contain:
+
+    • the candidate and resulting publication, revision, date, and exact
+      SHA‑256 digest of the qualified document bytes;
+    • the evidence commit and every compiler, coverage tool, target, and
+      configuration used;
+    • every internal normative dependency with its revision and SHA‑256
+      digest, and every exact external dependency or assigned value;
+    • every conformance role and every mandatory or optional feature;
+    • a requirement matrix mapping each normative requirement to its
+      role, implementation source, positive tests, negative tests, and
+      coverage evidence;
+    • a conformance‐surface manifest naming each source item and each
+      transitive helper with a SHA‑256 digest of the exact mapped
+      source;
+    • a test manifest naming the mapped tests and their SHA‑256 digests;
+    • the commands, complete results, and durable coverage summaries;
+    • the issue audit and any security review required by section 6; and
+    • the repository owner's dated approval.
+
+  A test which has no meaningful positive or negative counterpart is
+  marked not applicable in the requirement matrix with a reason.  This
+  is an exception to the shape of the evidence, not to the requirement.
+
+  Every evidence run applies to its exact recorded inputs.  A later
+  qualification or repository baseline MAY reuse it only after verifying
+  that the document revision, normative dependencies, conformance
+  surface, mapped tests, toolchains, targets, and configurations remain
+  byte‐for‐byte identical.  An unrelated repository change does not
+  invalidate it.  A changed shared helper invalidates every record whose
+  conformance surface includes that helper.
+
+  Generated reports need not be committed in full when the record
+  contains their durable summary, digest, reproduction commands, and all
+  information needed to determine whether the required result was met.
+  An expiring external artifact by itself is not a qualification record.
+
+
+6. Technical Qualification
+──────────────────────────
+
+6.1 Specification Readiness
+───────────────────────────
+
+  The candidate MUST completely and deterministically define every
+  feature it specifies.  It MUST NOT contain an unresolved placeholder,
+  contradictory grammar, undefined implementation decision, or required
+  but unassigned value.
+
+  No unresolved public issue may allege a normative defect, ambiguity,
+  missing requirement, security defect, wire or file incompatibility, or
+  external coordination blocker in the candidate or a normative
+  dependency.  The promotion tracking issue itself remains open until
+  the publishing commit closes it.
+
+  Every internal normative dependency MUST already be an applicable TTS
+  revision or be in the same atomic promotion set.  Every external
+  normative dependency MUST identify an exact, publicly obtainable and
+  stable specification or completed registry assignment.  The complete
+  resulting technical dependency graph MUST be acyclic.
+
+6.2 Reference Implementation
+────────────────────────────
+
+  A complete, publicly available reference implementation MUST build
+  from its recorded source and implement every conformance role and
+  every specified feature.  This includes features which a conforming
+  implementation is permitted to omit.
+
+  A statement which merely permits implementation discretion does not
+  require the reference implementation to select mutually exclusive
+  behaviours simultaneously.  Each named optional capability, syntax,
+  operation, or protocol path is a feature and MUST be implemented.
+
+  One reference implementation is sufficient for qualification.
+  Evidence from an independently developed implementation is desirable
+  but is not a promotion requirement.
+
+6.3 Conformance Tests
+─────────────────────
+
+  Every normative requirement MUST have appropriate automated positive
+  and negative conformance evidence.  The evidence MAY be a unit,
+  integration, interoperability, property, fault‐injection, platform, or
+  system test according to the behaviour being proved.  Calling every
+  test a unit test does not make cross‐process, persistence,
+  concurrency, or network behaviour adequately tested.
+
+  The tests MUST exercise every conformance role, named optional
+  feature, boundary value, malformed form, prohibited form, and
+  specified failure result.  Code which handles untrusted lengths,
+  framing, persistent commitment, interrupted operations, or concurrent
+  ownership MUST also exercise its applicable truncation, overflow,
+  resource‐failure, recovery, and contention paths.
+
+  Separate instances or configurations of the one reference
+  implementation MUST interoperate for every externally visible edge.
+  Every target‐specific requirement MUST be tested on each applicable
+  target.
+
+6.4 Coverage
+────────────
+
+  Automated coverage reports for the complete conformance surface MUST
+  show 100 percent function, line or region, and branch coverage.  A
+  source item does not leave the surface because unrelated code shares
+  its crate or file, and unrelated code does not enter the surface
+  merely because it shares one.
+
+  Vendored and external dependencies are outside the TITH‐owned
+  conformance surface.  Every TITH‐owned wrapper, validation rule, error
+  translation, and binding needed for conformity remains inside it.
+
+  Platform‐conditional surfaces MUST reach complete coverage in their
+  applicable configurations.  The normal reference implementation and
+  the coverage instrument may use different pinned toolchains when that
+  is necessary to obtain branch coverage.  If a relevant TITH‐owned
+  branch cannot be measured or exercised, qualification is incomplete.
+
+6.5 Review and Approval
+───────────────────────
+
+  A document which handles cryptography, authentication, trust,
+  unauthenticated input, persistent responsibility, or security failure
+  MUST have a written review of its threat boundaries and failure paths.
+  The review identifies each assumption and the tests which enforce it.
+
+  The repository owner MUST review the document, dependency audit,
+  requirement matrix, implementation, tests, coverage, issue audit, and
+  security review and explicitly approve the qualification record.
+
+
+7. Promotion
+────────────
+
+  Promotion occurs in one publishing change after every requirement in
+  section 6 is satisfied.  A set of mutually dependent TSP documents MAY
+  be promoted together when every document qualifies and the resulting
+  TTS graph is acyclic.
+
+  The publishing change:
+
+    1. renames TSP‑NNNN to TTS‑NNNN;
+    2. sets the first TTS revision to 1 and the current publication
+       date;
+    3. replaces the proposal status text with the TTS status text;
+    4. preserves the proposal history and records the promotion;
+    5. publishes the qualification record required by section 5;
+    6. updates every affected normative reference and dependency record;
+       and
+    7. closes the promotion issue through its commit message.
+
+  The normative technical body qualified on the evidence branch MUST be
+  the body published as TTS revision 1.  A technical change made during
+  promotion invalidates the evidence and MUST be qualified again.
+
+
+8. Existing Standards and Later Revisions
+─────────────────────────────────────────
+
+  A TTS published before TPS‑0001 is not qualified merely because it is
+  already accepted.  It MAY continue to receive normative corrections
+  until its first qualification record is published.  Its first
+  qualification uses its then‐current TTS identifier and revision and
+  MUST satisfy every requirement in section 6.
+
+  After a TTS has qualified, a normative revision MUST be developed
+  outside the published default branch and MUST satisfy sections 5 and 6
+  before publication.  Its publishing change increments the TTS
+  revision, publishes the new qualification record, updates affected
+  dependency records, and closes its tracking issue through the commit.
+
+  An editorial revision MAY carry qualification evidence forward
+  without rerunning unaffected tests.  Its new qualification record MUST
+  contain the complete textual difference, the repository owner's
+  explicit determination that no normative result changed, the new
+  document digest, and references to the carried evidence.  Any doubt
+  makes the revision normative.
+
+  A reference‐implementation, mapped‐test, dependency, target, or
+  toolchain change after qualification invalidates the record when it
+  changes a pinned input.  Qualification is restored by publishing a
+  replacement record containing the new complete evidence.  Repository
+  history preserves the earlier record used by an earlier tag.
+
+
+9. Supersession and Withdrawal
+──────────────────────────────
+
+  A new technical document MUST qualify before it supersedes a current
+  TTS.  The publishing change identifies the replacement in both
+  documents and retains the superseded document in the archive.  A
+  superseded document is not current for section 11.
+
+  The repository owner MAY withdraw a document which is unsafe,
+  unusable, or no longer applicable.  The withdrawal change records its
+  reason and date and retains the document and identifier in the
+  archive.  Withdrawal does not erase or reuse its number.  A withdrawn
+  document is not current for section 11.
+
+  A TSP or TRD MAY be withdrawn without technical qualification.  A TPS
+  MAY be superseded only by a later TPS revision or another TPS which
+  explicitly assumes its process responsibilities.
+
+
+10. Process Specification Revisions
+───────────────────────────────────
+
+  TPS‑0001 revision 1 is the founding process specification and takes
+  effect when the repository owner publishes it.
+
+  A later TPS revision begins with a public issue containing the exact
+  process change and its effect on existing documents and evidence.  The
+  repository owner MUST approve the complete revision explicitly before
+  publication.  Technical implementation, conformance, and coverage
+  evidence is not required for a process specification.
+
+  A TPS revision applies prospectively unless it explicitly states which
+  existing qualification records must be replaced.  It MUST NOT silently
+  invalidate or reinterpret an earlier qualified repository tag.
+
+
+11. Qualified Repository Baselines
+──────────────────────────────────
+
+  An annotated tag named "tts-qualified-N", where N is a positive
+  decimal serial number without a leading zero, records a repository
+  baseline in which every current TTS is qualified.  Serial numbers
+  increase and MUST NOT be reused.
+
+  The tag points to the exact repository commit containing every current
+  TTS and qualification record.  Its annotation identifies the governing
+  TPS revision and lists every included TTS revision and qualification
+  record.  Before creating it, the publisher MUST verify the content
+  manifest of every reused record as required by section 5.
+
+  A qualified tag is immutable historical evidence.  A later TTS,
+  revision, implementation change, supersession, or withdrawal does not
+  alter an earlier tag.  A new tag may be made when the then‐current set
+  again has valid evidence.
+
+  Issue state, project‐board fields, and transient
+  continuous‐integration results MAY summarize progress but are not
+  normative authority or a substitute for qualification records.
+  Publishing TPS‑0001 does not by itself qualify an existing TTS or
+  authorize the first qualified tag.
+
+
+A. References
+─────────────
+
+  [FTA‑1006.002] "Key words to indicate requirement levels" FTSC,
+  1998‑01‑17.
+
+
+B. History
+──────────
+
+   Rev.1, 2026‑08‑22: Initial Release.
+
+**********************************************************************
