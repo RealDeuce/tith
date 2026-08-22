@@ -27,6 +27,7 @@ use tith_wire::item::{ItemAuthentication, LEGACY_ATTRIBUTES_SIGNED_MASK, ReadMes
 use tith_wire::{Address, OwnedTlv, types};
 
 use crate::address::{self, AddressError};
+use crate::config::DomainCase;
 
 /// The FTS-0001.016 attribute bit which marks attached files.
 const ATTRIBUTE_FILE_ATTACHED: u16 = 1 << 4;
@@ -76,6 +77,7 @@ pub struct Context {
 	/// so TSP-0003 section 6 requires the context to supply it and to verify
 	/// that the selected endpoints belong to it.
 	pub domain: String,
+	pub domain_case: DomainCase,
 	/// Product and version for a Via whose software string cannot supply them.
 	pub product: String,
 	pub version: String,
@@ -87,6 +89,22 @@ pub struct Context {
 }
 
 impl Context {
+	pub(crate) fn legacy_address(&self, address: &Address) -> Result<Address, ConvertError> {
+		let domain = if address.domain() == self.domain {
+			self.domain_case.apply(address.domain())
+		} else {
+			address.domain().to_owned()
+		};
+		Address::new(
+			domain,
+			address.zone(),
+			address.net(),
+			address.node(),
+			address.point(),
+		)
+		.map_err(|_| ConvertError::Unrepresentable("a Domain after legacy case policy"))
+	}
+
 	pub(crate) fn area_tag(&self, name: &str) -> Result<&str, ConvertError> {
 		self.area_tags
 			.get(name)
@@ -531,7 +549,7 @@ fn via_line(via: &tith_wire::ViaData, context: &Context) -> Result<String, Conve
 	};
 	Ok(format!(
 		"Via {} @{:04}{:02}{:02}.{:02}{:02}{:02}.UTC {software}",
-		address::five_dimensional(&via.address)?,
+		address::five_dimensional(&context.legacy_address(&via.address)?)?,
 		time.year,
 		time.month,
 		time.day,
@@ -547,9 +565,14 @@ fn via_line(via: &tith_wire::ViaData, context: &Context) -> Result<String, Conve
 /// from a following 2D PATH, then native Via addresses in their existing order,
 /// followed by the immediate packet origin if it is not already last.
 fn spth(read: &ReadMessage, context: &Context) -> Result<String, ConvertError> {
-	let mut path: Vec<Address> = read.vias.iter().map(|via| via.address.clone()).collect();
-	if path.last() != Some(&context.packet_origin) {
-		path.push(context.packet_origin.clone());
+	let mut path: Vec<Address> = read
+		.vias
+		.iter()
+		.map(|via| context.legacy_address(&via.address))
+		.collect::<Result<_, _>>()?;
+	let packet_origin = context.legacy_address(&context.packet_origin)?;
+	if path.last() != Some(&packet_origin) {
+		path.push(packet_origin);
 	}
 	let line = format!("SPTH: {}", tith_wire::address::format_trimmed_list(&path));
 	// Section 7 bounds SPTH lines at 80 bytes including Control-A and CR.
@@ -1020,6 +1043,7 @@ mod tests {
 			packet_origin: "fidonet#1:104/36".parse().unwrap(),
 			packet_destination: "fidonet#1:104/1".parse().unwrap(),
 			domain: "fidonet".to_owned(),
+			domain_case: DomainCase::Preserve,
 			product: "tith".to_owned(),
 			version: "0.1".to_owned(),
 			area_tags: [("SYNCHRONET".to_owned(), "SYNCHRONET".to_owned())]
@@ -1030,6 +1054,20 @@ mod tests {
 
 	fn signed(data: &MessageData) -> (ReadMessage, SigningKeyPair, Address) {
 		signed_with(data, &[])
+	}
+
+	#[test]
+	fn legacy_case_policy_changes_only_the_configured_domain() {
+		let mut context = context();
+		context.domain = "BBSDev".to_owned();
+		context.domain_case = DomainCase::Lowercase;
+		let selected: Address = "BBSDev#885:1/1".parse().unwrap();
+		let other: Address = "BBSDEV#885:1/1".parse().unwrap();
+		assert_eq!(
+			context.legacy_address(&selected).unwrap().to_string(),
+			"bbsdev#885:1/1"
+		);
+		assert_eq!(context.legacy_address(&other).unwrap(), other);
 	}
 
 	fn signed_with_seen_by(data: &MessageData) -> (ReadMessage, SigningKeyPair, Address) {

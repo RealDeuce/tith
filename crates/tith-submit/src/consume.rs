@@ -10,7 +10,7 @@ use std::path::PathBuf;
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD_NO_PAD;
-use tith_crypto::{TlvHash, hash_inbound_item};
+use tith_crypto::{PUBLIC_KEY_BYTES, PublicKey, TlvHash, hash_inbound_item};
 use tith_ipc::{Document, EnvelopeKind, quote};
 
 use crate::{Binding, ClientError, validate};
@@ -57,7 +57,7 @@ pub struct Claim {
 	pub kind: Kind,
 	pub local_identity: String,
 	pub peer: String,
-	pub peer_key: String,
+	pub peer_key: PublicKey,
 	pub authentication: Authentication,
 	pub received: u64,
 	pub payload_size: u64,
@@ -159,6 +159,11 @@ pub fn claim(
 		.ok()
 		.and_then(|bytes| <[u8; 32]>::try_from(bytes).ok())
 		.ok_or_else(|| ClientError::new("Payload-Hash is not 32 base 64 encoded bytes"))?;
+	let peer_key: [u8; PUBLIC_KEY_BYTES] = STANDARD_NO_PAD
+		.decode(required(&document, "Peer-Key")?)
+		.ok()
+		.and_then(|bytes| bytes.try_into().ok())
+		.ok_or_else(|| ClientError::new("Peer-Key is not 32 base 64 encoded bytes"))?;
 	let kind = match required(&document, "Kind")? {
 		"Message" => Kind::Message,
 		"File" => Kind::File,
@@ -178,7 +183,7 @@ pub fn claim(
 		kind,
 		local_identity: required(&document, "Local-Identity")?.to_owned(),
 		peer: required(&document, "Peer")?.to_owned(),
-		peer_key: required(&document, "Peer-Key")?.to_owned(),
+		peer_key: PublicKey::from_bytes(peer_key),
 		authentication,
 		received: number(required(&document, "Received")?)?,
 		payload_size: number(required(&document, "Payload-Size")?)?,
@@ -523,6 +528,7 @@ mod tests {
 		assert_eq!(claim.authentication, Authentication::OriginValid);
 		assert_eq!(claim.payload_size, 42);
 		assert_eq!(claim.payload_hash.as_bytes(), &[7_u8; 32]);
+		assert_eq!(claim.peer_key.as_bytes(), &[8_u8; 32]);
 		assert_eq!(
 			claim.payload_path,
 			PathBuf::from("/var/db/tith/exports/I123.tlv")
@@ -536,6 +542,20 @@ mod tests {
 			String::from_utf8(binding.seen.into_inner()).unwrap(),
 			"TITH-IPC 1\nClaim-Inbound \"tosser\" Now\nClaim-Key \"worker-1\"\nPresentation Path\nEnd\n"
 		);
+	}
+
+	#[test]
+	fn a_claim_rejects_a_peer_key_that_is_not_exactly_32_bytes() {
+		let hash = STANDARD_NO_PAD.encode([7_u8; 32]);
+		let binding = canned(&format!(
+			"TITH-IPC-Result 1\nClaim-Inbound Completed\nItem I123 Claimed\nClaim-Token T456\n\
+			 Claim-Expires 1755518400\nKind Message\nLocal-Identity \"fidonet#1:104/36\"\n\
+			 Peer \"fidonet#1:104/1\"\nPeer-Key \"AA\"\nItem-Authentication Origin-Valid\n\
+			 Received 1755518000\nPayload-Size 42\nPayload-Hash \"{hash}\"\n\
+			 Payload-Path \"/var/db/tith/exports/I123.tlv\"\nEnd\n"
+		));
+		let error = claim(&binding, "tosser", "worker-1", false).unwrap_err();
+		assert!(error.to_string().contains("Peer-Key"), "{error}");
 	}
 
 	#[test]
@@ -621,7 +641,7 @@ mod tests {
 			kind: Kind::Message,
 			local_identity: String::new(),
 			peer: String::new(),
-			peer_key: String::new(),
+			peer_key: PublicKey::from_bytes([0; PUBLIC_KEY_BYTES]),
 			authentication: Authentication::OriginValid,
 			received: 0,
 			payload_size: 11,

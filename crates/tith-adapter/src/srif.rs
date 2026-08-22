@@ -82,7 +82,7 @@ pub struct Session {
 	pub our_aka: String,
 	/// Whether the session was password protected.
 	pub protected: bool,
-	/// Whether the remote is in a current nodelist.
+	/// Whether the remote identity is listed for this adapter.
 	pub listed: bool,
 }
 

@@ -9,12 +9,14 @@
 //! Inbound /sbbs/fido/inbound
 //! Ledger  /var/db/tith/adapter.redb
 //! Domain  fidonet
+//! Domain-Case Preserve
 //! Product tith 0.1
 //! Orphan-Notice NetMail Sysop
 //!
 //! Link uplink
 //!     Peer     fidonet#1:104/1
 //!     Local    fidonet#1:104/36
+//!     Listed   Yes
 //!     Password secret
 //! End
 //!
@@ -34,7 +36,10 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD_NO_PAD;
 use tith_config::{ConfigError, fields, lines};
+use tith_crypto::{PUBLIC_KEY_BYTES, PublicKey};
 use tith_wire::Address;
 
 use crate::policy::{Action, Disposition, Policy, Refusals};
@@ -46,11 +51,34 @@ pub enum OrphanNotice {
 	NetMail(String),
 }
 
+/// TSP-0003 section 2 policy for the one configured legacy domain.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum DomainCase {
+	#[default]
+	Preserve,
+	Lowercase,
+}
+
+impl DomainCase {
+	#[must_use]
+	pub fn apply(self, domain: &str) -> String {
+		let mut domain = domain.to_owned();
+		if self == Self::Lowercase {
+			domain.make_ascii_lowercase();
+		}
+		domain
+	}
+}
+
 /// One configured legacy link.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Link {
 	pub peer: Address,
 	pub local: Address,
+	/// The authenticated immediate identity key required for anonymous peers.
+	pub peer_key: Option<PublicKey>,
+	/// Observer-relative listing state; independent of anonymous address syntax.
+	pub listed: bool,
 	/// The packet password. Legacy link data, never TITH authentication.
 	pub password: String,
 }
@@ -61,6 +89,7 @@ pub struct Configuration {
 	pub inbound: PathBuf,
 	pub ledger: PathBuf,
 	pub domain: String,
+	pub domain_case: DomainCase,
 	pub product: String,
 	pub version: String,
 	/// Links by the peer address a claim reports.
@@ -114,6 +143,7 @@ impl Configuration {
 		let mut inbound = None;
 		let mut ledger = None;
 		let mut domain = None;
+		let mut domain_case = DomainCase::default();
 		let mut product = None;
 		let mut version = None;
 		let mut links: BTreeMap<String, Link> = BTreeMap::new();
@@ -132,6 +162,13 @@ impl Configuration {
 				["Inbound", path] => inbound = Some(PathBuf::from(path)),
 				["Ledger", path] => ledger = Some(PathBuf::from(path)),
 				["Domain", value] => domain = Some((*value).to_owned()),
+				["Domain-Case", value] => {
+					domain_case = match *value {
+						"Preserve" => DomainCase::Preserve,
+						"Lowercase" => DomainCase::Lowercase,
+						_ => return Err(fail(line.number, "expected Preserve or Lowercase")),
+					};
+				}
 				["Product", name, number] => {
 					product = Some((*name).to_owned());
 					version = Some((*number).to_owned());
@@ -178,10 +215,14 @@ impl Configuration {
 			}
 		}
 
+		let domain = domain.ok_or_else(|| fail(0, "Domain is required"))?;
+		Address::anonymous(domain.clone())
+			.map_err(|_| fail(0, "Domain is not a valid TTS-0004 Domain"))?;
 		Ok(Self {
 			inbound: inbound.ok_or_else(|| fail(0, "Inbound is required"))?,
 			ledger: ledger.ok_or_else(|| fail(0, "Ledger is required"))?,
-			domain: domain.ok_or_else(|| fail(0, "Domain is required"))?,
+			domain,
+			domain_case,
 			product: product.unwrap_or_else(|| "tith".to_owned()),
 			version: version.unwrap_or_else(|| "0.1".to_owned()),
 			links,
@@ -195,19 +236,36 @@ impl Configuration {
 
 	/// The link whose peer matches this claim's `Peer`.
 	#[must_use]
-	pub fn link_for(&self, peer: &str) -> Option<&Link> {
-		self.links
-			.values()
-			.find(|link| link.peer.to_string() == peer)
+	pub fn link_for(&self, peer: &Address, peer_key: &PublicKey) -> Option<&Link> {
+		self.links.values().find(|link| {
+			link.peer == *peer
+				&& link
+					.peer_key
+					.is_none_or(|configured| configured == *peer_key)
+		})
 	}
+}
+
+fn public_key(line: usize, value: &str) -> Result<PublicKey, ConfigError> {
+	let bytes: [u8; PUBLIC_KEY_BYTES] = STANDARD_NO_PAD
+		.decode(value)
+		.map_err(|_| fail(line, "Peer-Key is not canonical base 64"))?
+		.try_into()
+		.map_err(|_| fail(line, "Peer-Key is not 32 bytes"))?;
+	if STANDARD_NO_PAD.encode(bytes) != value {
+		return Err(fail(line, "Peer-Key is not canonical base 64"));
+	}
+	Ok(PublicKey::from_bytes(bytes))
 }
 
 fn parse_link(
 	parsed: &[tith_config::Line],
 	mut index: usize,
 ) -> Result<(Link, usize), ConfigError> {
-	let mut peer = None;
-	let mut local = None;
+	let mut peer: Option<Address> = None;
+	let mut local: Option<Address> = None;
+	let mut peer_key: Option<PublicKey> = None;
+	let mut listed = None;
 	let mut password = String::new();
 	while index < parsed.len() {
 		let line = &parsed[index];
@@ -215,10 +273,16 @@ fn parse_link(
 		index += 1;
 		match values.as_slice() {
 			["End"] => {
+				let peer = peer.ok_or_else(|| fail(line.number, "Link needs a Peer"))?;
+				if peer.is_anonymous() && peer_key.is_none() {
+					return Err(fail(line.number, "an anonymous Link needs a Peer-Key"));
+				}
 				return Ok((
 					Link {
-						peer: peer.ok_or_else(|| fail(line.number, "Link needs a Peer"))?,
+						peer,
 						local: local.ok_or_else(|| fail(line.number, "Link needs a Local"))?,
+						peer_key,
+						listed: listed.ok_or_else(|| fail(line.number, "Link needs Listed"))?,
 						password,
 					},
 					index,
@@ -226,6 +290,14 @@ fn parse_link(
 			}
 			["Peer", value] => peer = Some(address(line.number, value)?),
 			["Local", value] => local = Some(address(line.number, value)?),
+			["Peer-Key", value] => peer_key = Some(public_key(line.number, value)?),
+			["Listed", value] => {
+				listed = Some(match *value {
+					"Yes" => true,
+					"No" => false,
+					_ => return Err(fail(line.number, "expected Yes or No")),
+				});
+			}
 			["Password", value] => {
 				if value.len() > 8 {
 					return Err(fail(
@@ -309,11 +381,13 @@ mod tests {
 Inbound /sbbs/fido/inbound
 Ledger  /var/db/tith/adapter.redb
 Domain  fidonet
+Domain-Case Preserve
 Product tith 0.1
 
 Link uplink
 \tPeer     fidonet#1:104/1
 \tLocal    fidonet#1:104/36
+\tListed   Yes
 \tPassword secret
 End
 
@@ -334,9 +408,14 @@ End
 		assert_eq!(configuration.domain, "fidonet");
 		assert_eq!(configuration.product, "tith");
 		assert_eq!(configuration.version, "0.1");
-		let link = configuration.link_for("fidonet#1:104/1").unwrap();
+		let key = PublicKey::from_bytes([0; PUBLIC_KEY_BYTES]);
+		let link = configuration
+			.link_for(&"fidonet#1:104/1".parse().unwrap(), &key)
+			.unwrap();
 		assert_eq!(link.password, "secret");
+		assert!(link.listed);
 		assert_eq!(link.local.to_string(), "fidonet#1:104/36");
+		assert_eq!(configuration.domain_case, DomainCase::Preserve);
 		assert_eq!(
 			configuration
 				.area_tags
@@ -412,5 +491,44 @@ End
 			)
 			.is_err()
 		);
+	}
+
+	#[test]
+	fn domain_case_is_explicit_and_ascii_only() {
+		let lowercase = SAMPLE.replace("Domain-Case Preserve", "Domain-Case Lowercase");
+		let configuration = Configuration::parse(&lowercase).unwrap();
+		assert_eq!(configuration.domain_case, DomainCase::Lowercase);
+		assert_eq!(configuration.domain_case.apply("BBSДОМ"), "bbsДОМ");
+
+		let defaulted = SAMPLE.replace("Domain-Case Preserve\n", "");
+		assert_eq!(
+			Configuration::parse(&defaulted).unwrap().domain_case,
+			DomainCase::Preserve
+		);
+		let invalid = SAMPLE.replace("Domain-Case Preserve", "Domain-Case Fold");
+		assert!(Configuration::parse(&invalid).is_err());
+	}
+
+	#[test]
+	fn anonymous_links_require_and_match_the_exact_peer_key() {
+		let encoded = STANDARD_NO_PAD.encode([7_u8; PUBLIC_KEY_BYTES]);
+		let anonymous = SAMPLE.replace("fidonet#1:104/1", "p2p#-1").replace(
+			"\tListed   Yes",
+			&format!("\tPeer-Key {encoded}\n\tListed   No"),
+		);
+		let configuration = Configuration::parse(&anonymous).unwrap();
+		let peer: Address = "p2p#-1".parse().unwrap();
+		let matching = PublicKey::from_bytes([7; PUBLIC_KEY_BYTES]);
+		let other = PublicKey::from_bytes([8; PUBLIC_KEY_BYTES]);
+		let link = configuration.link_for(&peer, &matching).unwrap();
+		assert!(!link.listed);
+		assert!(configuration.link_for(&peer, &other).is_none());
+
+		let missing = SAMPLE
+			.replace("fidonet#1:104/1", "p2p#-1")
+			.replace("\tListed   Yes", "\tListed   No");
+		assert!(Configuration::parse(&missing).is_err());
+		let malformed = anonymous.replace(&encoded, "AA");
+		assert!(Configuration::parse(&malformed).is_err());
 	}
 }

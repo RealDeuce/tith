@@ -6,13 +6,14 @@
 
 use std::collections::BTreeMap;
 
+use tith_crypto::PublicKey;
 use tith_ledger::{Ledger, LedgerError, Object, QuarantineObject, Record, State};
 use tith_message_legacy::{
 	PackedMessage, Packet, PacketOptions, encode_body, endpoint, format_date_time,
 };
 use tith_wire::bundle::KeyResolver;
 use tith_wire::item::{ItemAuthentication, read_file_request, read_message, read_standalone_file};
-use tith_wire::{OwnedTlv, types};
+use tith_wire::{Address, OwnedTlv, types};
 
 use crate::config::{Configuration, OrphanNotice};
 use crate::convert::{Context, Fidelity, to_legacy};
@@ -67,7 +68,8 @@ pub struct Claimed {
 	pub inbound_id: String,
 	pub payload_hash: [u8; 32],
 	pub claim_token: String,
-	pub peer: String,
+	pub peer: Address,
+	pub peer_key: PublicKey,
 	pub authentication: ItemAuthentication,
 }
 
@@ -155,12 +157,13 @@ pub fn plan(
 	}
 
 	let link = configuration
-		.link_for(&claim.peer)
-		.ok_or_else(|| InboundError::UnknownPeer(claim.peer.clone()))?;
+		.link_for(&claim.peer, &claim.peer_key)
+		.ok_or_else(|| InboundError::UnknownPeer(claim.peer.to_string()))?;
 	let context = Context {
 		packet_origin: link.peer.clone(),
 		packet_destination: link.local.clone(),
 		domain: configuration.domain.clone(),
+		domain_case: configuration.domain_case,
 		product: configuration.product.clone(),
 		version: configuration.version.clone(),
 		area_tags: configuration.area_tags.clone(),
@@ -329,7 +332,7 @@ fn plan_message(
 		revision_major: 0,
 		revision_minor: 1,
 		password: configuration
-			.link_for(&claim.peer)
+			.link_for(&claim.peer, &claim.peer_key)
 			.map(|link| link.password.clone())
 			.unwrap_or_default(),
 		product_data: 0,
@@ -793,7 +796,7 @@ pub fn group(outcomes: Vec<(Claimed, Outcome)>) -> BTreeMap<String, Vec<(Claimed
 	let mut grouped: BTreeMap<String, Vec<(Claimed, Outcome)>> = BTreeMap::new();
 	for (claim, outcome) in outcomes {
 		grouped
-			.entry(claim.peer.clone())
+			.entry(claim.peer.to_string())
 			.or_default()
 			.push((claim, outcome));
 	}
@@ -819,6 +822,7 @@ Domain  fidonet
 Link uplink
 \tPeer  fidonet#1:104/1
 \tLocal fidonet#1:104/36
+\tListed Yes
 End
 Area SYNCHRONET
 \tTag SYNCHRONET
@@ -971,7 +975,8 @@ End
 			inbound_id: "I1".to_owned(),
 			payload_hash: [7; 32],
 			claim_token: "T1".to_owned(),
-			peer: "fidonet#1:104/1".to_owned(),
+			peer: "fidonet#1:104/1".parse().unwrap(),
+			peer_key: PublicKey::from_bytes([0; 32]),
 			authentication,
 		}
 	}
@@ -1421,7 +1426,7 @@ End
 			(address == &origin || address.to_string() == "fidonet#1:104/36").then_some(keys.public)
 		};
 		let mut claim = claimed(ItemAuthentication::OriginValid);
-		claim.peer = "fidonet#2:200/7".to_owned();
+		claim.peer = "fidonet#2:200/7".parse().unwrap();
 		let error = plan(
 			&claim,
 			&payload,

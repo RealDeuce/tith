@@ -52,6 +52,9 @@ impl Address {
 		point: u16,
 	) -> Result<Self, AddressError> {
 		validate_domain(&domain)?;
+		if domain == "p2p" && zone != -1 {
+			return Err(AddressError::InvalidDomain);
+		}
 		if zone != -1 && !(1..=32_767).contains(&zone) {
 			return Err(AddressError::OutOfRange);
 		}
@@ -110,7 +113,7 @@ fn validate_domain(domain: &str) -> Result<(), AddressError> {
 	if domain.is_empty() {
 		return Err(AddressError::EmptyDomain);
 	}
-	if domain.starts_with(char::is_whitespace) || domain.ends_with(char::is_whitespace) {
+	if domain.starts_with(tts_whitespace) || domain.ends_with(tts_whitespace) {
 		return Err(AddressError::InvalidDomain);
 	}
 	if domain
@@ -120,6 +123,23 @@ fn validate_domain(domain: &str) -> Result<(), AddressError> {
 		return Err(AddressError::InvalidDomain);
 	}
 	Ok(())
+}
+
+const fn tts_whitespace(character: char) -> bool {
+	matches!(
+		character,
+		'\u{0009}'..='\u{000d}'
+			| '\u{0020}'
+			| '\u{0085}'
+			| '\u{00a0}'
+			| '\u{1680}'
+			| '\u{2000}'..='\u{200a}'
+			| '\u{2028}'
+			| '\u{2029}'
+			| '\u{202f}'
+			| '\u{205f}'
+			| '\u{3000}'
+	)
 }
 
 fn parse_number(text: &str, allow_negative_one: bool) -> Result<i32, AddressError> {
@@ -314,6 +334,23 @@ pub fn format_trimmed_collection(addresses: &[Address]) -> String {
 /// which the canonical form would omit: the TTS-0004 example itself contains
 /// ":885" for a net equal to its zone. Components are therefore read directly.
 pub fn parse_trimmed_list(value: &str) -> Result<Vec<Address>, AddressError> {
+	let addresses = expand_trimmed(value)?;
+	if format_trimmed_list(&addresses) != value {
+		return Err(AddressError::NonCanonical);
+	}
+	Ok(addresses)
+}
+
+/// Parses one canonical TTS-0004 Trimmed Collection.
+pub fn parse_trimmed_collection(value: &str) -> Result<Vec<Address>, AddressError> {
+	let addresses = expand_trimmed(value)?;
+	if format_trimmed_collection(&addresses) != value {
+		return Err(AddressError::NonCanonical);
+	}
+	Ok(addresses)
+}
+
+fn expand_trimmed(value: &str) -> Result<Vec<Address>, AddressError> {
 	if value.is_empty() {
 		return Ok(Vec::new());
 	}
@@ -458,9 +495,6 @@ fn parse_domain_pattern(text: &str) -> Result<DomainPattern, AddressError> {
 		let mut values = Vec::new();
 		for value in inner.split(',') {
 			validate_domain(value)?;
-			if values.iter().any(|existing| existing == value) {
-				return Err(AddressError::InvalidWildcard);
-			}
 			values.push(value.to_owned());
 		}
 		if values.is_empty() {
@@ -486,7 +520,10 @@ fn parse_number_pattern(
 	if let Some(values) = values {
 		let mut ranges = Vec::new();
 		for value in values.split(',') {
-			let range_at = value[1.min(value.len())..].find('-').map(|at| at + 1);
+			let range_at = value
+				.char_indices()
+				.skip(1)
+				.find_map(|(index, character)| (character == '-').then_some(index));
 			let (start, end) = if let Some(at) = range_at {
 				(
 					parse_pattern_number(&value[..at])?,
@@ -611,6 +648,68 @@ mod tests {
 	}
 
 	#[test]
+	fn domain_grammar_uses_the_exact_tts_code_point_sets() {
+		for code in (0..=0x1f).chain(0x7f..=0x9f) {
+			let character = char::from_u32(code).unwrap();
+			let text = format!("a{character}b#1");
+			assert!(text.parse::<Address>().is_err(), "U+{code:04X}");
+		}
+		for character in ['#', '*', ',', '<', '>'] {
+			let text = format!("a{character}b#1");
+			assert!(text.parse::<Address>().is_err(), "{text:?}");
+		}
+		for character in [
+			'\u{0009}', '\u{000a}', '\u{000b}', '\u{000c}', '\u{000d}', '\u{0020}', '\u{0085}',
+			'\u{00a0}', '\u{1680}', '\u{2000}', '\u{2001}', '\u{2002}', '\u{2003}', '\u{2004}',
+			'\u{2005}', '\u{2006}', '\u{2007}', '\u{2008}', '\u{2009}', '\u{200a}', '\u{2028}',
+			'\u{2029}', '\u{202f}', '\u{205f}', '\u{3000}',
+		] {
+			assert!(format!("{character}a#1").parse::<Address>().is_err());
+			assert!(format!("a{character}#1").parse::<Address>().is_err());
+		}
+
+		for domain in ["БорМер", "a b", "a\u{200b}", "a:b", "a/b", "a\\b"] {
+			let text = format!("{domain}#1");
+			assert_eq!(address(&text).domain(), domain);
+		}
+		assert_eq!("#1".parse::<Address>(), Err(AddressError::EmptyDomain));
+	}
+
+	#[test]
+	fn numeric_components_enforce_every_boundary() {
+		for text in ["fidonet#1", "fidonet#32767:1/32767.65535", "fidonet#-1"] {
+			assert_eq!(address(text).to_string(), text);
+		}
+		for text in [
+			"fidonet#0",
+			"fidonet#32768",
+			"fidonet#1:0",
+			"fidonet#1:32768",
+			"fidonet#1/-1",
+			"fidonet#1/32768",
+			"fidonet#1.65536",
+			"fidonet#+1",
+			"fidonet#01",
+			"fidonet#-01",
+			"fidonet#-2",
+		] {
+			assert!(text.parse::<Address>().is_err(), "{text}");
+		}
+	}
+
+	#[test]
+	fn p2p_has_only_its_anonymous_address() {
+		assert_eq!(
+			address("p2p#-1"),
+			Address::anonymous("p2p".to_owned()).unwrap()
+		);
+		for text in ["p2p#1", "p2p#32767/32767.65535"] {
+			assert!(text.parse::<Address>().is_err(), "{text}");
+		}
+		assert!(Address::new("p2p".to_owned(), 1, 1, 0, 0).is_err());
+	}
+
+	#[test]
 	fn rejects_explicit_defaults_and_invalid_anonymous_suffixes() {
 		for text in ["fidonet#1:1", "fidonet#1/0", "fidonet#1.0", "fidonet#-1/1"] {
 			assert!(text.parse::<Address>().is_err(), "{text}");
@@ -723,6 +822,36 @@ mod tests {
 		let input = ["fidonet#1/2", "fidonet#1/2"].map(address);
 		assert_eq!(format_trimmed_collection(&input), "fidonet#1/2");
 		assert_eq!(format_trimmed_list(&input), "fidonet#1/2,fidonet#1/2");
+		assert_eq!(
+			parse_trimmed_list("fidonet#1/2,fidonet#1/2").unwrap(),
+			input
+		);
+	}
+
+	#[test]
+	fn trimmed_inputs_must_reproduce_their_exact_canonical_encoding() {
+		let collection = "BBSDev#885:1,/1,/2,:885,fidonet#1,:2,/103,.1";
+		assert_eq!(
+			format_trimmed_collection(&parse_trimmed_collection(collection).unwrap()),
+			collection
+		);
+		assert_eq!(parse_trimmed_collection("").unwrap(), []);
+
+		for text in [
+			"fidonet#1,fidonet#1/2",
+			"fidonet#1/2,fidonet#1",
+			"fidonet#1/2,fidonet#1/2",
+		] {
+			assert!(parse_trimmed_collection(text).is_err(), "{text}");
+		}
+		for text in [
+			"fidonet#1,fidonet#2",
+			"fidonet#1,fidonet#1/2",
+			"fidonet#1,,/2",
+			"fidonet#1,:",
+		] {
+			assert!(parse_trimmed_list(text).is_err(), "{text}");
+		}
 	}
 
 	#[test]
@@ -761,5 +890,18 @@ mod tests {
 				.unwrap()
 				.matches(&address("fidonet#4"))
 		);
+		assert!(
+			"<fidonet,fidonet>#*"
+				.parse::<AddressPattern>()
+				.unwrap()
+				.matches(&address("fidonet#1"))
+		);
+	}
+
+	#[test]
+	fn malformed_unicode_wildcard_numbers_are_rejected_without_panicking() {
+		for text in ["fidonet#<é>", "fidonet#<é-1>", "fidonet#<1-é>"] {
+			assert!(text.parse::<AddressPattern>().is_err(), "{text}");
+		}
 	}
 }

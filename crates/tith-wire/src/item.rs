@@ -652,7 +652,7 @@ fn seen_by_value(addresses: &[Address]) -> Result<Option<OwnedTlv>, BundleError>
 /// caller comparing against one address must expand it rather than treat the
 /// whole value as a single address.
 pub fn seen_by_addresses(value: &OwnedTlv) -> Result<Vec<Address>, BundleError> {
-	crate::address::parse_trimmed_list(text(value)?)
+	crate::address::parse_trimmed_collection(text(value)?)
 		.map_err(|_| BundleError::Unexpected("SeenBy is not a Trimmed Collection of addresses"))
 }
 

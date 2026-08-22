@@ -583,10 +583,12 @@ second one:
 Inbound /sbbs/fido/inbound
 Ledger  /var/db/tith/adapter.redb
 Domain  fidonet
+Domain-Case Preserve
 
 Link uplink
     Peer     fidonet#1:104/1
     Local    fidonet#1:104/36
+    Listed   Yes
     Password secret
 End
 
@@ -603,8 +605,12 @@ Policy
 End
 ```
 
-`Link` supplies the packet endpoints and password TSP-0003 section 6 requires
-come from trusted link configuration, keyed by the `Peer` a claim reports.
+`Domain-Case` is `Preserve` by default; `Lowercase` changes only ASCII letters
+in the configured legacy domain. `Link` supplies the packet endpoints and
+password TSP-0003 section 6 requires from trusted link configuration, keyed by
+the `Peer` and, for an anonymous peer, exact `Peer-Key` a claim reports. Every
+link states `Listed Yes` or `Listed No`; listing is not inferred from whether
+the peer address is anonymous.
 `Area` maps each native `AreaName` to one unique legacy tag; a collision is
 refused rather than resolved. `Policy` is the TSP-0011 section 5.1 final
 authentication policy, whose defaults are the ones that document names.

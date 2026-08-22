@@ -114,8 +114,14 @@ pub fn to_tic(
 			"a TIC for a File with no Area",
 		))?;
 	push("Area", context.area_tag(area)?)?;
-	push("Origin", &address::five_dimensional(&file.signing.origin)?)?;
-	push("From", &address::five_dimensional(&context.packet_origin)?)?;
+	push(
+		"Origin",
+		&address::five_dimensional(&context.legacy_address(&file.signing.origin)?)?,
+	)?;
+	push(
+		"From",
+		&address::five_dimensional(&context.legacy_address(&context.packet_origin)?)?,
+	)?;
 	if let Some(to) = &options.to {
 		push("To", to)?;
 	}
@@ -160,14 +166,17 @@ pub fn to_tic(
 			"Path",
 			&format!(
 				"{} {} {}",
-				address::five_dimensional(&via.address)?,
+				address::five_dimensional(&context.legacy_address(&via.address)?)?,
 				via.timestamp,
 				via.software
 			),
 		)?;
 	}
 	for address in &file.seen_by {
-		push("Seenby", &address::five_dimensional(address)?)?;
+		push(
+			"Seenby",
+			&address::five_dimensional(&context.legacy_address(address)?)?,
+		)?;
 	}
 	if let Some(password) = &options.password {
 		push("Pw", password)?;
@@ -196,6 +205,7 @@ mod tests {
 			packet_origin: "fidonet#1:104/36".parse().unwrap(),
 			packet_destination: "fidonet#1:104/1".parse().unwrap(),
 			domain: "fidonet".to_owned(),
+			domain_case: crate::config::DomainCase::Preserve,
 			product: "tith".to_owned(),
 			version: "0.1".to_owned(),
 			area_tags: BTreeMap::from([("SYNCDATA".to_owned(), "SYNCDATA".to_owned())]),

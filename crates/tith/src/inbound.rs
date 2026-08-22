@@ -10,7 +10,7 @@ use std::path::PathBuf;
 use std::path::{Component, Path};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use tith_adapter::config::Configuration;
+use tith_adapter::config::{Configuration, Link};
 use tith_adapter::inbound::{Claimed, Outcome, commit, plan};
 use tith_adapter::policy::Disposition;
 use tith_adapter::publish::clear_staging;
@@ -302,7 +302,8 @@ fn batch(binding: &ConfiguredBinding, options: &Options) -> Result<Vec<Pending>,
 						inbound_id: claim.inbound_id.clone(),
 						payload_hash: *claim.payload_hash.as_bytes(),
 						claim_token: claim.claim_token.clone(),
-						peer: claim.peer.clone(),
+						peer: claim.peer.parse()?,
+						peer_key: claim.peer_key,
 						authentication: authentication(claim.authentication),
 					},
 					token: claim.claim_token.clone(),
@@ -495,7 +496,7 @@ fn serve(
 		.clone()
 		.ok_or("a FileRequest was planned with no Request-Processor configured")?;
 	let link = configuration
-		.link_for(&claim.peer)
+		.link_for(&claim.peer, &claim.peer_key)
 		.ok_or("no Link is configured for the requesting peer")?;
 
 	// The processor never sees the condition; TTS-0005 makes it the requester's,
@@ -505,15 +506,7 @@ fn serve(
 		working_directory: working_directory(configuration),
 	}
 	.run(
-		&Session {
-			sysop: String::new(),
-			akas: vec![link.peer.to_string()],
-			our_aka: link.local.to_string(),
-			// The Bundle signature authenticated the peer, which is strictly more
-			// than an FTN session password ever proved.
-			protected: true,
-			listed: !link.peer.is_anonymous(),
-		},
+		&processor_session(link),
 		std::slice::from_ref(filename),
 		fnv(&claim.inbound_id),
 	)?;
@@ -565,6 +558,18 @@ fn serve(
 			)?;
 			Ok(false)
 		}
+	}
+}
+
+fn processor_session(link: &Link) -> Session {
+	Session {
+		sysop: String::new(),
+		akas: vec![link.peer.to_string()],
+		our_aka: link.local.to_string(),
+		// The Bundle signature authenticated the peer, which is strictly more
+		// than an FTN session password ever proved.
+		protected: true,
+		listed: link.listed,
 	}
 }
 
@@ -689,6 +694,7 @@ mod tests {
 	use super::*;
 	use std::fs;
 	use tith_adapter::srif::Afterward;
+	use tith_crypto::PublicKey;
 	use tith_ledger::{QuarantineObject, Record, State};
 
 	fn temp_dir(name: &str) -> PathBuf {
@@ -718,6 +724,26 @@ mod tests {
 			})
 			.expect("stage");
 		ledger
+	}
+
+	#[test]
+	fn srif_listing_uses_trusted_link_state_not_address_shape() {
+		let unlisted = Link {
+			peer: "fidonet#1:104/1".parse().unwrap(),
+			local: "fidonet#1:104/36".parse().unwrap(),
+			peer_key: None,
+			listed: false,
+			password: String::new(),
+		};
+		assert!(!processor_session(&unlisted).listed);
+
+		let listed = Link {
+			peer: "p2p#-1".parse().unwrap(),
+			peer_key: Some(PublicKey::from_bytes([7; 32])),
+			listed: true,
+			..unlisted
+		};
+		assert!(processor_session(&listed).listed);
 	}
 
 	#[test]
