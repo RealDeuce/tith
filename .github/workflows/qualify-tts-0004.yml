@@ -32,8 +32,8 @@ jobs:
 
       - name: Exercise the TTS-0004 conformance surface
         run: |
-          cargo llvm-cov clean --workspace
-          cargo llvm-cov --branch --package tith-wire --json --output-path tts-0004-coverage.json
+          cargo +nightly-2026-08-20 llvm-cov clean --workspace
+          cargo +nightly-2026-08-20 llvm-cov --branch --package tith-wire --json --output-path tts-0004-coverage.json
 
       - name: Require complete address coverage
         run: |
