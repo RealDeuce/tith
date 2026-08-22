@@ -32,7 +32,7 @@ use tith_crypto::{KX_PUBLIC_KEY_BYTES, KxKeyPair, KxPublicKey};
 use tith_crypto::{SECRET_KEY_BYTES, SecretKey};
 use tith_nodelist::Nodelist;
 use tith_wire::address::Address;
-use tith_wire::bundle::{Identity, KeyResolver};
+use tith_wire::bundle::Identity;
 
 fn main() {
 	if let Err(error) = run() {
@@ -109,10 +109,11 @@ fn run() -> Result<(), Box<dyn Error>> {
 			if arguments.next().is_some() { return Err(usage.into()); }
 			let configuration = Arc::new(load_config(Path::new(&config_directory))?);
 			let nodelist = Arc::new(Nodelist::parse(&nodelist_domain, &fs::read_to_string(nodelist_file)?)?);
-			let (local_ref, local) = resolve_local(&local_name, &configuration, &nodelist)?;
+			let secret = mail::read_secret(Path::new(&secret_file))?;
+			let (local_ref, local) = resolve_local(&local_name, &configuration, &nodelist, secret.public_key())?;
 			let submission = Arc::new(submission::SubmissionEngine::new(
 				Arc::clone(&configuration), Arc::clone(&nodelist),
-				[submission::LocalSigner { reference: local_ref, identity: local, secret: Arc::new(mail::read_secret(Path::new(&secret_file))?) }],
+				[submission::LocalSigner { reference: local_ref, identity: local, secret: Arc::new(secret) }],
 			));
 			windows::serve(&pipe, Path::new(&database), Path::new(&exports), &application, Some(submission))
 		}
@@ -130,10 +131,11 @@ fn run() -> Result<(), Box<dyn Error>> {
 			if arguments.next().is_some() { return Err(usage.into()); }
 			let configuration = Arc::new(load_config(Path::new(&config_directory))?);
 			let nodelist = Arc::new(Nodelist::parse(&nodelist_domain, &fs::read_to_string(nodelist_file)?)?);
-			let (local_ref, local) = resolve_local(&local_name, &configuration, &nodelist)?;
+			let secret = mail::read_secret(Path::new(&secret_file))?;
+			let (local_ref, local) = resolve_local(&local_name, &configuration, &nodelist, secret.public_key())?;
 			let submission = Arc::new(submission::SubmissionEngine::new(
 				Arc::clone(&configuration), Arc::clone(&nodelist),
-				[submission::LocalSigner { reference: local_ref, identity: local, secret: Arc::new(mail::read_secret(Path::new(&secret_file))?) }],
+				[submission::LocalSigner { reference: local_ref, identity: local, secret: Arc::new(secret) }],
 			));
 			filesystem::serve(Path::new(&root), Path::new(&database), Path::new(&exports), application, Some(submission))
 		}
@@ -166,8 +168,8 @@ fn run() -> Result<(), Box<dyn Error>> {
 				&nodelist_domain,
 				&fs::read_to_string(nodelist_file)?,
 			)?);
-			let (local_ref, local) = resolve_local(&local_name, &configuration, &nodelist)?;
 			let secret = Arc::new(mail::read_secret(Path::new(&secret_file))?);
+			let (local_ref, local) = resolve_local(&local_name, &configuration, &nodelist, secret.public_key())?;
 			let submission = Arc::new(submission::SubmissionEngine::new(
 				Arc::clone(&configuration),
 				Arc::clone(&nodelist),
@@ -222,8 +224,13 @@ fn run() -> Result<(), Box<dyn Error>> {
 				&nodelist_domain,
 				&fs::read_to_string(nodelist_file)?,
 			)?;
-			let (local_ref, local) = resolve_local(&local_name, &configuration, &nodelist)?;
 			let secret = mail::read_secret(Path::new(&secret_file))?;
+			let (local_ref, local) = resolve_local(
+				&local_name,
+				&configuration,
+				&nodelist,
+				secret.public_key(),
+			)?;
 			let retired_secrets = retired_secret_files
 				.iter()
 				.map(|path| mail::read_secret(Path::new(path)))
@@ -285,14 +292,15 @@ fn run() -> Result<(), Box<dyn Error>> {
 			if arguments.next().is_some() { return Err(usage.into()); }
 			let configuration = Arc::new(load_config(Path::new(&config_directory))?);
 			let nodelist = Arc::new(Nodelist::parse(&nodelist_domain, &fs::read_to_string(nodelist_file)?)?);
-			let (local_ref, local) = resolve_local(&local_name, &configuration, &nodelist)?;
 			let node_secret: [u8; SECRET_KEY_BYTES] = fs::read(node_secret)?
 				.try_into()
 				.map_err(|_| "node secret key file has the wrong length")?;
+			let node_secret = SecretKey::from_bytes(node_secret);
+			let (local_ref, local) = resolve_local(&local_name, &configuration, &nodelist, node_secret.public_key())?;
 			let submission = Arc::new(submission::SubmissionEngine::new(
 				Arc::clone(&configuration),
 				Arc::clone(&nodelist),
-				[submission::LocalSigner { reference: local_ref, identity: local, secret: Arc::new(SecretKey::from_bytes(node_secret)) }],
+				[submission::LocalSigner { reference: local_ref, identity: local, secret: Arc::new(node_secret) }],
 			));
 			tcp::serve(
 				address,
@@ -312,6 +320,7 @@ fn resolve_local(
 	value: &str,
 	configuration: &ConfigurationSet,
 	nodelist: &Nodelist,
+	current_key: tith_crypto::PublicKey,
 ) -> Result<(IdentityRef, Identity), Box<dyn Error>> {
 	if let Some(name) = value.strip_prefix('@') {
 		let peer = configuration.peers.get(name).ok_or("unknown local Peer")?;
@@ -321,6 +330,9 @@ fn resolve_local(
 		let public_key = peer
 			.public_key
 			.ok_or("anonymous local Peer has no public key")?;
+		if public_key != current_key {
+			return Err("local Peer public key does not match the current secret key".into());
+		}
 		return Ok((
 			IdentityRef::Peer(name.to_owned()),
 			Identity {
@@ -333,14 +345,14 @@ fn resolve_local(
 	if address.is_anonymous() {
 		return Err("an anonymous local identity must use a Peer reference".into());
 	}
-	let public_key = nodelist
-		.public_key(&address)
-		.ok_or("local non-anonymous identity has no nodelist TITH public key")?;
+	nodelist
+		.get(&address)
+		.ok_or("local non-anonymous identity has no nodelist entry")?;
 	Ok((
 		IdentityRef::Address(address.clone()),
 		Identity {
 			address,
-			public_key,
+			public_key: current_key,
 		},
 	))
 }
@@ -373,4 +385,28 @@ pub fn now() -> u64 {
 		.duration_since(std::time::UNIX_EPOCH)
 		.unwrap_or_default()
 		.as_secs()
+}
+
+#[cfg(test)]
+mod trust_tests {
+	use super::*;
+
+	#[test]
+	fn a_rotated_local_identity_uses_its_current_key_while_the_nodelist_is_stale() {
+		let published = SigningKeyPair::from_seed(&[1; 32]).unwrap();
+		let current = SigningKeyPair::from_seed(&[2; 32]).unwrap();
+		let nodelist = Nodelist::parse(
+			"fidonet",
+			&format!(
+				"Zone\t1\tNode\tLocation\tSysop\t\tCM\t\tIIH:node.example:24555:{}\t\t\n",
+				STANDARD_NO_PAD.encode(published.public.as_bytes())
+			),
+		)
+		.unwrap();
+		let configuration = ConfigurationSet::parse("", "Routes fidonet#1\nEnd\n", "", "").unwrap();
+		let (reference, identity) =
+			resolve_local("fidonet#1", &configuration, &nodelist, current.public).unwrap();
+		assert_eq!(reference.to_string(), "fidonet#1");
+		assert_eq!(identity.public_key, current.public);
+	}
 }

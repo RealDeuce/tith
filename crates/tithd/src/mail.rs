@@ -151,7 +151,7 @@ impl KeyResolver for Mailer {
 		let nodelist_key = self.nodelist.public_key(address);
 		self.store
 			.key_pins()
-			.resolve(&address.to_string(), nodelist_key)
+			.resolve(address, nodelist_key)
 			.ok()
 			.flatten()
 	}
@@ -1584,7 +1584,7 @@ mod tests {
 				.mailer
 				.store
 				.key_pins()
-				.resolve("fidonet#1/2", Some(retired_public))
+				.resolve(&"fidonet#1/2".parse().unwrap(), Some(retired_public))
 				.unwrap(),
 			Some(receiver_public)
 		);
@@ -1634,7 +1634,7 @@ mod tests {
 				.mailer
 				.store
 				.key_pins()
-				.resolve("fidonet#1/2", None)
+				.resolve(&"fidonet#1/2".parse().unwrap(), None)
 				.unwrap(),
 			Some(receiver_public)
 		);

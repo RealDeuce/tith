@@ -77,10 +77,9 @@ impl SubmissionEngine {
 			.values()
 			.filter(|peer| !peer.address.is_anonymous())
 		{
-			if let Some(key) = pins.resolve(
-				&peer.address.to_string(),
-				self.nodelist.public_key(&peer.address),
-			)? {
+			if let Some(key) =
+				pins.resolve(&peer.address, self.nodelist.public_key(&peer.address))?
+			{
 				effective_keys.insert(peer.address.clone(), key);
 			}
 		}
@@ -102,8 +101,7 @@ impl SubmissionEngine {
 					continue;
 				};
 				if !address.is_anonymous()
-					&& let Some(key) =
-						pins.resolve(&address.to_string(), self.nodelist.public_key(&address))?
+					&& let Some(key) = pins.resolve(&address, self.nodelist.public_key(&address))?
 				{
 					effective_keys.insert(address, key);
 				}
@@ -1688,7 +1686,12 @@ mod tests {
 		let store = inbound.outbound().unwrap();
 		store
 			.key_pins()
-			.trust_on_first_use("fidonet#1/100", pinned_keys.public, 1)
+			.observe_initial(
+				&"fidonet#1/100".parse().unwrap(),
+				pinned_keys.public,
+				None,
+				1,
+			)
 			.unwrap();
 
 		for request in [

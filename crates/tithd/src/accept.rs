@@ -47,7 +47,7 @@ impl KeyResolver for Acceptance<'_> {
 	fn public_key(&self, address: &tith_wire::Address) -> Option<tith_crypto::PublicKey> {
 		self.store
 			.key_pins()
-			.resolve(&address.to_string(), self.nodelist.public_key(address))
+			.resolve(address, self.nodelist.public_key(address))
 			.ok()
 			.flatten()
 	}
@@ -375,7 +375,7 @@ impl Acceptance<'_> {
 				let public_key = if via.address.is_anonymous() {
 					via.public_key?
 				} else {
-					self.nodelist.public_key(&via.address)?
+					self.public_key(&via.address)?
 				};
 				Some(Identity {
 					address: via.address,

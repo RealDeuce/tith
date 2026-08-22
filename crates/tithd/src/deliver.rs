@@ -70,7 +70,7 @@ impl KeyResolver for Outbound {
 		let nodelist_key = self.nodelist.public_key(address);
 		self.inbound
 			.key_pins()
-			.resolve(&address.to_string(), nodelist_key)
+			.resolve(address, nodelist_key)
 			.ok()
 			.flatten()
 	}
@@ -446,14 +446,19 @@ impl Outbound {
 		let pins = self.inbound.key_pins();
 		let accepted = if let Some(predecessor) = expected {
 			pins.advance(
-				&address.to_string(),
+				address,
 				predecessor,
 				current,
 				self.nodelist.public_key(address),
 				now,
 			)?
 		} else {
-			pins.trust_on_first_use(&address.to_string(), current, now)?
+			let observation =
+				pins.observe_initial(address, current, self.nodelist.public_key(address), now)?;
+			if matches!(observation, tith_store::InitialObservation::Established(_)) {
+				eprintln!("{}", initial_trust_message(address));
+			}
+			return Ok(observation.effective_key());
 		};
 		Ok(accepted.current)
 	}
@@ -820,6 +825,10 @@ impl Outbound {
 	}
 }
 
+fn initial_trust_message(address: &tith_wire::Address) -> String {
+	format!("tithd: established a new key pin for {address}")
+}
+
 fn poll_values() -> Result<Vec<OwnedTlv>, BundleError> {
 	[
 		types::POLL_MESSAGES,
@@ -1035,6 +1044,15 @@ mod tests {
 				&resolver,
 			)
 			.unwrap()
+		);
+	}
+
+	#[test]
+	fn a_new_initial_trust_decision_has_an_explicit_audit_message() {
+		let address: Address = "fidonet#1/2".parse().unwrap();
+		assert_eq!(
+			initial_trust_message(&address),
+			"tithd: established a new key pin for fidonet#1/2"
 		);
 	}
 }

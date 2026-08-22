@@ -72,7 +72,7 @@ pub fn route_netmail(
 		if let Some((next_hop, passive)) =
 			candidate(method, destination, config, nodelist, resolver)
 		{
-			if vias.contains(&next_hop) {
+			if vias.iter().any(|via| via.same_system_as(&next_hop)) {
 				return Err(RouteFailure::Loop);
 			}
 			return Ok(Commitment {
@@ -187,9 +187,11 @@ fn candidate(
 				)
 				.ok()?;
 				let entry = nodelist.get(&address)?;
+				entry.tith.as_ref()?;
+				let public_key = resolver.public_key(&address)?;
 				let identity = Identity {
 					address,
-					public_key: entry.tith.as_ref()?.public_key,
+					public_key,
 				};
 				eligible_ancestor(identity, config, nodelist, resolver)
 			}
@@ -204,7 +206,8 @@ fn candidate(
 				_ => unreachable!(),
 			};
 			let entry = nodelist.get(address)?;
-			let key = entry.tith.as_ref()?.public_key;
+			entry.tith.as_ref()?;
+			let key = resolver.public_key(address)?;
 			eligible_ancestor(
 				Identity {
 					address: address.clone(),
@@ -395,5 +398,54 @@ mod tests {
 		)
 		.unwrap();
 		assert_eq!(commitment.next_hop.address, next);
+		assert_eq!(
+			commitment.next_hop.public_key,
+			PublicKey::from_bytes([2; 32])
+		);
+		assert_eq!(
+			route_netmail(
+				&config,
+				routes,
+				&destination,
+				&[Identity {
+					address: commitment.next_hop.address,
+					public_key: PublicKey::from_bytes([3; 32]),
+				}],
+				&Nodelist::default(),
+				&resolver,
+			),
+			Err(RouteFailure::Loop)
+		);
+	}
+
+	#[test]
+	fn hierarchy_methods_use_the_effective_key_instead_of_the_published_anchor() {
+		let published = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+		let list = Nodelist::parse(
+			"fidonet",
+			&format!(
+				"Zone\t1\tZone\tLocation\tSysop\t\tCM\t\tIIH:zone.example:24555:{published}\t\t\n\t2\tBoss\tLocation\tSysop\t\tCM\t\tIIH:boss.example:24555:{published}\t\t\n"
+			),
+		)
+		.unwrap();
+		let config = ConfigurationSet::parse("", "Routes fidonet#1/9\nEnd\n", "", "").unwrap();
+		let destination = Identity {
+			address: "fidonet#1/2.1".parse().unwrap(),
+			public_key: PublicKey::from_bytes([9; 32]),
+		};
+		let boss: Address = "fidonet#1/2".parse().unwrap();
+		let successor = PublicKey::from_bytes([2; 32]);
+		let resolver = |address: &Address| (address == &boss).then_some(successor);
+		let commitment = route_netmail(
+			&config,
+			&config.routes[0],
+			&destination,
+			&[],
+			&list,
+			&resolver,
+		)
+		.unwrap();
+		assert_eq!(commitment.next_hop.address, boss);
+		assert_eq!(commitment.next_hop.public_key, successor);
 	}
 }
