@@ -3,7 +3,7 @@ TITH                                              THIS ISN'T THAT HARD
 **********************************************************************
 
 Publication:  TSP‑0003
-Revision:     10
+Revision:     11
 Title:        Legacy Data Formats and TITH
 Author(s):    Stephen Hurd
 Date:         2026‑08‑22
@@ -101,6 +101,25 @@ Contents
   These are trusted local policy.  A pathname, packet password, legacy
   address, MSGID, Origin line, PATH, username, or message attribute
   MUST NOT supply or expand native authority.
+
+  A legacy domain which must interoperate with historical FidoNet tools
+  SHOULD begin with one lower‐case ASCII letter followed by no more
+  than seven lower‐case ASCII letters or digits.  This recommendation
+  constrains legacy conversion policy, not the native TTS‑0004 Domain
+  grammar.
+
+  Each configured legacy domain has one explicit case policy.  Preserve
+  retains its exact spelling.  Lowercase converts ASCII letters in a
+  domain supplied or consumed by legacy software to lower case.  The
+  default is Preserve.  A converter MUST NOT apply Lowercase to another
+  domain merely because that domain appears in the same object.
+
+  When a selected legacy representation lacks Domain or Zone, only the
+  domain and default zone in its trusted conversion context supply the
+  missing components.  The converter MUST construct and validate a
+  complete canonical TTS‑0004 address before native processing.  It
+  MUST NOT retain a partial address or apply those context values to an
+  already complete address which disagrees with them.
 
   A received legacy message was not signed by its claimed author.  Its
   resolved legacy author becomes the TITH Message Origin so replies are
@@ -1520,7 +1539,7 @@ A. References
 
   [TTS‑0002] "Type Length Value Encoding", TITH, 2026‑08‑16.
 
-  [TTS‑0004] "Node Addresses", TITH, 2026‑08‑21.
+  [TTS‑0004] "Node Addresses", TITH, 2026‑08‑22.
 
   [TTS‑0005] "Bundle Format", TITH, 2026‑08‑22.
 
@@ -1577,5 +1596,10 @@ B. History
    serializations of the TSP‑0016 item data, used its child order,
    signature byte range, authentication states, and item types, and
    made failed retained‑Signature reconstruction mint a distinct item.
+
+   Rev.11, 2026‑08‑22: Moved legacy‐compatible Domain spelling,
+   per‐domain case policy, and completion of missing Domain and Zone
+   components from the native address standard into the trusted
+   conversion context.
 
 **********************************************************************
