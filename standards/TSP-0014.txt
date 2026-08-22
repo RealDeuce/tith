@@ -3,7 +3,7 @@ TITH                                              THIS ISN'T THAT HARD
 **********************************************************************
 
 Publication:  TSP‑0014
-Revision:     4
+Revision:     5
 Title:        Signed Mail From Legacy‐Only Systems
 Author(s):    Stephen Hurd
 Date:         2026‑08‑22
@@ -342,12 +342,7 @@ Contents
   caller knows the password; it does not tell the answering system who
   placed the call.
 
-  The channels therefore provide these binding strengths:
-
-    Authoritative
-      The IIH flag in TTS‑5000 field 9.  The nodelist distribution is
-      the trust path, and the binding is a published fact about the
-      address.
+  The legacy channels therefore provide these observation classes:
 
     Directed
       Sections 3.2, 3.3, and 3.4, observed in a directed session which
@@ -359,24 +354,21 @@ Contents
       Those same three channels observed in any other session.
       Observation only.
 
-  TSP‑0015 owns the pin record, nodelist precedence, first‑contact
-  policy, and continuity rules shared with native TITH.  The channels
-  in this document supply observations to those rules; they do not
-  define a second kind of pin.
+  TTS‑5000 owns the separately authenticated nodelist publication and
+  classifies its IIH PublicKey as an authoritative external anchor.
+  Section 3.1 is therefore not a legacy observation channel.
 
-  A directed observation MAY establish an initial pin only when local
-  policy explicitly designates that exact contact as trusted.  A later
-  directed observation of a different key MUST NOT replace the pin by
-  itself.  Rotation requires the predecessor‑signed continuity proof
-  in TTS‑0005, a new external trust anchor, or an explicit operator
-  action.  Merely calling the same endpoint again does not prove that
-  the formerly trusted private key authorized the change.
+  A directed observation made while local policy explicitly designates
+  that exact contact as trusted supplies an authorized initial
+  observation to TSP‑0015.  Merely calling the same endpoint again does
+  not prove that the formerly trusted private key authorized a change,
+  so a later directed observation does not supply an authenticated
+  continuity proof.
 
-  An undirected observation MUST NOT establish, replace, or remove a
-  pin, and MUST NOT resolve a conflict.  It MAY be recorded or prompt a
-  directed observation for corroboration.  Two different keys observed
-  for one address within a single session are a conflict and neither is
-  accepted from that session.
+  An undirected observation supplies no trust evidence.  It may be
+  recorded or prompt a directed observation for corroboration.  Two
+  different keys observed for one address within a single session are
+  a conflict and neither supplies an observation from that session.
 
   An address the verifier can never call, and which has no nodelist
   entry, has no directed channel available and cannot be pinned at all.
@@ -384,10 +376,10 @@ Contents
   be reached and is not listed has published nothing that a
   verifier is able to check.
 
-  Directed legacy discovery is weaker than the nodelist and this
-  document does not pretend otherwise.  It remains an input at the
-  legacy conversion boundary while TSP‑0015 defines the shared trust
-  decision.
+  Directed legacy discovery is weaker than an authoritative external
+  anchor and this document does not pretend otherwise.  It remains an
+  input at the legacy conversion boundary while TSP‑0015 defines the
+  shared trust decision.
 
 
 5. Signing Legacy Messages
@@ -564,7 +556,7 @@ A. References
 
   [TSP‑0011] "Durable Inbound Delivery Items", TITH, 2026‑08‑21.
 
-  [TSP‑0015] "Public Key Trust and Continuity", TITH, 2026‑08‑20.
+  [TSP‑0015] "Public Key Trust and Continuity", TITH, 2026‑08‑22.
 
   [TSP‑0016] "Item Format", TITH, 2026‑08‑22.
 
@@ -597,5 +589,9 @@ B. History
 
    Rev.4, 2026‑08‑22: Referred IIH syntax to TTS‑5001 while retaining
    TTS‑5000 as the nodelist publication and trust context.
+
+   Rev.5, 2026‑08‑22: Classified legacy channels as trust evidence
+   inputs and left pin transitions and effective key resolution solely
+   to TSP‑0015.
 
 **********************************************************************

@@ -3,7 +3,7 @@ TITH                                              THIS ISN'T THAT HARD
 **********************************************************************
 
 Publication:  TTS‑0006
-Revision:     10
+Revision:     11
 Title:        Bundle Exchange Protocol
 Author(s):    Stephen Hurd
 Date:         2026‑08‑22
@@ -161,17 +161,20 @@ Contents
 
   When a non‐anonymous peer's reply fails authentication with the
   currently trusted key, the Client MAY make one PublicKeyRequest for
-  that exact
-  predecessor and then retry the original exchange once in the same
-  schedule activation.  It MUST authenticate the key reply with the
-  requested predecessor before persisting or using the returned key.
+  that exact predecessor and then retry the original exchange once in
+  the same schedule activation.  It MUST accept the returned key only
+  from a reply which supplies the authenticated continuity proof defined
+  by TTS‑0005 before submitting that proof to TSP‑0015, persisting the
+  key, or using it.
   Failure of either the probe or the one retry ends that attempt; this
   rule does not create an unbounded retry loop.
 
   A first‐contact PublicKeyRequest omits the non‐anonymous Destination
   PublicKey.  A Client MUST do this only when its local configuration
   explicitly authorizes trust on first use for that contact and fixes
-  the endpoint used.  Receipt of such a self‑signed response is not
+  the endpoint used.  A completely validated reply from that contact
+  supplies the authorized initial observation defined by TSP‑0015.
+  Receipt of a self‑signed response without that authorization is not
   evidence that the endpoint belongs to the intended operator.
 
 
@@ -266,7 +269,7 @@ Contents
 A. References
 ─────────────
 
-  [TSP‑0015] "Public Key Trust and Continuity", TITH, 2026‑08‑20.
+  [TSP‑0015] "Public Key Trust and Continuity", TITH, 2026‑08‑22.
 
   [TSP‑0016] "Item Format", TITH, 2026‑08‑22.
 
@@ -276,7 +279,7 @@ A. References
 
   [TTS‑0005] "Bundle Format", TITH, 2026‑08‑22.
 
-  [TTS‑5000] "The Distribution Nodelist", TITH, 2026‑08‑21.
+  [TTS‑5000] "The Distribution Nodelist", TITH, 2026‑08‑22.
 
 
 B. History
@@ -315,5 +318,8 @@ B. History
    Rev.10, 2026‑08‑22: Kept request‐specific uses of rejection reasons
    at the exchange edge while TTS‑0005 defines their shared retry
    semantics.
+
+   Rev.11, 2026‑08‑22: Submitted completely validated first‐contact and
+   continuity results to the channel‐independent TSP‑0015 trust model.
 
 **********************************************************************

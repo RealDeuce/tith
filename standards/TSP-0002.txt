@@ -3,7 +3,7 @@ TITH                                              THIS ISN'T THAT HARD
 **********************************************************************
 
 Publication:  TSP‑0002
-Revision:     15
+Revision:     16
 Title:        Routing and Distribution Configuration
 Author(s):    Stephen Hurd
 Date:         2026‑08‑22
@@ -145,8 +145,9 @@ Contents
   It is permitted only for a non‐anonymous Address having at least one
   configured Endpoint.  It authorizes an initial PublicKeyRequest to
   that configured contact only while the identity is unlisted and no
-  nodelist key or local pin exists.  The returned self‐signed key
-  becomes the pin specified by TSP‑0015.
+  authoritative anchor or local pin exists.  A self‐signed key returned
+  by a completely validated reply from that contact is an authorized
+  initial observation under TSP‑0015.
   This directive deliberately accepts the risk that an attacker at
   first contact can become pinned; it MUST NOT be enabled by default.
 
@@ -790,7 +791,7 @@ A. References
   [TSP‑0013] "Legacy Mailer and Tosser IPC Adapters", TITH,
   2026‑08‑20.
 
-  [TSP‑0015] "Public Key Trust and Continuity", TITH, 2026‑08‑20.
+  [TSP‑0015] "Public Key Trust and Continuity", TITH, 2026‑08‑22.
 
   [TSP‑0016] "Item Format", TITH, 2026‑08‑22.
 
@@ -802,7 +803,7 @@ A. References
 
   [TTS‑0006] "Bundle Exchange Protocol", TITH, 2026‑08‑22.
 
-  [TTS‑5000] "The Distribution Nodelist", TITH, 2026‑08‑21.
+  [TTS‑5000] "The Distribution Nodelist", TITH, 2026‑08‑22.
 
   [FSC‑0003.001] "FidoNet Route Files Explained", Ben Barker,
   1986‑03‑23.
@@ -868,5 +869,9 @@ B. History
 
    Rev.15, 2026‑08‑22: Handled peer‐correctable rejection reason 2
    without restricting the shared reason to FileRequest.
+
+   Rev.16, 2026‑08‑22: Classified an explicitly authorized and
+   completely validated first‐contact result as an initial trust
+   observation while leaving the pin transition to TSP‑0015.
 
 **********************************************************************

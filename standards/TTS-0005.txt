@@ -3,7 +3,7 @@ TITH                                              THIS ISN'T THAT HARD
 **********************************************************************
 
 Publication:  TTS‑0005
-Revision:     14
+Revision:     15
 Title:        Bundle Format
 Author(s):    Stephen Hurd
 Date:         2026‑08‑22
@@ -68,9 +68,9 @@ Contents
   NOT be followed by a PublicKey, except in the PublicKeyRequest reply
   defined below.  For the anonymous address, this
   PublicKey is the key applicable to the SignedTLV values that follow.
-  For any other Origin, the applicable key is obtained from the
-  nodelist or the trust state defined by TSP‑0015, and a supplied
-  PublicKey MUST NOT override it.
+  For any other Origin, the applicable key is the effective key
+  resolved under TSP‑0015, and a supplied PublicKey MUST NOT override
+  it.
 
   A reply to a PublicKeyRequest is the sole exception for a non‐anonymous
   Origin.  Its Origin MUST be immediately followed by the PublicKey
@@ -363,17 +363,27 @@ Contents
 
   A PublicKeyRequest reply MUST use the non‐anonymous Origin PublicKey
   rule in section 2 and MUST contain exactly one payload SignedTLV.  Its
-  Accepted value MUST contain the Server's current PublicKey.  Thus a
-  reply signed by the requested predecessor certifies the successor
-  carried inside its authenticated SignedData.  This proof establishes
-  continuity only; it is not revocation of the predecessor or evidence
-  that the predecessor was not compromised.
+  Accepted value MUST contain the Server's current PublicKey.
+
+  When the original Header's non‐anonymous Destination is followed by
+  a PublicKey, a reply supplies an authenticated continuity proof only
+  after the receiver validates the complete reply using that exact
+  requested predecessor.  This includes the reversed Bundle identities,
+  RequestIdentifier, TLVHash, dedicated reply grammar, and the Header
+  and sole payload SignedTLV.  The proof binds the Destination address
+  and requested predecessor to the successor in Accepted.  It
+  establishes continuity only; it is not revocation of the predecessor
+  or evidence that the predecessor was not compromised.
 
   When the original Header's non‐anonymous Destination is not followed
   by a PublicKey, section 3 requires both the PublicKey immediately
   following the Reply Bundle's Origin and the PublicKey in Accepted to
   be the Server's current key.  A receiver can validate those
-  requirements by comparing the two values.
+  requirements by comparing the two values.  A completely validated
+  self‐signed reply supplies an observation of that key.  It does not by
+  itself bind the key to the intended address; only local authorization
+  of that exact contact can classify it as an authorized initial
+  observation under TSP‑0015.
 
   When a Poll or FileRequest is Accepted, every value returned in
   response to it MUST be in the same SignedTLV as its Accepted value.
@@ -417,7 +427,7 @@ Contents
 A. References
 ─────────────
 
-  [TSP‑0015] "Public Key Trust and Continuity", TITH, 2026‑08‑20.
+  [TSP‑0015] "Public Key Trust and Continuity", TITH, 2026‑08‑22.
 
   [TSP‑0016] "Item Format", TITH, 2026‑08‑22.
 
@@ -430,7 +440,7 @@ A. References
 
   [TTS‑0004] "Node Addresses", TITH, 2026‑08‑21.
 
-  [TTS‑5000] "The Distribution Nodelist", TITH, 2026‑08‑21.
+  [TTS‑5000] "The Distribution Nodelist", TITH, 2026‑08‑22.
 
 
 B. History
@@ -489,5 +499,9 @@ B. History
    Rev.14, 2026‑08‑22: Confined rejection reasons 1 and 2 to their
    shared retry semantics and left request‐specific applicability to
    the exchange protocol.
+
+   Rev.15, 2026‑08‑22: Classified a completely validated
+   predecessor‐signed PublicKeyRequest reply as continuity evidence and
+   a self‐signed first‐contact result as an observation only.
 
 **********************************************************************
