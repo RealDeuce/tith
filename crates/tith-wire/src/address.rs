@@ -831,6 +831,7 @@ mod tests {
 			vec!["fidonet#1/2", "fidonet#1"],
 			vec!["fidonet#1:2/103.1", "fidonet#1:2/103"],
 			vec!["fidonet#-1", "fidonet#1"],
+			vec!["fidonet#1", "fidonet#-1"],
 			vec!["a.b:c/d#1/2", "a.b:c/d#1/3"],
 			vec!["fidonet#1", "other#1"],
 		] {
@@ -910,6 +911,7 @@ mod tests {
 			"fidonet#1,fidonet#1/2",
 			"fidonet#1,,/2",
 			"fidonet#1,:",
+			"fidonet#-1,:-1",
 		] {
 			assert!(parse_trimmed_list(text).is_err(), "{text}");
 		}
