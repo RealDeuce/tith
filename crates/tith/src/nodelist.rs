@@ -7,8 +7,8 @@ use std::io::{self, Read, Write};
 use tith_nodelist::Nodelist;
 use tith_nodelist_legacy::{Overrides, convert, load_overrides};
 
-const USAGE: &str =
-	"usage: tith nodelist convert [--verify DOMAIN] [OVERRIDES-FILE...] < FTS-5000 > TTS-5000";
+const USAGE: &str = "usage: tith nodelist convert [--verify DOMAIN] \
+[OVERRIDES-FILE...] < FTS-5000/FTS-5001 > TTS-5000/TTS-5001";
 
 pub fn run(arguments: &mut impl Iterator<Item = String>) -> Result<i32, Box<dyn Error>> {
 	match arguments.next().as_deref() {

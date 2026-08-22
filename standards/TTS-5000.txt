@@ -3,11 +3,11 @@ TITH                                              THIS ISN'T THAT HARD
 **********************************************************************
 
 Publication:  TTS‑5000
-Revision:     6
+Revision:     7
 Title:        The Distribution Nodelist
 Author(s):    FTSC Members, Administrator, Honoured Guests and
               Stephen Hurd
-Date:         2026‑08‑21
+Date:         2026‑08‑22
 ══════════════════════════════════════════════════════════════════════
 
 Status of this document
@@ -39,6 +39,7 @@ Contents
   5.  Content
       5.1  Comment Lines
       5.2  Data lines
+      5.3  Flag Relationships
   6.  Segments
 
   A.  References
@@ -84,7 +85,7 @@ Contents
 3. Purpose
 ──────────
 
-  Along with the companion technical standard (FTS‑5001.006), this
+  Along with the companion technical standard TTS‑5001, this
   document defines the format and content of Fidonet's distribution
   nodelist.
 
@@ -226,9 +227,9 @@ Contents
         which does otherwise is invalid, and a processor MUST reject
         it.
 
-        One flag form is excepted.  IIH:<PublicKey>, the form which
+        One flag form is excepted.  `IIH:<PublicKey>`, the form which
         carries a public key and nothing else, is permitted, because
-        it publishes no endpoint (see field 9).  A Private node
+        it publishes no endpoint (see TTS‑5001).  A Private node
         therefore still publishes the key by which data whose Origin
         is that node is authenticated.  Every other value a flag in
         those two fields can carry is a server address, a port, or an
@@ -291,8 +292,8 @@ Contents
 
       Host
         Begins the definition of a local network (net) and normally
-        defines its coordinator (see FTS‑5001.006 for the override
-        flag).
+        defines its coordinator unless section 5.3 assigns that role
+        to another entry.
 
       Hub
         Begins the definition of a routing subunit within a multilevel
@@ -386,91 +387,32 @@ Contents
 
      Type: string.
 
-     Contains a comma (U+2C) separated list of flags that describe
-     general mail‐service operating conditions, caller eligibility,
-     availability, and supported file or update requests.  Currently
-     (as of FTS‑5001.006), this consists of the CM, LO, MN, ICM, XA,
-     XB, XC, XP, XR, XW, XX, #nn, !nn, and Tyz flags.
-
-     See FTS‑5001.006 for details on the flag fields.  Ignore any length
-     restrictions specified in that document.
+     Contains exactly the System Flags defined by TTS‑5001, separated
+     and ordered as that document specifies.
 
   Field 8: PSTN and ISDN Flags
 
      Type: string.
 
-     Contains a comma (U+2C) separated list of flags that are used
-     when dialing with PSTN or ISDN.  FTS‑5001.006 defines these in
-     sections 5.2 (Modem Connection Protocol Flags), 5.3 (Session
-     Level Error‐correction and Compression Flags), and 5.8 (ISDN
-     Capability Flags).
-
-     See FTS‑5001.006 for details on the flag fields.  Ignore any length
-     restrictions specified in that document.
+     Contains exactly the PSTN and ISDN Flags defined by TTS‑5001,
+     separated and ordered as that document specifies.
 
   Field 9: Internet Flags
 
      Type: string.
 
-     Contains a comma (U+2C) separated list of flags that are used to
-     make a direct connection over the public internet. FTS‑5001.006
-     defines these in sections 5.9.1 (Internet Protocol Flags), 5.9.2
-     (Server Address Flags), and 5.9.3 (Internet Information Flags).
-     Note however, that the ICM flag does not go in this field, but
-     rather goes in Field 7 (System Flags).
+     Contains exactly the Internet Flags defined by TTS‑5001,
+     separated and ordered as that document specifies.  TTS‑5001 also
+     defines how INA supplies omitted servers and how repeated
+     endpoints retain preference order.
 
-     If the INA: flag is present, it MUST be the first flag in
-     this field.
-
-     See FTS‑5001.006 for details on the flag fields.  Ignore any length
-     restrictions specified in that document.
-
-     In addition to the flags specified in FTS‑5001.006, the TITH
-     nodelist supports the IIH Internet Protocol Flag.  An IIH flag has
-     exactly one of these four forms:
-
-       IIH:<PublicKey>
-       IIH:<server address>:<PublicKey>
-       IIH::<port>:<PublicKey>
-       IIH:<server address>:<port>:<PublicKey>
-
-     <PublicKey> is a 43‑character base 64 encoded public key with the
-     trailing equals sign (U+3D) removed, representing the 32‑byte
-     public key of the node.  This is the key used to authenticate TITH
-     data whose Origin is that node's address.  An item's SignedOrigin
+     The PublicKey in an IIH flag is the key used to authenticate TITH
+     data whose Origin is this entry's address.  An item's SignedOrigin
      cannot override this key; it is considered only when no Origin key
      is available.
 
-     <server address> uses the syntax specified for Internet Protocol
-     Flags by FTS‑5001.006: an FQDN, an IPv4 dotted quad, or an IPv6
-     address enclosed in Square Brackets (U+5B and U+5D).  An FQDN
-     consists of labels separated by Full Stop (U+2E), with no empty
-     label or trailing Full Stop.  Each label contains one to 63 ASCII
-     letters, digits, or Hyphen‐Minus (U+2D), and MUST begin and end
-     with a letter or digit.  Its complete length MUST NOT exceed 253
-     characters.  An IPv4 dotted quad MUST contain exactly four
-     decimal octets from 0 through 255.  A bracketed value MUST contain
-     a syntactically valid IPv6 address and its closing bracket MUST be
-     the final character of <server address>.
-
-     When <server address> is omitted, the first Server Address Flag
-     specified by FTS‑5001.006 in this field supplies the address.  The
-     only such flag currently defined is INA.  If there is no such
-     flag, the IIH value still publishes its PublicKey but does not
-     supply a usable server endpoint.  That form, IIH:<PublicKey>
-     alone, is the only one a Pvt entry may carry; see field 1.
-
-     <port> is a decimal integer from 1 through 65535 with no leading
-     zero.  When it is omitted, it means the registered default TITH
-     service port.  No such port is assigned by this revision, so an
-     IIH value with no explicit port does not currently supply a usable
-     endpoint.  Implementations MUST NOT substitute the default port
-     of another protocol.
-
-     IIH MAY occur more than once.  Each occurrence adds one endpoint,
-     and implementations MUST attempt those endpoints in Field 9 order.
-     Every IIH occurrence on one data line MUST contain the same
-     PublicKey.  A line containing different IIH PublicKeys is invalid.
+     `IIH:<PublicKey>` alone is the only Internet Flag a Pvt entry may
+     carry.  It publishes the key but no endpoint; see field 1.
 
      The IIH PublicKey is the nodelist trust anchor for this address.
      TSP‑0015 determines whether that anchor or an authenticated
@@ -485,29 +427,38 @@ Contents
 
      Type: string.
 
-     Contains a comma (U+2C) separated list of flags that are used to
-     pass traffic via STD 11 ARPA Internet Text Messages (email).
-     FTS‑5001.006 defines these in sections 5.9.4 (Email Protocol
-     Flags), and 5.9.5 (Email Address Flags).
-
-     If the IEM: flag is present with an email address, it MUST be the
-     first flag in this field.
-
-     See FTS‑5001.006 for details on the flag fields.  Ignore any length
-     restrictions specified in that document.
+     Contains exactly the Email Flags defined by TTS‑5001, separated
+     and ordered as that document specifies.
 
   Field 11: Other Flags
 
      Type: string.
 
-     Contains a comma (U+2C) separated list containing the MO, GUUCP,
-     and PING flags, the mail‐oriented User Flags defined in section
-     6.2 of FTS‑5001.006, and any flag not carried in another flags
-     field.  The U delimiter used to introduce User Flags in an
-     FTS‑5000.005 nodelist MUST NOT be included in this field.
+     Contains exactly the Other Flags and extensions defined by
+     TTS‑5001, separated and ordered as that document specifies.  A U
+     used as the FTS‑5000.005 User Flag delimiter is not included.  A
+     complete native extension whose value is `U` remains an extension
+     as TTS‑5001 specifies.
 
-     See FTS‑5001.006 for details on the flag fields.  Ignore any length
-     restrictions specified in that document.
+
+5.3. Flag Relationships
+───────────────────────
+
+  On one data line, at most one of XA, XB, XC, XP, XR, XW, and XX may
+  occur.  CM MUST NOT occur with ICM, a Mail Period flag, or an Online
+  Period flag.  These constraints avoid contradictory statements; an
+  implementation MUST NOT infer or remove a redundant capability.
+
+  ZEC may occur on at most one entry in a Zone branch and identifies
+  that Zone's EchoMail Coordinator.  REC and RPK may each occur on at
+  most one entry in a Region branch and identify that Region's
+  EchoMail Coordinator and Pointlist Keeper respectively.
+
+  NEC and NPK may each occur on at most one entry in a logical net and
+  identify that net's EchoMail Coordinator and Pointlist Keeper
+  respectively.  NC may occur on at most one member entry in a local
+  net.  When present, it identifies that net's Network Coordinator in
+  place of the Host entry; it MUST NOT occur on the Host entry itself.
 
 
 6. Segments
@@ -551,21 +502,18 @@ A. References
   Administrator and Honoured Guests.  January 2014. Obsoleted by this
   document.
 
-  [FTS‑5001.006] "Nodelist flags and userflags", FTSC Members,
-  Administrator and Honoured Guests.  August 2017.
-
   [FTS‑5002.002] "Pointlist Formats", Michiel van der Vlist.  March 2010.
 
   [FTA‑1006.002] "Key words to indicate requirement levels"
   FTSC, 1998‑01‑17.
 
-  [TTS‑0003] "Common TLV Types", TITH, 2026‑08‑22.
-
   [TTS‑0004] "Node Addresses", TITH, 2026‑08‑21.
 
   [TSP‑0015] "Public Key Trust and Continuity", TITH, 2026‑08‑20.
 
-  [TTS‑0005] "Bundle Format", TITH, 2026‑08‑22.
+  [TSP‑0016] "Item Format", TITH, 2026‑08‑22.
+
+  [TTS‑5001] "Nodelist Flags", TITH, 2026‑08‑22.
 
   [Policy] "FidoNet Policy Document" v4.07 — June 9, 1989.
 
@@ -596,5 +544,9 @@ B. History
    Rev.6, 2026‑08‑21: Made the empty Keyword and Phone alternatives
    consistent with their field grammars, made the Phone length limit
    exact, and defined the canonical Node number text encoding.
+
+   Rev.7, 2026‑08‑22: Referred the five flag categories to TTS‑5001,
+   retained nodelist‑specific trust and hierarchy rules here, and
+   defined contextual flag combinations and coordinator cardinality.
 
 **********************************************************************

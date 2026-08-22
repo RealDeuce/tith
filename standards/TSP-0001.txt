@@ -3,10 +3,10 @@ TITH                                              THIS ISN'T THAT HARD
 **********************************************************************
 
 Publication:  TSP‑0001
-Revision:     2
+Revision:     3
 Title:        DNS Records for Nodelist Fields
 Author(s):    Stephen Hurd
-Date:         2026‑08‑16
+Date:         2026‑08‑22
 ══════════════════════════════════════════════════════════════════════
 
 Status of this document
@@ -23,7 +23,7 @@ Abstract
 ────────
 
   Some networks prefer to work without a nodelist using DNS, but
-  current DNS mapping does not probide all required nodelist
+  current DNS mapping does not provide all required nodelist
   information.
 
 Contents
@@ -55,9 +55,12 @@ Contents
 
   _tith-sysopname.f1.n1.z885.bbsdev.net. IN TXT "n=Deuce"
 
-  _tith-iflags is a TXT record that contains the string "f="
-  followed by the inernet flags field from the nodelist.  The INA flag
-  if present may be stripped from the field.
+  _tith-iflags is a TXT record that contains the string "f=" followed
+  by the Internet Flags from TTS‑5000 field 9, in the TTS‑5001 grammar
+  and order.  An INA flag may be omitted when it would name the node
+  DNS name to which the `_tith-iflags` attribute leaf is prepended.
+  When it is omitted, flags without an explicit server use that node
+  name.
 
   _tith-iflags.f1.n1.z885.bbsdev.net. IN TXT
           "f=IIH:Jeq+WuDMPtjZLRWb7IWSguOecnyqJT/y2SnQBkQ0Gi8"
@@ -89,6 +92,10 @@ A. References
   "Underscored" Naming of Attribute Leaves. D. Crocker, Brandenburg
   InternetWorking. March 2019
 
+  [TTS‑5000] "The Distribution Nodelist", TITH, 2026‑08‑22.
+
+  [TTS‑5001] "Nodelist Flags", TITH, 2026‑08‑22.
+
 
 B. History
 ──────────
@@ -97,5 +104,9 @@ B. History
 
    Rev.2, 2026‑08‑16: Normalized typography and corrected the RFC
    reference.
+
+   Rev.3, 2026‑08‑22: Referred the Internet Flag grammar to TTS‑5001
+   and defined the scoped node name as the default server when INA is
+   omitted.
 
 **********************************************************************

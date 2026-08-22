@@ -75,8 +75,8 @@ The implementation is divided by responsibility rather than by document:
 | --- | --- |
 | `tith-crypto` | Libhydrogen keys, signatures, hashes, and encrypted transport primitives; the only crate permitted to use `unsafe` |
 | `tith-wire` | Canonical integers, addresses, TLVs, Bundles, and payload items |
-| `tith-nodelist` | TTS-5000 nodelist parsing, endpoints, and public-key lookup |
-| `tith-nodelist-legacy` | FTS-5000.005 to TTS-5000 nodelist conversion |
+| `tith-nodelist` | TTS-5000/TTS-5001 nodelist parsing, typed flags, endpoints, and public-key lookup |
+| `tith-nodelist-legacy` | FTS-5000.005/FTS-5001.006 conversion to canonical TTS-5000/TTS-5001 data |
 | `tith-message-legacy` | Legacy stored `.msg`, packed messages, and Type-2+ packets, read and written |
 | `tith-bso` | FTS-5005 Binkley Style Outbound layout and control files |
 | `tith-ledger` | The TSP-0013 durable adapter ledger |
@@ -259,12 +259,13 @@ in Windows CI, named pipes.
 
 ## Using `tith nodelist convert`
 
-`tith nodelist convert` reads an FTS-5000.005 nodelist on standard input and
-writes the TTS-5000 form on standard output. It substitutes spaces for
-underscores in the name, location, and sysop fields, replaces `-Unpublished-`
-with the empty phone number, drops the DCE speed field, and sorts each flag
-into the TTS-5000 field that section 5.2 assigns it. Diagnostics go to
-standard error.
+`tith nodelist convert` reads an FTS-5000.005/FTS-5001.006 nodelist on standard
+input and writes the canonical TTS-5000/TTS-5001 form on standard output. It
+substitutes spaces for underscores in the name, location, and sysop fields,
+replaces `-Unpublished-` with the empty phone number, drops the DCE speed
+field, and normalizes each determinable legacy flag into its typed category
+and canonical order. An ambiguous flag is refused rather than guessed.
+Diagnostics go to standard error.
 
 ```sh
 cargo run -p tith -- nodelist convert --verify fidonet \
@@ -333,7 +334,7 @@ generated key and is reported, since an interrupted run could send it twice.
 write.
 
 To exercise native TTS-0006 receipt, generate a dedicated node signing key and
-place its printed public key in the applicable nodelist IIH entry or anonymous
+place its printed public key in the applicable TTS-5001 IIH entry or anonymous
 Peer configuration:
 
 ```sh

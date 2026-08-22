@@ -206,7 +206,10 @@ lengths and outstanding-response accounting cannot resolve.
 - `crates/tith-submit` owns the command-line IPC client, the reusable client
   bindings, and the binding-independent conformance check. Its CLI is the
   `cli` module rather than a binary; `tith` reaches it.
-- `crates/tith-nodelist-legacy` converts an FTS-5000.005 nodelist to TTS-5000.
+- `crates/tith-nodelist` implements TTS-5000 and TTS-5001 with typed flag
+  categories and endpoint values.
+- `crates/tith-nodelist-legacy` converts an FTS-5000.005/FTS-5001.006
+  nodelist to canonical TTS-5000/TTS-5001 data.
   It is a legacy conversion boundary and must not be folded into
   `tith-nodelist`, and it must not depend on it.
 - `crates/tith-message-legacy` reads and writes the TSP-0003 section 4 stored

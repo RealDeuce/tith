@@ -3,7 +3,7 @@ TITH                                              THIS ISN'T THAT HARD
 **********************************************************************
 
 Publication:  TSP‑0014
-Revision:     3
+Revision:     4
 Title:        Signed Mail From Legacy‐Only Systems
 Author(s):    Stephen Hurd
 Date:         2026‑08‑22
@@ -99,14 +99,15 @@ Contents
   apply to an anonymous identity, whether that identity is locally
   listed or unlisted.
 
-  A system that publishes a nodelist entry carrying the TTS‑5000 IIH
-  flag already has the strongest available key binding and SHOULD use
-  it.  Sections 3.2 through 3.4 exist for systems which cannot or will
-  not obtain such an entry, and as corroboration for those which can.
+  A system that publishes a nodelist entry carrying the TTS‑5001 IIH
+  flag in TTS‑5000 field 9 already has the strongest available key
+  binding and SHOULD use it.  Sections 3.2 through 3.4 exist for
+  systems which cannot or will not obtain such an entry, and as
+  corroboration for those which can.
 
   Throughout this document, PublicKeyText is the 43‑character RFC‑4648
   base64 encoding of a 32‑byte TITH public key with its trailing
-  padding removed, exactly as TTS‑5000 defines for the IIH flag.  It
+  padding removed, exactly as TTS‑5001 defines for the IIH flag.  It
   uses the standard base64 alphabet, never the URL‐safe alphabet, and
   contains no whitespace, line break, or padding character.  A value of
   any other length, alphabet, or encoding is malformed and MUST be
@@ -123,7 +124,7 @@ Contents
   MUST NOT choose whichever arrived first.
 
   Where a channel has an existing container for the key it uses it, and
-  the key is then the TTS‑5000 IIH flag in whatever flag list that
+  the key is then the TTS‑5001 IIH flag in whatever flag list that
   transport already carries.  Where a channel has none, or where the
   existing container cannot hold the flag, the key is carried with the
   version digit "1", which selects the key representation in section 2
@@ -133,17 +134,17 @@ Contents
   3.1 Nodelist Publication
   ────────────────────────
 
-  TTS‑5000 field 9 already defines the IIH flag, whose PublicKey is the
-  key used to authenticate TITH data whose Origin is that node's
-  address.  This document adds nothing to it and changes nothing about
-  it.
+  TTS‑5000 field 9 carries the IIH flag defined by TTS‑5001.  Its
+  PublicKey is the key used to authenticate TITH data whose Origin is
+  that node's address.  This document adds nothing to it and changes
+  nothing about it.
 
   A node which wants only key publication, and no TITH endpoint, uses
   the bare form:
 
     IIH:<PublicKeyText>
 
-  TTS‑5000 already states that such a value publishes its PublicKey
+  TTS‑5001 states that such a value publishes its PublicKey
   without supplying a usable server endpoint.  That is the intended
   configuration for a legacy‐only system and is not a defect.
 
@@ -158,16 +159,16 @@ Contents
   list.  The configuration sample distributed with binkd is
   "nodeinfo 115200,TCP,BINKP".
 
-  TTS‑5000 already defines the IIH flag as the way a TITH public key
+  TTS‑5001 defines the IIH flag as the way a TITH public key
   appears in a nodelist flag list.  A binkp mailer therefore publishes
   its key by including that flag in the list it already sends:
 
     M_NUL "NDL 115200,TCP,BINKP,IIH:<PublicKeyText>"
 
-  The element is exactly the TTS‑5000 field 9 flag, so this introduces
-  no new representation of the key.  The endpoint bearing forms of IIH
-  are equally valid here, although a verifier using this channel takes
-  only the PublicKey from them.
+  The element is exactly the TTS‑5001 flag carried in TTS‑5000 field
+  9, so this introduces no new representation of the key.  The
+  endpoint‑bearing forms of IIH are equally valid here, although a
+  verifier using this channel takes only the PublicKey from them.
 
   The NDL argument has no strict grammar.  FTS‑1026.001 calls it
   system_capabilities and recommends the keyword form only for
@@ -181,17 +182,17 @@ Contents
   it cannot be a User Flag: that form is limited to thirty‐two
   alphanumeric characters, while IIH with a 43‑character key is
   forty‐seven characters containing Colon and the base64 characters "+"
-  and "/".  TTS‑5000 removes both the length restriction and the U
-  delimiter, which is precisely why this flag is expressible in a TITH
-  nodelist and not in an FTS‑5000.005 one.  A system unwilling to put a
-  non‐FTSC element in NDL uses the frame form below.
+  and "/".  TTS‑5001 assigns IIH as a normal TITH flag, which is
+  precisely why it is expressible in a TITH nodelist and not in an
+  FTS‑5000.005 one.  A system unwilling to put a non‐FTSC element in
+  NDL uses the frame form below.
 
   A verifier splits the NDL argument on Comma (U+002C), ignores every
   element it does not recognise, including a bare U delimiter, and takes
   the PublicKey from an IIH element.  FTS‑5001.006 recommends that a
   parser make no distinction between normal and User Flags, so the
-  position of the element relative to any U does not matter.  TTS‑5000
-  already makes a flag list carrying two different IIH PublicKeys
+  position of the element relative to any U does not matter.  TTS‑5001
+  makes a flag list carrying two different IIH PublicKeys
   invalid; such an NDL supplies no key at all.
 
   Because the flag list is ordinary configuration text, an unmodified
@@ -248,7 +249,7 @@ Contents
   EMSI_DAT.  Its final ASCII2 subfield carries the FTSC nodelist flags
   associated with the system, which is the same flag list section 3.2
   uses.  A mailer speaking EMSI therefore publishes its key by including
-  the TTS‑5000 IIH flag in that subfield, so that the flags subfield of
+  the TTS‑5001 IIH flag in that subfield, so that the flags subfield of
   IDENT reads:
 
     [MO,XA,IIH:<PublicKeyText>]
@@ -344,8 +345,9 @@ Contents
   The channels therefore provide these binding strengths:
 
     Authoritative
-      The TTS‑5000 IIH flag.  The nodelist distribution is the trust
-      path, and the binding is a published fact about the address.
+      The IIH flag in TTS‑5000 field 9.  The nodelist distribution is
+      the trust path, and the binding is a published fact about the
+      address.
 
     Directed
       Sections 3.2, 3.3, and 3.4, observed in a directed session which
@@ -576,7 +578,9 @@ A. References
 
   [TTS‑0006] "Bundle Exchange Protocol", TITH, 2026‑08‑21.
 
-  [TTS‑5000] "The Distribution Nodelist", TITH, 2026‑08‑21.
+  [TTS‑5000] "The Distribution Nodelist", TITH, 2026‑08‑22.
+
+  [TTS‑5001] "Nodelist Flags", TITH, 2026‑08‑22.
 
 
 B. History
@@ -590,5 +594,8 @@ B. History
 
    Rev.3, 2026‑08‑22: Referred the Message child order, Signature byte
    range, and stable signed‑item identity to TSP‑0016.
+
+   Rev.4, 2026‑08‑22: Referred IIH syntax to TTS‑5001 while retaining
+   TTS‑5000 as the nodelist publication and trust context.
 
 **********************************************************************

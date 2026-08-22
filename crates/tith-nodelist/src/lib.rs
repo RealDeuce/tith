@@ -1,16 +1,21 @@
-//! TTS-5000 nodelist parsing and lookup.
+//! TTS-5000 nodelist parsing and TTS-5001 flag handling.
 
 #![forbid(unsafe_code)]
 
 use std::collections::BTreeMap;
 use std::fmt;
-use std::net::{Ipv4Addr, Ipv6Addr};
 
-use base64::Engine as _;
-use base64::engine::general_purpose::STANDARD_NO_PAD;
 use tith_crypto::PublicKey;
 use tith_wire::address::{Address, AddressError};
 use tith_wire::bundle::KeyResolver;
+
+mod flags;
+
+pub use flags::{
+	EmailAddress, EmailFlag, EndpointSpec, FileRequestFlag, HalfHour, InternetFlag, MailPeriod,
+	OnlinePeriod, OtherFlag, PstnIsdnFlag, ServerAddress, SystemFlag,
+};
+use flags::{parse_email, parse_internet, parse_other, parse_pstn_isdn, parse_system};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Keyword {
@@ -75,11 +80,11 @@ pub struct Entry {
 	pub location: String,
 	pub sysop_name: String,
 	pub phone: String,
-	pub system_flags: Vec<String>,
-	pub pstn_isdn_flags: Vec<String>,
-	pub internet_flags: Vec<String>,
-	pub email_flags: Vec<String>,
-	pub other_flags: Vec<String>,
+	pub system_flags: Vec<SystemFlag>,
+	pub pstn_isdn_flags: Vec<PstnIsdnFlag>,
+	pub internet_flags: Vec<InternetFlag>,
+	pub email_flags: Vec<EmailFlag>,
+	pub other_flags: Vec<OtherFlag>,
 	pub tith: Option<TithService>,
 	pub branch: Branch,
 }
@@ -157,130 +162,29 @@ fn parse_node_number(value: &str) -> Option<i32> {
 	(1..=32_767).contains(&number).then_some(number)
 }
 
-fn flags(value: &str) -> Result<Vec<String>, NodelistErrorKind> {
-	if value.is_empty() {
-		return Ok(Vec::new());
+fn publishes_internet_contact(flag: &InternetFlag) -> bool {
+	match flag {
+		InternetFlag::DefaultServer(_) => true,
+		InternetFlag::Tith { endpoint, .. }
+		| InternetFlag::Binkp(endpoint)
+		| InternetFlag::Ifcico(endpoint)
+		| InternetFlag::Ftp(endpoint)
+		| InternetFlag::Telnet(endpoint)
+		| InternetFlag::Vmodem(endpoint)
+		| InternetFlag::Unspecified(endpoint) => endpoint.server.is_some() || endpoint.port.is_some(),
+		InternetFlag::NoIncomingIpv4 => false,
 	}
-	let values: Vec<_> = value.split(',').map(str::to_owned).collect();
-	if values.iter().any(String::is_empty) {
-		Err(NodelistErrorKind::InvalidFlag)
-	} else {
-		Ok(values)
-	}
 }
 
-fn parse_port(value: &str) -> Result<u16, NodelistErrorKind> {
-	let port: u16 = value
-		.parse()
-		.map_err(|_| NodelistErrorKind::InvalidEndpoint)?;
-	if port == 0 || port.to_string() != value {
-		return Err(NodelistErrorKind::InvalidEndpoint);
-	}
-	Ok(port)
-}
-
-fn parse_server(value: &str) -> Result<String, NodelistErrorKind> {
-	if let Some(address) = value
-		.strip_prefix('[')
-		.and_then(|value| value.strip_suffix(']'))
-	{
-		address
-			.parse::<Ipv6Addr>()
-			.map_err(|_| NodelistErrorKind::InvalidEndpoint)?;
-	} else if value.parse::<Ipv4Addr>().is_err() && !valid_dns_name(value) {
-		return Err(NodelistErrorKind::InvalidEndpoint);
-	}
-	Ok(value.to_owned())
-}
-
-fn valid_dns_name(value: &str) -> bool {
-	!value.is_empty()
-		&& value.len() <= 253
-		&& value.split('.').all(|label| {
-			(1..=63).contains(&label.len())
-				&& label
-					.bytes()
-					.all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
-				&& label
-					.as_bytes()
-					.first()
-					.is_some_and(u8::is_ascii_alphanumeric)
-				&& label
-					.as_bytes()
-					.last()
-					.is_some_and(u8::is_ascii_alphanumeric)
-		})
-}
-
-fn parse_endpoint(
-	value: &str,
-	default_server: Option<&str>,
-) -> Result<Endpoint, NodelistErrorKind> {
-	let (server, port) = if value.is_empty() {
-		(None, EndpointPort::RegisteredDefault)
-	} else if value.starts_with('[') {
-		let close = value.find(']').ok_or(NodelistErrorKind::InvalidEndpoint)?;
-		let server = parse_server(&value[..=close])?;
-		let suffix = &value[close + 1..];
-		let port = if suffix.is_empty() {
-			EndpointPort::RegisteredDefault
-		} else {
-			EndpointPort::Explicit(parse_port(
-				suffix
-					.strip_prefix(':')
-					.ok_or(NodelistErrorKind::InvalidEndpoint)?,
-			)?)
-		};
-		(Some(server), port)
-	} else if let Some((server, port)) = value.rsplit_once(':') {
-		let server = if server.is_empty() {
-			None
-		} else {
-			Some(parse_server(server)?)
-		};
-		(server, EndpointPort::Explicit(parse_port(port)?))
-	} else {
-		(Some(parse_server(value)?), EndpointPort::RegisteredDefault)
-	};
-	let server = match (server, default_server) {
-		(Some(server), _) => Some(server),
-		(None, Some(server)) => Some(parse_server(server)?),
-		(None, None) => None,
-	};
-	Ok(Endpoint { server, port })
-}
-
-fn parse_iih(
-	flag: &str,
-	default_server: Option<&str>,
-) -> Result<(Endpoint, PublicKey), NodelistErrorKind> {
-	let value = flag
-		.strip_prefix("IIH:")
-		.ok_or(NodelistErrorKind::InvalidFlag)?;
-	let (endpoint, key_text) = value.rsplit_once(':').unwrap_or(("", value));
-	if key_text.len() != 43 || key_text.contains('=') {
-		return Err(NodelistErrorKind::InvalidPublicKey);
-	}
-	let key: [u8; 32] = STANDARD_NO_PAD
-		.decode(key_text)
-		.map_err(|_| NodelistErrorKind::InvalidPublicKey)?
-		.try_into()
-		.map_err(|_| NodelistErrorKind::InvalidPublicKey)?;
-	Ok((
-		parse_endpoint(endpoint, default_server)?,
-		PublicKey::from_bytes(key),
-	))
-}
-
-/// TTS-5000 section 5.2 field 1: a Private node publishes no means of direct
-/// contact, so no flag in field 9 or 10 may carry a value. The one exception is
-/// `IIH:<PublicKey>`, which publishes a key and no endpoint; every other value
-/// those fields can carry is a server address, a port, or an email address.
-fn publishes_contact(flag: &str) -> bool {
-	match flag.split_once(':') {
-		None => false,
-		Some(("IIH", value)) => value.contains(':'),
-		Some(_) => true,
+fn publishes_email_contact(flag: &EmailFlag) -> bool {
+	match flag {
+		EmailFlag::Default(address)
+		| EmailFlag::Transx(address)
+		| EmailFlag::Uuencode(address)
+		| EmailFlag::Mime(address)
+		| EmailFlag::Seat(address)
+		| EmailFlag::Voyager(address)
+		| EmailFlag::OtherMethod(address) => address.is_some(),
 	}
 }
 
@@ -311,10 +215,16 @@ impl Nodelist {
 		}
 		let mut entries = BTreeMap::new();
 		let mut hierarchy = Hierarchy::default();
+		let mut zones_with_zec = std::collections::BTreeSet::new();
+		let mut regions_with_rec = std::collections::BTreeSet::new();
+		let mut regions_with_rpk = std::collections::BTreeSet::new();
+		let mut echomail_coordinator_nets = std::collections::BTreeSet::new();
+		let mut pointlist_keeper_nets = std::collections::BTreeSet::new();
+		let mut coordinator_override_nets = std::collections::BTreeSet::new();
 		for (line_index, raw_line) in input.split_terminator('\n').enumerate() {
 			let line_number = line_index + 1;
 			if raw_line.chars().any(|character| {
-				(character.is_control() && character != '\t') || character == '\u{7f}'
+				(character <= '\u{1f}' && character != '\t') || character == '\u{7f}'
 			}) {
 				return Err(fail(line_number, NodelistErrorKind::ControlCharacter));
 			}
@@ -397,45 +307,108 @@ impl Nodelist {
 			if !validate_phone(fields[5]) {
 				return Err(fail(line_number, NodelistErrorKind::InvalidPhone));
 			}
-			let system_flags = flags(fields[6]).map_err(|kind| fail(line_number, kind))?;
-			let pstn_isdn_flags = flags(fields[7]).map_err(|kind| fail(line_number, kind))?;
-			let internet_flags = flags(fields[8]).map_err(|kind| fail(line_number, kind))?;
-			let email_flags = flags(fields[9]).map_err(|kind| fail(line_number, kind))?;
-			let other_flags = flags(fields[10]).map_err(|kind| fail(line_number, kind))?;
+			let system_flags = parse_system(fields[6]).map_err(|kind| fail(line_number, kind))?;
+			let pstn_isdn_flags =
+				parse_pstn_isdn(fields[7]).map_err(|kind| fail(line_number, kind))?;
+			let internet_flags =
+				parse_internet(fields[8]).map_err(|kind| fail(line_number, kind))?;
+			let email_flags = parse_email(fields[9]).map_err(|kind| fail(line_number, kind))?;
+			let other_flags = parse_other(fields[10]).map_err(|kind| fail(line_number, kind))?;
 			if keyword == Keyword::Private
 				&& (!fields[5].is_empty()
-					|| internet_flags
-						.iter()
-						.chain(&email_flags)
-						.any(|flag| publishes_contact(flag)))
+					|| internet_flags.iter().any(publishes_internet_contact)
+					|| email_flags.iter().any(publishes_email_contact))
 			{
 				return Err(fail(line_number, NodelistErrorKind::PrivateContact));
 			}
-			if let Some(position) = internet_flags
+
+			let file_request_count = system_flags
 				.iter()
-				.position(|flag| flag.starts_with("INA:"))
-				&& position != 0
-			{
+				.filter(|flag| matches!(flag, SystemFlag::FileRequest(_)))
+				.count();
+			let has_cm = system_flags.contains(&SystemFlag::ContinuousMail);
+			if file_request_count > 1
+				|| has_cm
+					&& system_flags.iter().any(|flag| {
+						matches!(
+							flag,
+							SystemFlag::InternetContinuousMail
+								| SystemFlag::MailPeriod(_)
+								| SystemFlag::OnlinePeriod(_)
+						)
+					}) {
 				return Err(fail(line_number, NodelistErrorKind::InvalidFlag));
 			}
-			if let Some(position) = email_flags.iter().position(|flag| flag.starts_with("IEM:"))
-				&& position != 0
-			{
-				return Err(fail(line_number, NodelistErrorKind::InvalidFlag));
-			}
-			let default_server = internet_flags
-				.iter()
-				.find_map(|flag| flag.strip_prefix("INA:"));
-			let services = internet_flags
-				.iter()
-				.filter(|flag| flag.starts_with("IIH:"))
-				.map(|flag| parse_iih(flag, default_server))
-				.collect::<Result<Vec<_>, _>>()
-				.map_err(|kind| fail(line_number, kind))?;
-			let tith = if let Some((_, public_key)) = services.first() {
-				if services.iter().any(|(_, key)| key != public_key) {
-					return Err(fail(line_number, NodelistErrorKind::InvalidPublicKey));
+
+			let zone = hierarchy.zone.expect("a valid data line has a Zone");
+			let region = hierarchy.region.as_ref().map(Address::net);
+			let net = address.net();
+			for flag in &other_flags {
+				let valid = match flag {
+					OtherFlag::ZoneEchomailCoordinator => zones_with_zec.insert(zone),
+					OtherFlag::RegionalEchomailCoordinator => {
+						region.is_some_and(|region| regions_with_rec.insert((zone, region)))
+					}
+					OtherFlag::RegionalPointlistKeeper => {
+						region.is_some_and(|region| regions_with_rpk.insert((zone, region)))
+					}
+					OtherFlag::NetworkEchomailCoordinator => {
+						echomail_coordinator_nets.insert((zone, net))
+					}
+					OtherFlag::NetPointlistKeeper => pointlist_keeper_nets.insert((zone, net)),
+					OtherFlag::NetworkCoordinator => {
+						!matches!(keyword, Keyword::Zone | Keyword::Region | Keyword::Host)
+							&& coordinator_override_nets.insert((zone, net))
+					}
+					_ => true,
+				};
+				if !valid {
+					return Err(fail(line_number, NodelistErrorKind::InvalidFlag));
 				}
+			}
+
+			let default_servers: Vec<_> = internet_flags
+				.iter()
+				.filter_map(|flag| match flag {
+					InternetFlag::DefaultServer(server) => Some(server.as_str().to_owned()),
+					_ => None,
+				})
+				.collect();
+			let mut services = Vec::new();
+			for flag in &internet_flags {
+				let InternetFlag::Tith {
+					endpoint,
+					public_key,
+				} = flag
+				else {
+					continue;
+				};
+				let port = endpoint
+					.port
+					.map_or(EndpointPort::RegisteredDefault, EndpointPort::Explicit);
+				if let Some(server) = &endpoint.server {
+					services.push((
+						Endpoint {
+							server: Some(server.as_str().to_owned()),
+							port,
+						},
+						*public_key,
+					));
+				} else if default_servers.is_empty() {
+					services.push((Endpoint { server: None, port }, *public_key));
+				} else {
+					services.extend(default_servers.iter().map(|server| {
+						(
+							Endpoint {
+								server: Some(server.clone()),
+								port,
+							},
+							*public_key,
+						)
+					}));
+				}
+			}
+			let tith = if let Some((_, public_key)) = services.first() {
 				Some(TithService {
 					endpoints: services
 						.iter()
@@ -511,9 +484,15 @@ impl KeyResolver for Nodelist {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use base64::Engine as _;
+	use base64::engine::general_purpose::STANDARD_NO_PAD;
 
 	fn line(keyword: &str, number: u16, internet: &str) -> String {
 		format!("{keyword}\t{number}\tNode\tLocation\tSysop\t\tCM\t\t{internet}\t\t\n")
+	}
+
+	fn flagged_line(keyword: &str, number: u16, system: &str, other: &str) -> String {
+		format!("{keyword}\t{number}\tNode\tLocation\tSysop\t\t{system}\t\t\t\t{other}\n")
 	}
 
 	#[test]
@@ -630,6 +609,83 @@ mod tests {
 		);
 		assert!(service.endpoints[0].is_usable());
 		assert!(!service.endpoints[2].is_usable());
+	}
+
+	#[test]
+	fn expands_each_default_server_without_losing_preference_order() {
+		let key = STANDARD_NO_PAD.encode([15; 32]);
+		let internet = format!("INA:first.example,INA:second.example,IIH::24555:{key}");
+		let input = [line("Zone", 1, ""), line("", 2, &internet)].concat();
+		let list = Nodelist::parse("fidonet", &input).unwrap();
+		let service = list
+			.get(&"fidonet#1/2".parse().unwrap())
+			.unwrap()
+			.tith
+			.as_ref()
+			.unwrap();
+		assert_eq!(
+			service.endpoints,
+			[
+				Endpoint {
+					server: Some("first.example".to_owned()),
+					port: EndpointPort::Explicit(24_555),
+				},
+				Endpoint {
+					server: Some("second.example".to_owned()),
+					port: EndpointPort::Explicit(24_555),
+				},
+			]
+		);
+	}
+
+	#[test]
+	fn enforces_nodelist_specific_flag_relationships() {
+		for system in ["CM,ICM", "CM,#02", "CM,TAB", "XA,XB"] {
+			let input = [
+				flagged_line("Zone", 1, "", ""),
+				flagged_line("", 2, system, ""),
+			]
+			.concat();
+			assert!(
+				matches!(
+					Nodelist::parse("fidonet", &input),
+					Err(NodelistError {
+						kind: NodelistErrorKind::InvalidFlag,
+						..
+					})
+				),
+				"{system}"
+			);
+		}
+	}
+
+	#[test]
+	fn enforces_coordinator_scope_and_cardinality() {
+		let duplicate_zec = [
+			flagged_line("Zone", 1, "", "ZEC"),
+			flagged_line("", 2, "", "ZEC"),
+		]
+		.concat();
+		assert!(Nodelist::parse("fidonet", &duplicate_zec).is_err());
+
+		let rec_outside_region = flagged_line("Zone", 1, "", "REC");
+		assert!(Nodelist::parse("fidonet", &rec_outside_region).is_err());
+
+		let nc_on_host = [
+			flagged_line("Zone", 1, "", ""),
+			flagged_line("Host", 10, "", "NC"),
+		]
+		.concat();
+		assert!(Nodelist::parse("fidonet", &nc_on_host).is_err());
+
+		let valid = [
+			flagged_line("Zone", 1, "", "ZEC"),
+			flagged_line("Region", 2, "", "REC,RPK"),
+			flagged_line("Host", 10, "", "NEC,NPK"),
+			flagged_line("", 20, "", "NC"),
+		]
+		.concat();
+		assert!(Nodelist::parse("fidonet", &valid).is_ok());
 	}
 
 	#[test]

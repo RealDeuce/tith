@@ -1,4 +1,4 @@
-//! Converted output must be accepted by the native TTS-5000 parser.
+//! Converted output must be accepted by the native TTS-5000/TTS-5001 parser.
 //!
 //! `tith-nodelist-legacy` cannot depend on `tith-nodelist` without pointing the
 //! legacy conversion boundary at the native protocol layer, so the round trip
@@ -26,6 +26,10 @@ fn convert_fragment() -> (String, Vec<Warning>) {
 	(output, warnings)
 }
 
+fn flag_text<T: std::fmt::Display>(flags: &[T]) -> Vec<String> {
+	flags.iter().map(ToString::to_string).collect()
+}
+
 #[test]
 fn converted_output_parses_as_a_tts_5000_nodelist() {
 	let (output, warnings) = convert_fragment();
@@ -43,15 +47,15 @@ fn converted_output_parses_as_a_tts_5000_nodelist() {
 	assert_eq!(host.location, "Ada MI");
 	assert_eq!(host.sysop_name, "Net Coordinator");
 	assert_eq!(host.phone, "1-616-555-0100");
-	assert_eq!(host.system_flags, ["CM", "XX"]);
-	assert_eq!(host.pstn_isdn_flags, ["V32b"]);
-	// TTS-5000 field 9 requires INA first.
+	assert_eq!(flag_text(&host.system_flags), ["CM", "XX"]);
+	assert_eq!(flag_text(&host.pstn_isdn_flags), ["V32b"]);
+	// TTS-5001 requires INA before IIH and the protocol flags.
 	assert_eq!(
-		host.internet_flags,
+		flag_text(&host.internet_flags),
 		[
 			"INA:net.example.org",
-			"IBN",
-			"IIH::24555:x8p4jN0PtHsr0nHxLmnw3Uy3v8kZfOZeMcxOWUeMOoo"
+			"IIH::24555:x8p4jN0PtHsr0nHxLmnw3Uy3v8kZfOZeMcxOWUeMOoo",
+			"IBN"
 		]
 	);
 
@@ -93,15 +97,18 @@ fn converted_output_applies_the_tts_5000_field_rules() {
 	let hub = nodelist
 		.get(&"fidonet#1:20/30".parse().expect("hub address"))
 		.expect("Hub entry is present");
-	assert_eq!(hub.other_flags, ["NEC"]);
+	assert_eq!(flag_text(&hub.other_flags), ["NEC"]);
 
 	let node = nodelist
 		.get(&"fidonet#1:20/40".parse().expect("node address"))
 		.expect("member entry is present");
-	assert_eq!(node.other_flags, ["MO"]);
-	assert_eq!(node.system_flags, ["TuB"]);
-	// TTS-5000 field 10 requires an IEM carrying an address to be first.
-	assert_eq!(node.email_flags, ["IEM:sysop@example.org", "ITX"]);
+	assert_eq!(flag_text(&node.other_flags), ["MO"]);
+	assert_eq!(flag_text(&node.system_flags), ["TuB"]);
+	// TTS-5001 requires IEM before the Email Protocol flags.
+	assert_eq!(
+		flag_text(&node.email_flags),
+		["IEM:sysop@example.org", "ITX"]
+	);
 }
 
 /// TTS-5000 section 5.2 field 1 forbids a Pvt entry to publish a means of
@@ -127,7 +134,10 @@ Pvt,50,Private_Node,Ada_MI,Another_Sysop,-Unpublished-,9600,CM,INA:pvt.example.o
 		.expect("the entry survived as a normal node");
 	assert_eq!(entry.keyword, Keyword::Normal);
 	// Only the keyword went; the addresses the source published remain.
-	assert_eq!(entry.internet_flags, ["INA:pvt.example.org", "IBN"]);
+	assert_eq!(
+		flag_text(&entry.internet_flags),
+		["INA:pvt.example.org", "IBN"]
+	);
 }
 
 /// The one flag form a Pvt entry may carry, so that a private node still
