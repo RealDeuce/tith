@@ -7,6 +7,7 @@ pub mod bundle;
 pub mod identity;
 pub mod integer;
 pub mod item;
+mod signed_integer;
 pub mod tlv;
 pub mod types;
 

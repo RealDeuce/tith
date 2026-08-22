@@ -316,4 +316,33 @@ mod tests {
 		assert_eq!(value.value, b"payload");
 		assert!(reader.read_next().unwrap().is_none());
 	}
+
+	#[test]
+	fn type_and_length_use_the_canonical_unsigned_codec() {
+		let header = TlvHeader::new(378, 16_384).unwrap();
+		let mut encoded = Vec::new();
+		header.write_to(&mut encoded).unwrap();
+		assert_eq!(encoded, [0x82, 0x7a, 0x81, 0x80, 0]);
+
+		encoded.resize(encoded.len() + 16_384, 0);
+		let mut reader = TlvReader::new(encoded.as_slice());
+		let value = reader.read_next().unwrap().unwrap();
+		assert_eq!(value.header(), header);
+		value.skip().unwrap();
+		assert!(reader.read_next().unwrap().is_none());
+	}
+
+	#[test]
+	fn noncanonical_type_and_length_encodings_are_rejected() {
+		for bytes in [&[0x80, 0, 0][..], &[1, 0x80, 0][..]] {
+			assert!(matches!(
+				parse_sequence(bytes),
+				Err(FramingError::Integer(IntegerError::NonCanonical))
+			));
+			assert!(matches!(
+				TlvReader::new(bytes).read_next(),
+				Err(FramingError::Integer(IntegerError::NonCanonical))
+			));
+		}
+	}
 }

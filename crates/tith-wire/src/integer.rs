@@ -1,6 +1,8 @@
-//! TTS-0002 and TTS-0007 canonical integers.
+//! TTS-0002 canonical unsigned integers.
 
 use std::fmt;
+
+pub use crate::signed_integer::{decode_i64, encode_i64};
 
 pub const MAX_U64_BYTES: usize = 10;
 
@@ -59,9 +61,7 @@ pub fn decode_u64_prefix(bytes: &[u8]) -> Result<(u64, usize), IntegerError> {
 	let mut value = 0_u64;
 	for (index, byte) in bytes.iter().copied().enumerate() {
 		value = value.checked_mul(128).ok_or(IntegerError::Overflow)?;
-		value = value
-			.checked_add(u64::from(byte & 0x7f))
-			.ok_or(IntegerError::Overflow)?;
+		value += u64::from(byte & 0x7f);
 		if byte & 0x80 == 0 {
 			return Ok((value, index + 1));
 		}
@@ -78,63 +78,95 @@ pub fn decode_u64(bytes: &[u8]) -> Result<u64, IntegerError> {
 	}
 }
 
-#[must_use]
-pub fn encode_i64(value: i64) -> Vec<u8> {
-	let mapped = if value >= 0 {
-		value.cast_unsigned() * 2
-	} else {
-		(value.unsigned_abs() - 1) * 2 + 1
-	};
-	encode_u64(mapped)
-}
-
-pub fn decode_i64(bytes: &[u8]) -> Result<i64, IntegerError> {
-	let mapped = decode_u64(bytes)?;
-	if mapped & 1 == 0 {
-		i64::try_from(mapped / 2).map_err(|_| IntegerError::Overflow)
-	} else {
-		let magnitude = mapped / 2 + 1;
-		if magnitude == 1_u64 << 63 {
-			Ok(i64::MIN)
-		} else {
-			Ok(-i64::try_from(magnitude).map_err(|_| IntegerError::Overflow)?)
-		}
-	}
-}
-
 #[cfg(test)]
 mod tests {
 	use super::*;
 
 	#[test]
-	fn unsigned_examples_and_boundaries() {
+	fn unsigned_examples_and_supported_boundaries() {
 		assert_eq!(encode_u64(0), [0]);
 		assert_eq!(encode_u64(127), [0x7f]);
 		assert_eq!(encode_u64(128), [0x81, 0]);
 		assert_eq!(encode_u64(378), [130, 122]);
+		assert_eq!(encode_u64(16_383), [0xff, 0x7f]);
+		assert_eq!(encode_u64(16_384), [0x81, 0x80, 0]);
+		assert_eq!(
+			encode_u64(u64::from(u32::MAX)),
+			[0x8f, 0xff, 0xff, 0xff, 0x7f]
+		);
+		assert_eq!(
+			encode_u64(i64::MAX.cast_unsigned()),
+			[0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x7f]
+		);
+		assert_eq!(
+			encode_u64(u64::MAX),
+			[0x81, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x7f]
+		);
 		assert_eq!(decode_u64(&encode_u64(u64::MAX)), Ok(u64::MAX));
 	}
 
 	#[test]
-	fn rejects_noncanonical_and_overflow() {
+	fn every_seven_bit_width_transition_is_canonical() {
+		for groups in 1..=9 {
+			let bit = groups * 7;
+			let lower_max = (1_u64 << bit) - 1;
+			let upper_min = 1_u64 << bit;
+			assert_eq!(encode_u64(lower_max).len(), groups);
+			assert_eq!(encode_u64(upper_min).len(), groups + 1);
+			assert_eq!(decode_u64(&encode_u64(lower_max)), Ok(lower_max));
+			assert_eq!(decode_u64(&encode_u64(upper_min)), Ok(upper_min));
+		}
+
+		for value in 0..=u64::from(u16::MAX) {
+			let encoded = encode_u64(value);
+			assert_ne!(encoded.first(), Some(&0x80));
+			assert_eq!(decode_u64(&encoded), Ok(value));
+		}
+	}
+
+	#[test]
+	fn prefix_and_complete_decoding_have_explicit_boundaries() {
+		assert_eq!(decode_u64_prefix(&[]), Err(IntegerError::Empty));
+		assert_eq!(decode_u64(&[]), Err(IntegerError::Empty));
+		assert_eq!(decode_u64_prefix(&[0x82, 0x7a, 0]), Ok((378, 2)));
+		assert_eq!(decode_u64(&[0x82, 0x7a]), Ok(378));
+		assert_eq!(
+			decode_u64(&[0x82, 0x7a, 0]),
+			Err(IntegerError::TrailingBytes)
+		);
+	}
+
+	#[test]
+	fn rejects_noncanonical_unterminated_and_overflow() {
+		assert_eq!(decode_u64(&[0x80]), Err(IntegerError::NonCanonical));
 		assert_eq!(decode_u64(&[0x80, 0]), Err(IntegerError::NonCanonical));
 		assert_eq!(decode_u64(&[0x81]), Err(IntegerError::Unterminated));
 		assert_eq!(
-			decode_u64(&[
-				0x82, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0
-			]),
+			decode_u64(&[0x81, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80]),
+			Err(IntegerError::Unterminated)
+		);
+		assert_eq!(
+			decode_u64(&[0x82, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0]),
 			Err(IntegerError::Overflow)
 		);
 	}
 
 	#[test]
-	fn signed_examples_and_boundaries() {
-		for (value, encoded) in [(0, 0), (-1, 1), (1, 2), (-2, 3), (2, 4)] {
-			assert_eq!(encode_i64(value), [encoded]);
-			assert_eq!(decode_i64(&[encoded]), Ok(value));
-		}
-		for value in [i64::MIN, i64::MIN + 1, -1, 0, 1, i64::MAX] {
-			assert_eq!(decode_i64(&encode_i64(value)), Ok(value));
+	fn every_error_has_a_distinct_description() {
+		for (error, message) in [
+			(IntegerError::Empty, "empty integer"),
+			(IntegerError::NonCanonical, "non-canonical integer"),
+			(
+				IntegerError::Overflow,
+				"integer is outside the supported range",
+			),
+			(IntegerError::Unterminated, "unterminated integer"),
+			(
+				IntegerError::TrailingBytes,
+				"bytes follow the encoded integer",
+			),
+		] {
+			assert_eq!(error.to_string(), message);
 		}
 	}
 }
