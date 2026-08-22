@@ -3,10 +3,10 @@ TITH                                              THIS ISN'T THAT HARD
 **********************************************************************
 
 Publication:  TRD‑0003
-Revision:     3
+Revision:     4
 Title:        A Nodelist‐Free Peer Network
 Author(s):    Stephen Hurd
-Date:         2026‑08‑20
+Date:         2026‑08‑22
 ══════════════════════════════════════════════════════════════════════
 
 Status of this document
@@ -126,7 +126,7 @@ Contents
   The Bundle identities and Message identities need not be the same.
   When a Message is forwarded, a new Bundle names the next pair of
   immediate peers while the enclosed Message retains its signed region
-  and Signature byte for byte as required by TTS‑0005.  Its permitted
+  and Signature byte for byte as required by TSP‑0016.  Its permitted
   unsigned routing suffix is rebuilt for that hop.
 
 
@@ -146,7 +146,7 @@ Contents
 
   A routing decision is local.  It does not authorize modification of
   the signed portion of a Message.  RequestIdentifier, Via, SeenBy, and
-  AdditionalKludgeLine retain the per‐hop rules specified by TTS‑0005.
+  AdditionalKludgeLine retain the per‑hop rules specified by TSP‑0016.
   A Via for an anonymous peer includes its PublicKey, so the path can
   distinguish peers which all use the address "p2p#-1".
 
@@ -210,7 +210,7 @@ Contents
   required by TTS‑0005 therefore also provides loop protection when a
   routing algorithm presents the same Message more than once.
 
-  TTS‑0005 defines the authenticated Origin identity and end‐to‐end
+  TSP‑0016 defines the authenticated Origin identity and end‑to‑end
   Signature as the stable identity of a signed item.  A peer which has
   already accepted that identity does not store, import, or forward it
   again, but returns Accepted for the current transmission.  This rule
@@ -251,11 +251,13 @@ A. References
   [TRD‑0002] "Joining a FidoNet Technology Network", TITH,
   2026‑08‑20.
 
+  [TSP‑0016] "Item Format", TITH, 2026‑08‑22.
+
   [TTS‑0003] "Common TLV Types", TITH, 2026‑08‑22.
 
   [TTS‑0004] "Node Addresses", TITH, 2026‑08‑21.
 
-  [TTS‑0005] "Bundle Format", TITH, 2026‑08‑21.
+  [TTS‑0005] "Bundle Format", TITH, 2026‑08‑22.
 
   [TTS‑0006] "Bundle Exchange Protocol", TITH, 2026‑08‑21.
 
@@ -270,5 +272,8 @@ B. History
 
    Rev.3, 2026‑08‑20: Distinguished the permanent anonymous address
    from each peer's observer‐relative listed or unlisted trust state.
+
+   Rev.4, 2026‑08‑22: Referred Message signed bytes, mutable suffix,
+   and signed‑item identity to TSP‑0016.
 
 **********************************************************************

@@ -3,10 +3,10 @@ TITH                                              THIS ISN'T THAT HARD
 **********************************************************************
 
 Publication:  TSP‑0002
-Revision:     13
+Revision:     14
 Title:        Routing and Distribution Configuration
 Author(s):    Stephen Hurd
-Date:         2026‑08‑21
+Date:         2026‑08‑22
 ══════════════════════════════════════════════════════════════════════
 
 Status of this document
@@ -288,7 +288,7 @@ Contents
 
   Once a method selects a next hop, the router compares its exact
   identity with every Via in the NetMail Message.  For an anonymous Via
-  the identity includes its PublicKey as specified by TTS‑0005.  A
+  the identity includes its PublicKey as specified by TSP‑0016.  A
   match fails as Loop.  The router MUST NOT conceal the loop by trying
   a later method.
 
@@ -461,7 +461,7 @@ Contents
 
   An EchoArea applies to an EchoMail Message carrying its Area.  A
   FileArea applies to a standalone distribution File carrying its
-  Area as specified by TTS‑0005.  A File attached to a Message travels
+  Area as specified by TSP‑0016.  A File attached to a Message travels
   with that Message and does not independently use a FileArea.
 
   An item received for an undefined area or from a Peer not named by
@@ -477,7 +477,7 @@ Contents
 
   Before the resulting copy set is committed, a locally originated
   item has its initial Via and a received item has one Via for the
-  forwarding local identity appended as required by TTS‑0005.  The
+  forwarding local identity appended as required by TSP‑0016.  The
   distributor retains every existing SeenBy address and adds each
   non‐anonymous identity which is known to have or to receive the item:
   its local identity, the immediate incoming Peer when any, and every
@@ -792,11 +792,13 @@ A. References
 
   [TSP‑0015] "Public Key Trust and Continuity", TITH, 2026‑08‑20.
 
+  [TSP‑0016] "Item Format", TITH, 2026‑08‑22.
+
   [TTS‑0003] "Common TLV Types", TITH, 2026‑08‑22.
 
   [TTS‑0004] "Node Addresses", TITH, 2026‑08‑21.
 
-  [TTS‑0005] "Bundle Format", TITH, 2026‑08‑21.
+  [TTS‑0005] "Bundle Format", TITH, 2026‑08‑22.
 
   [TTS‑0006] "Bundle Exchange Protocol", TITH, 2026‑08‑21.
 
@@ -860,5 +862,8 @@ B. History
 
    Rev.13, 2026‑08‑21: Made every local identity independent and
    removed any implied primary or alias relationship between them.
+
+   Rev.14, 2026‑08‑22: Referred item Area and Via data to TSP‑0016
+   while retaining TTS‑0005 polling and acceptance behaviour.
 
 **********************************************************************

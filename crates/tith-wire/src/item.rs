@@ -1,4 +1,4 @@
-//! Structural and end-to-end validation of TTS-0005 payload values.
+//! Structural and end-to-end validation of TSP-0016 items and TTS-0005 requests.
 
 use std::collections::HashSet;
 use std::fmt;
@@ -114,7 +114,7 @@ pub struct AttachmentData {
 
 /// The FTS-0001.016 `AttributeWord` bit which marks attached files.
 ///
-/// TTS-0005 section 3 type 101 keeps this bit out of `LegacyAttributes`, so it
+/// TSP-0016 section 4 type 101 keeps this bit out of `LegacyAttributes`, so it
 /// is named here rather than imported: the legacy crates own the legacy formats
 /// and this crate may not depend on them.
 pub const LEGACY_ATTRIBUTE_FILE_ATTACHED: u64 = 1 << 4;
@@ -154,7 +154,7 @@ pub struct StandaloneFileData {
 	pub contents: Vec<u8>,
 	/// The distribution area, or `None` for a peer-addressed File.
 	///
-	/// TTS-0005 section 3 type 65 marks Area, Via, and `SeenBy` `F`, "for a file
+	/// TSP-0016 section 3.2 marks Area, Via, and `SeenBy` `F`, "for a file
 	/// that is part of a distribution network". A File which is not one carries
 	/// none of the three, and the enclosing Bundle Destination addresses it.
 	pub area: Option<String>,
@@ -277,7 +277,7 @@ fn validate_originated_message_data(data: &MessageData) -> Result<(), BundleErro
 			"Message Destination/Area combination",
 		));
 	}
-	// TTS-0005 section 3 types 101 and 102: a zero conveys nothing that absence
+	// TSP-0016 section 4 types 101 and 102: a zero conveys nothing that absence
 	// does not, so absence is the only representation of it. TSP-0003 section 4
 	// depends on that, because every legacy format carries the AttributeWord in a
 	// fixed field and canonical export always emits TZUTC, so a zero and an
@@ -305,13 +305,13 @@ fn validate_originated_message_data(data: &MessageData) -> Result<(), BundleErro
 			"non-persistent LegacyAttributes bits",
 		));
 	}
-	// TTS-0005 section 3 type 64: TearLine and OriginLine are EchoMail control
+	// TSP-0016 section 3.1: TearLine and OriginLine are EchoMail control
 	// information, so NetMail carries neither. A legacy NetMail which does carry
 	// such a line carries it as message text.
 	if data.area.is_none() && (data.tear_line.is_some() || data.origin_line.is_some()) {
 		return Err(BundleError::Unexpected("a NetMail TearLine or OriginLine"));
 	}
-	// TTS-0005 section 3 type 106: MessageText is paragraphs each terminated by
+	// TSP-0016 section 4 type 106: MessageText is paragraphs each terminated by
 	// one U+000A, which is the only line break. A caller with text in another
 	// shape converts it before submitting; TSP-0006 has the service do that for
 	// an Application, because this is where the signed bytes are decided.
@@ -420,7 +420,7 @@ fn finish_message(
 		suffix.via_timestamp,
 		suffix.software,
 	)?);
-	// TTS-0005 section 3 type 64 makes Message SeenBy an optional singleton,
+	// TSP-0016 section 3.1 makes Message SeenBy an optional singleton,
 	// and type 112 makes its value one Trimmed Collection. A File repeats it.
 	if let Some(value) = seen_by_value(suffix.seen_by)? {
 		signed.push(value);
@@ -491,7 +491,7 @@ pub fn build_originated_file(
 	// neither. `validate_standalone_file` rejects one that does.
 	if distribution {
 		signed.push(via_value(effective_signer, via_timestamp, software)?);
-		// TTS-0005 section 3 type 65 marks File SeenBy "F+", so unlike a Message it
+		// TSP-0016 section 3.2 marks File SeenBy "F+", so unlike a Message it
 		// repeats. Each value is still its own Trimmed Collection.
 		for value in seen_by {
 			signed.push(OwnedTlv::new(
@@ -505,7 +505,7 @@ pub fn build_originated_file(
 
 /// Builds one `FileRequest`.
 ///
-/// TTS-0005 section 3 type 66: a mandatory Filename, an optional Timestamp
+/// TSP-0016 section 3.3: a mandatory Filename, an optional Timestamp
 /// making the request conditional on the named file being newer than it, and a
 /// mandatory `RequestIdentifier`. There is no Origin, `SignedOrigin`, or Signature;
 /// the enclosing payload `SignedTLV` is the whole of its authentication.
@@ -648,7 +648,7 @@ fn seen_by_value(addresses: &[Address]) -> Result<Option<OwnedTlv>, BundleError>
 
 /// The addresses a `SeenBy` value names.
 ///
-/// Every value is a Trimmed Collection per TTS-0005 section 4 type 112, so a
+/// Every value is a Trimmed Collection per TSP-0016 section 4 type 112, so a
 /// caller comparing against one address must expand it rather than treat the
 /// whole value as a single address.
 pub fn seen_by_addresses(value: &OwnedTlv) -> Result<Vec<Address>, BundleError> {
@@ -2740,7 +2740,7 @@ mod tests {
 
 	#[test]
 	fn a_peer_addressed_file_carries_no_area_via_or_seen_by() {
-		// TTS-0005 section 3 type 65 marks all three "F", for a file that is part
+		// TSP-0016 section 3.2 marks all three "F", for a file that is part
 		// of a distribution network. A File which is not one carries none of them,
 		// and the Bundle Destination addresses it instead.
 		let signer_keys = SigningKeyPair::from_seed(&[86; 32]).unwrap();
@@ -3035,7 +3035,7 @@ mod tests {
 		));
 	}
 
-	/// TTS-0005 section 3 types 64, 101, and 102 leave exactly one
+	/// TSP-0016 sections 3.1 and 4 types 101 and 102 leave exactly one
 	/// representation of each of these facts, and this is where a Message is
 	/// minted, so this is where a second one is refused.
 	#[test]

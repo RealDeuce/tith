@@ -1,4 +1,4 @@
-//! Type assignments from TTS-0003 and TTS-0005.
+//! Type assignments from TTS-0003, TTS-0005, and TSP-0016.
 
 pub const ORIGIN: u64 = 1;
 pub const SIGNATURE: u64 = 2;

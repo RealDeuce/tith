@@ -3,10 +3,10 @@ TITH                                              THIS ISN'T THAT HARD
 **********************************************************************
 
 Publication:  TTS‑0005
-Revision:     12
+Revision:     13
 Title:        Bundle Format
 Author(s):    Stephen Hurd
-Date:         2026‑08‑21
+Date:         2026‑08‑22
 ══════════════════════════════════════════════════════════════════════
 
 Status of this document
@@ -32,7 +32,7 @@ Contents
   1.  Introduction
   2.  Encoding
   3.  Types
-  4.  Ancillary Types
+  4.  Request Correlation and Ancillary Types
   5.  Error Handling
   6.  Reply Bundles
   7.  Duplicate Acceptance
@@ -104,10 +104,10 @@ Contents
 
   In this document, “first” and “begins with” refer to the literal
   first encoded child, including when unknown types are present.  This
-  applies to the Bundle Origin, the Origin that begins a Message, and
-  the Header TLVHash that begins every payload SignedData.  A PublicKey
-  whose presence depends on the immediately preceding address MUST be
-  the next encoded sibling; an unknown value cannot separate the pair.
+  applies to the Bundle Origin and the Header TLVHash that begins every
+  payload SignedData.  A PublicKey whose presence depends on the
+  immediately preceding address MUST be the next encoded sibling; an
+  unknown value cannot separate the pair.
 
   After a required leading child and any conditional PublicKey,
   unknown TLV values MAY occur between or after the remaining defined
@@ -141,170 +141,25 @@ Contents
 3. Types
 ────────
 
-  The following types may be included in a bundle.
+  The following types may be included in a Bundle.  TSP‑0016 defines
+  the canonical item sequences used as the Values of types 64 through
+  66 independently of this Bundle serialization.
 
   64. Message
   ───────────
-  A Message value has a large number of manditory and optional values.
-  The order is specified here as a list, with M indicating Manditory,
-  O indicating Optional, N indicating Manditory for NetMail, E
-  indicating Manditory for EchoMail, C indicating Optional for
-  EchoMail and prohibited for NetMail, and A indicating Manditory if
-  the immediately preceding address is the anonymous address and
-  prohibited otherwise.  If a + is listed after the mandatory or
-  optional character, multiple values of that type may be included.
-
-  A Message MUST be either NetMail or EchoMail.  NetMail MUST contain
-  a Destination and MUST NOT contain an Area.  EchoMail MUST contain
-  an Area and MUST NOT contain a Destination or its following
-  PublicKey.  TearLine and OriginLine are EchoMail control
-  information in FTS‑0004.001 and FSC‑0068.001, and FTS‑0001.016
-  defines neither, so NetMail MUST NOT contain either one.  A legacy
-  NetMail which carries such a line carries it as message text.
-
-  M  Origin (TTS‑0003)
-  A  PublicKey (TTS‑0003)
-  O  SignedOrigin (TTS‑0003)
-  A  PublicKey (TTS‑0003)
-  N  Destination (TTS‑0003)
-  A  PublicKey (TTS‑0003)
-  M  Timestamp (TTS‑0003)
-  M  ToUserName (Section 4)
-  M  FromUserName (Section 4)
-  M  Subject (Section 4)
-  M  MessageText (Section 4)
-  E  Area (Section 4)
-  O+ File (Section 3)
-  O  LegacyAttributes (Section 4)
-  O  TimestampOffset (Section 4)
-  C  TearLine (Section 4)
-  C  OriginLine (Section 4)
-  O  MessageID (Section 4)
-  O  ReplyTo (Section 4)
-  O  OriginalCharacterSet (Section 4)
-  O  Signature (TTS‑0003)
-  M  RequestIdentifier (Section 4)
-  M+ Via (Section 4)
-  O  SeenBy (Section 4)
-  O+ AdditionalKludgeLine (Section 4)
-
-  When present, the Signature signs the exact encoded bytes of every
-  child TLV preceding it, beginning with the Type of the Origin and
-  ending with the final byte of the last child before the Signature.
-  The Type and Length of the enclosing Message and the Signature
-  itself are not signed.  Origin is the system where the Message
-  originated and is the address used to construct a reply.  Its
-  immediately following PublicKey is present if and only if Origin is
-  the anonymous address.  For another Origin, its effective key is
-  resolved according to TSP‑0015 when a Signature is present.
-
-  SignedOrigin is permitted only when Signature is present.  If a
-  public key is available for Origin, that key is applicable to the
-  Signature and SignedOrigin is ignored for key selection.  An invalid
-  Signature MUST NOT then be retried with SignedOrigin.  If no key is
-  available for Origin, SignedOrigin MUST be present and its key is
-  applicable.  Its immediately following PublicKey is present if and
-  only if SignedOrigin is the anonymous address; otherwise its
-  effective key is resolved according to TSP‑0015.  The applicable
-  address and key form the effective signer.  SignedOrigin does not
-  replace Origin for a reply,
-  MessageID, or routing to the Message's Destination.
-
-  An absent Signature means that the Message has no end‐to‐end item
-  authentication.  It does not make the Message malformed when its
-  enclosing payload SignedTLV has been authenticated.  The Origin key
-  need not be available, and SignedOrigin is prohibited.  Native
-  forwarding software MUST NOT add, remove, or replace an item
-  Signature.  A legacy conversion boundary may reconstruct or omit one
-  only as specified by TSP‑0003.
-
-  When Signature is present, its signed child values and the Signature
-  MUST NOT be modified in transit.  RequestIdentifier, Via, SeenBy, and
-  AdditionalKludgeLine values following it may be modified without
-  invalidating it.  When Signature is absent, these values follow the
-  last signed‐position child directly.  TSP‑0011 defines the final local
-  disposition and user indication for every item authentication state.
+  The Value MUST be one Message Sequence as defined by TSP‑0016.  A
+  File child in that sequence uses type 65 and the embedded File
+  Sequence defined there.
 
   65. File
   ────────
-  A File value has a large number of manditory and optional values.
-  The order is specified here as a list, with M indicating Manditory,
-  O indicating Optional, T indicating manditory for a standalone File
-  directly inside of a SignedTLV and prohibited for a File inside a
-  Message, S indicating optional for a standalone File and prohibited
-  for a File inside a Message, K indicating manditory if the immediately
-  preceding Origin or SignedOrigin is the anonymous address and
-  prohibited otherwise, and F for a file that is part of a distribution
-  network.
-  O  Filename (Section 4)
-  O  Timestamp (TTS‑0003)
-  M  Contents (Section 4)
-  F  Area (Section 4)
-  T  Origin (TTS‑0003)
-  K  PublicKey (TTS‑0003)
-  S  SignedOrigin (TTS‑0003)
-  K  PublicKey (TTS‑0003)
-  O  ShortDescription (Section 4)
-  O+ LongDescriptionLine (Section 4)
-  O  TearLine (Section 4)
-  O  MagicWord (Section 4)
-  O  Replaces (Section 4)
-  S  Signature (TTS‑0003)
-  T  RequestIdentifier (Section 4)
-  F+ Via (Section 4)
-  F+ SeenBy (Section 4)
-
-  If a Signature is present, it signs the exact encoded bytes of every
-  child TLV preceding it, beginning with the Type of the first child
-  present and ending with the final byte of the last child before the
-  Signature.  The Type and Length of the enclosing File and the
-  Signature itself are not signed.  The File's Origin and optional
-  SignedOrigin select the effective signer exactly as specified for a
-  Message.  SignedOrigin is prohibited when the File has no Origin or
-  Signature.  A standalone File MAY omit Signature.  It then has no
-  end‐to‐end item authentication, and its Origin key need not be
-  available.
-
-  When Signature is present, its signed child values and the Signature
-  MUST NOT be modified in transit.  RequestIdentifier, Via, and SeenBy
-  values following it may be modified without invalidating it.  When
-  Signature is absent, those values follow the last signed‐position
-  child directly.
-
-  A File directly inside a payload SignedTLV has its own Origin and
-  optional Signature so its item authentication remains applicable
-  when the File is placed in a new Bundle.  A File inside a Message
-  relies on the enclosing Message for provenance.  It MUST NOT contain
-  Origin, either conditional PublicKey, SignedOrigin, or Signature.
-
-  If a timestamp is present, it represents the time of last
-  modification of the file.
-
-  The file values were chosen to allow replacing tick files.
+  The Value MUST be one File Sequence as defined by TSP‑0016.  A File
+  directly inside a payload SignedTLV uses the standalone form.  A File
+  child inside a Message uses the embedded form.
 
   66. FileRequest
   ───────────────
-  A Request value which contains a manditory Filename as defined in
-  section 4, optionally followed by a Timestamp as defined in
-  TTS‑0003, and followed by a manditory RequestIdentifier.  If a
-  Timestamp is present, the request is conditional on the last
-  modified time of Filename being newer than the Timestamp.
-
-  Existing FidoNet requests types (Bark and WaZOO) have an optional
-  password, but it is expected that having public key authentication
-  should be both more secure and easier to administer, making password
-  controlled file requests obsolete.
-
-  The WaZOO request can also request files the same age or older than
-  the timestamp.  The author can't come up with a reasonable use for
-  this, so is not including that functionality initially.
-
-  Finally, WaZOO requests allow wildcards, which means the requester
-  does not know the name of the file they're requesting, or how many
-  files they are requesting.  However, since the Filename value is
-  unrestricted, it's not like I can stop you can allowing wildcards
-  in there.  I think it's a terrible idea though, and the processors
-  written as part of the TITH project won't support them.
+  The Value MUST be one FileRequest Sequence as defined by TSP‑0016.
 
   67. Rejected
   ────────────
@@ -333,8 +188,8 @@ Contents
       failed and MUST NOT be retried.  An unauthenticated payload
       SignedTLV and an authenticated request with an irreparable data
       error use this reason when TTS‑0006 permits a response.  This does
-      not change the independent end‐to‐end item authentication states
-      defined in section 3.  A Timestamp is prohibited.
+      not change the independent end‑to‑end item authentication states
+      defined by TSP‑0016.  A Timestamp is prohibited.
   2 — Indicates that a condition controlled by the peer was not met.
       The current request has permanently failed and MUST NOT be
       retried unchanged; the peer may submit a new request with a
@@ -414,30 +269,11 @@ Contents
   added to or substituted for any PublicKey in the held value.
 
 
-4. Ancillary Types
-──────────────────
+4. Request Correlation and Ancillary Types
+────────────────────────────────────────────────
 
-  The following types are defined for use by types in section 3.
-
-  96. Filename
-  ────────────
-  The value is a UTF‑8 string containing the name of the file.  No
-  restrictions are placed on the value of this string, but the name
-  MUST NOT contain additional path components.  Software SHOULD NOT
-  use values that are not allowed by common operating systems.
-  Commonly this means no control characters (U+00 to U+1F, and U+7F),
-  and none of U+22 ('"'), U+2A ('*'), U+2F ('/'), U+3A (':'),
-  U+3C ('<'), U+3D ('>'), U+3F ('?'), U+5C ('\'), or U+7C ('|').
-
-  97. Contents
-  ────────────
-  An arbitrary sequence of bytes with no restrictions on contents or
-  length.
-
-  98. RequestIdentifier
-  ─────────────────────
-  Contains a number encoded using the same method as the Type and
-  Length values as defined by TTS‑0002.  Every request value in one
+  TSP‑0016 assigns RequestIdentifier type 98 and defines its integer
+  encoding and placement in an item.  Every request value in one
   payload SignedTLV MUST have a RequestIdentifier distinct from every
   other request value in that SignedTLV.  These identifiers form the
   request namespace for that SignedTLV in the direction in which its
@@ -481,165 +317,6 @@ Contents
   This type is not supported and MUST NOT be generated.  Its number is
   available for assignment by a future revision of this standard.
 
-  101. LegacyAttributes
-  ─────────────────────
-  Contains a number encoded the same as the Type and Length values.
-  Its only permitted bits have these AttributeWord meanings from
-  FTS‑0001.016:
-
-    bit 0   Private
-    bit 1   Crash
-    bit 12  ReturnReceiptRequest
-    bit 13  IsReturnReceipt
-    bit 14  AuditRequest
-
-  These are the packet‐persistent legacy message attributes.  All
-  other AttributeWord bits are either redundant native facts or
-  mutable legacy bookkeeping and transport state, and MUST NOT be set
-  in this value.
-
-  A zero conveys nothing that the absence of this value does not, so
-  a zero MUST NOT be emitted and an absent value means that no legacy
-  attribute is asserted.  In particular, bit 4, FileAttached, is
-  represented by the File children of the Message; a legacy conversion
-  boundary sets that bit from the File children it emits.
-
-  102. TimestampOffset
-  ────────────────────
-  Contains a signed number of seconds encoded as specified in
-  TTS‑0007.  If this number is added to the Timestamp, the result is
-  the local time and date when the message was written.
-
-  A zero conveys nothing that the absence of this value does not, so
-  a zero MUST NOT be emitted and an absent value means that the offset
-  is zero.
-
-  103. ToUserName
-  ───────────────
-  Contains a UTF‑8 string which is a user name on the destination
-  system.
-
-  104. FromUserName
-  ─────────────────
-  Contains a UTF‑8 string which is a user name on the origin system.
-
-  105. Subject
-  ────────────
-  Contains a UTF‑8 string which is the subject of the message.
-
-  106. MessageText
-  ────────────────
-  Contains a UTF‑8 string which is the contents of the message.
-
-  The string is zero or more paragraphs, each terminated by one U+000A.
-  It is therefore either empty or ends in U+000A, and the number of
-  U+000A values equals the number of paragraphs.  U+000A terminates a
-  paragraph; it does not separate one paragraph from the next, and a
-  final paragraph is terminated like every other.
-
-  U+000D MUST NOT appear.  A producer which has a carriage return, a
-  line feed, or a carriage return and line feed pair emits one U+000A
-  for it, so that one line break has one representation.  This matches
-  FTS‑0001.016, in which a hard carriage return "marks the end of a
-  paragraph", and lets a legacy conversion map each terminator to one
-  hard carriage return and back without inventing or discarding a byte.
-
-  107. Area
-  ─────────
-  Contains an AreaName value optionally followed by an AreaDescription
-  value.
-
-  108. AreaName
-  ─────────────
-  Contains a UTF‑8 value which specifies which area the message is in.
-  This likely has a lot of legacy restrictions that I can't find in
-  any official document when used with legacy FTN software.
-
-  109. AreaDescription
-  ────────────────────
-  Contains a UTF‑8 value which provides a description of the area for
-  use when automatically adding areas.
-
-  110. TearLine
-  ─────────────
-  Contains a UTF‑8 value which is "an optional program specifier".
-  There is no "---" prefix in this value.
-
-  111. OriginLine
-  ───────────────
-  Contains a small amount of information about the system where the
-  message originated. The string SHOULD end with the node address in
-  parenthesis.  The " * Origin: " part is not included.
-
-  112. SeenBy
-  ───────────
-  Optional and only barely useful. Contains a Trimmed Collection of
-  addresses as specified in TTS‑0004.  This collection is every system
-  that is expected to have received this message.
-
-  113. Via
-  ────────
-  A Via value contains a required Address, followed by a PublicKey if
-  and only if the Address is the anonymous address, followed by a
-  required Timestamp and a required UTF‑8 string.  The string MAY
-  contain the program name and version separated by a space.
-
-  The PublicKey identifies the particular anonymous system represented
-  by the Via.  It is path metadata and does not override an effective key
-  or authenticate any other value.
-
-  The system originating a Message or distribution File MUST append a
-  Via for itself before first committing the item to a next hop.  Each
-  forwarding system MUST likewise append one Via for itself before
-  committing a new next hop.  Existing Via values MUST NOT be removed,
-  reordered, or modified.  Repackaging or retrying an item for the same
-  committed next hop MUST NOT append another Via.
-
-  114. MessageID
-  ──────────────
-  Contains a UTF‑8 string that uniquely identifies the message and the
-  Origin system.
-
-  115. ReplyTo
-  ────────────
-  Contains a required Address followed by a required UTF‑8 string that
-  was copied from the MessageID of a message that this one is a reply
-  to.
-
-  116. OriginalCharacterSet
-  ─────────────────────────
-  Contains a UTF‑8 string that indicates a previous value of the CHRS
-  control paragraph.  The Message will have been converted from this
-  to UTF‑8 before it was placed in a bundle.
-
-  117. AdditionalKludgeLine
-  ─────────────────────────
-  Contains a UTF‑8 string.  This string represents a control paragraph
-  and would be added to a legacy message. The CTRL‑A character is not
-  present.
-
-  118. ShortDescription
-  ─────────────────────
-  Contains a UTF‑8 string which describes the File. This SHOULD be no
-  more than 45 characters, and MUST NOT contain newlines.
-
-  119. LongDescriptionLine
-  ────────────────────────
-  Contains a UTF‑8 string for each line of a multi‐line description.
-  Each line SHOULD be no more than 45 characters, and MUST NOT contain
-  newlines.
-
-  120. MagicWord
-  ──────────────
-  Contains a UTF‑8 string indicating a potential alias for requesting
-  the file with.
-
-  121. Replaces
-  ─────────────
-  Contains a UTF‑8 string with wildcard characters '*' and '?' to
-  select files this replaces. It is expected that configuration around
-  sources and signatures be available.
-
 
 5. Error Handling
 ─────────────────
@@ -661,13 +338,14 @@ Contents
   the SignedTLV value that contains the error.  Missing required
   values, and having values in the wrong order are data errors.
 
-  An unknown type in a position permitted by section 2 is not an
-  error.  While it is encouraged to log a message indicating that an
-  unknown type is used, every permitted unknown value MUST be ignored
-  semantically and retained byte for byte.  The rule applies only to
-  values specified entirely as sequences of encoded TLV children.  It
-  does not cause bytes in a mixed grammar, such as the raw integer and
-  UTF‑8 string suffix of Rejected, to be interpreted as TLV values.
+  An unknown type in a position permitted by section 2 or TSP‑0016 is
+  not an error.  While it is encouraged to log a message indicating
+  that an unknown type is used, every permitted unknown value MUST be
+  ignored semantically and retained byte for byte.  The rule applies
+  only to values specified entirely as sequences of encoded TLV
+  children.  It does not cause bytes in a mixed grammar, such as the
+  raw integer and UTF‑8 string suffix of Rejected, to be interpreted as
+  TLV values.
 
 
 6.  Reply Bundles
@@ -724,24 +402,13 @@ Contents
 7. Duplicate Acceptance
 ───────────────────────
 
-  A Message or standalone File whose Signature validates has a stable
-  signed‐item identity.  This identity consists of the item type, its
-  effective signer address and PublicKey, and its end‐to‐end Signature.
-  The effective signer is Origin when its key is available and
-  SignedOrigin otherwise.  A non‐anonymous effective signer uses its
-  effective key resolved according to TSP‑0015; an anonymous effective
-  signer uses its accompanying PublicKey.
-
-  The RequestIdentifier, Via, SeenBy, and AdditionalKludgeLine values
-  following the Signature MUST NOT be part of the duplicate identity.
-
-  The end‐to‐end Signature MUST be validated before its identity is
-  used for duplicate acceptance.  When first accepting an item, the
-  receiver MUST make the item and its duplicate identity durable
-  before returning Accepted.  The receiver MUST retain the identity
-  and MUST NOT expire it automatically.  An explicit administrative
-  operation MAY remove retained identities; doing so permits a later
-  retransmission to be accepted as a new item.
+  TSP‑0016 defines the stable signed‑item identity of a Message or
+  standalone File whose Signature validates.  When first accepting an
+  item, the receiver MUST make the item and its duplicate identity
+  durable before returning Accepted.  The receiver MUST retain the
+  identity and MUST NOT expire it automatically.  An explicit
+  administrative operation MAY remove retained identities; doing so
+  permits a later retransmission to be accepted as a new item.
 
   When the receiver is presented with an identity it has already
   accepted, it MUST NOT store, import, or forward the item again.  It
@@ -750,32 +417,17 @@ Contents
   retry an item whose earlier Accepted response was lost or was not
   made durable locally.
 
-  A File inside a Message is covered by the Message identity.  A File
-  directly inside a payload SignedTLV uses its own Origin and optional
-  Signature.  Poll and FileRequest values are repeatable requests and
-  do not use signed‐item duplicate identities.
+  A File inside a Message is covered by the Message identity.  Poll and
+  FileRequest values are repeatable requests and do not use
+  signed‑item duplicate identities.
 
 
 A. References
 ─────────────
 
-  [TSP‑0003] "Legacy Data Formats and TITH", TITH, 2026‑08‑21.
-
-  [TSP‑0011] "Durable Inbound Delivery Items", TITH, 2026‑08‑21.
-
   [TSP‑0015] "Public Key Trust and Continuity", TITH, 2026‑08‑20.
 
-  [FTA‑1006.002] "Key words to indicate requirement levels" FTSC,
-  1998‑01‑17.
-
-  [FTS‑0001.016] "A Basic FidoNet(r) Technical Standard", Randy Bush,
-  Pacific Systems Group, 1995‑09‑30.
-
-  [FTS‑0004.001] "EchoMail Specification", Bob Hartman, Spark
-  Software, 1987‑12‑12.
-
-  [FSC‑0068.001] "A Proposed Replacement For FTS-0004", FTSC,
-  1992‑12‑13.
+  [TSP‑0016] "Item Format", TITH, 2026‑08‑22.
 
   [Libhydrogen] Version 1,
   https://github.com/jedisct1/libhydrogen/wiki
@@ -787,8 +439,6 @@ A. References
   [TTS‑0004] "Node Addresses", TITH, 2026‑08‑21.
 
   [TTS‑0006] "Bundle Exchange Protocol", TITH, 2026‑08‑21.
-
-  [TTS‑0007] "Signed Integer Encoding", TITH, 2026‑08‑16.
 
   [TTS‑5000] "The Distribution Nodelist", TITH, 2026‑08‑21.
 
@@ -840,5 +490,10 @@ B. History
    Rev.12, 2026‑08‑21: Defined directional RequestIdentifier
    namespaces, removed response ordering, and required returned values
    to precede their Accepted response.
+
+   Rev.13, 2026‑08‑22: Moved the Message, File, and FileRequest child
+   sequences, item authentication, and signed‑item identity to
+   TSP‑0016 while retaining their outer Bundle type assignments and all
+   request, response, polling, and duplicate‑acceptance behaviour.
 
 **********************************************************************

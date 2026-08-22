@@ -1,0 +1,520 @@
+**********************************************************************
+TITH                                              THIS ISN'T THAT HARD
+**********************************************************************
+
+Publication:  TSP‑0016
+Revision:     1
+Title:        Item Format
+Author(s):    Stephen Hurd
+Date:         2026‑08‑22
+══════════════════════════════════════════════════════════════════════
+
+Status of this document
+───────────────────────
+
+  This document is a TITH Standard Proposal (TSP) — it documents a
+  proposed standard and solicits discussion.  Until promoted to a TTS,
+  this is experimental only and does not describe required behaviour.
+
+  This document is released to the public domain, and may be used,
+  copied or modified for any purpose whatever.
+
+Abstract
+────────
+
+  This document defines the data model and canonical TLV sequences for
+  a Message, a File, and a FileRequest independently of the Bundle or
+  legacy serialization which carries one.
+
+Contents
+────────
+
+  1. Introduction
+  2. Encoding and Extensions
+  3. Item Sequences
+  4. Item Child Types
+  5. Item Authentication and Identity
+  6. Reserialization and Conversion
+  7. Feedback and Discussion
+
+  A. References
+  B. History
+
+═══════════════════════════════════════════════════════════════════════
+
+
+1. Introduction
+───────────────
+
+  A Message, File, or FileRequest is data which can be serialized in a
+  native TITH TLV or at an explicit legacy conversion boundary.  This
+  proposal defines that data and its one canonical native child‑TLV
+  sequence.  A carrying standard assigns an outer Type and defines how
+  items are transported, requested, accepted, rejected, or stored.
+
+  The applicable public key for a non‑anonymous address is supplied by
+  the context which uses this proposal.  This proposal defines how an
+  item selects among its Origin and SignedOrigin identities, but does
+  not define nodelist lookup, local pins, key continuity, Bundle trust,
+  or transport authentication.
+
+
+2. Encoding and Extensions
+────────────────────────────
+
+  Every sequence in this proposal consists entirely of TLV values
+  encoded as defined by TTS‑0002.  Common TLV types, including Origin,
+  Destination, PublicKey, Timestamp, Signature, and SignedOrigin, are
+  defined by TTS‑0003.  Addresses are defined by TTS‑0004.
+
+  In this document, “first” and “begins with” refer to the literal first
+  encoded child, including when unknown types are present.  A PublicKey
+  whose presence depends on the immediately preceding address MUST be
+  the next encoded sibling; an unknown value cannot separate the pair.
+
+  After a required leading child and any conditional PublicKey,
+  unknown TLV values MAY occur between or after the remaining defined
+  children.  They do not change the relative order, cardinality, or
+  requirements of defined children.  An unknown value cannot satisfy
+  or replace a required child.  A type assigned by this proposal or
+  TTS‑0003 but used in a position not permitted by the applicable
+  grammar is a data error, not an unknown type.  Where a grammar does
+  not designate a literal leading child, unknown values MAY also
+  precede the first defined child.
+
+  Unknown values preceding an item Signature are part of the exact
+  signed region.  Unknown values following it are part of the mutable
+  suffix.  An unsigned item has no signed region; unknown values retain
+  their exact positions among its defined children.
+
+
+3. Item Sequences
+───────────────────
+
+  The notation in this section uses M for mandatory, O for optional,
+  and + to permit more than one value.  A means mandatory when the
+  immediately preceding address is the anonymous address and
+  prohibited otherwise.
+
+  3.1 Message Sequence
+  ────────────────────
+
+  A Message MUST be either NetMail or EchoMail.  N means mandatory for
+  NetMail and prohibited for EchoMail.  E means mandatory for EchoMail
+  and prohibited for NetMail.  C means optional for EchoMail and
+  prohibited for NetMail.
+
+  NetMail MUST contain a Destination and MUST NOT contain an Area.
+  EchoMail MUST contain an Area and MUST NOT contain a Destination or
+  its following PublicKey.  TearLine and OriginLine are EchoMail
+  control information in FTS‑0004.001 and FSC‑0068.001, and
+  FTS‑0001.016 defines neither, so NetMail MUST NOT contain either one.
+  A legacy NetMail which carries such a line carries it as message
+  text.
+
+  M  Origin (TTS‑0003)
+  A  PublicKey (TTS‑0003)
+  O  SignedOrigin (TTS‑0003)
+  A  PublicKey (TTS‑0003)
+  N  Destination (TTS‑0003)
+  A  PublicKey (TTS‑0003)
+  M  Timestamp (TTS‑0003)
+  M  ToUserName (Section 4)
+  M  FromUserName (Section 4)
+  M  Subject (Section 4)
+  M  MessageText (Section 4)
+  E  Area (Section 4)
+  O+ File Sequence (Section 3.2)
+  O  LegacyAttributes (Section 4)
+  O  TimestampOffset (Section 4)
+  C  TearLine (Section 4)
+  C  OriginLine (Section 4)
+  O  MessageID (Section 4)
+  O  ReplyTo (Section 4)
+  O  OriginalCharacterSet (Section 4)
+  O  Signature (TTS‑0003)
+  M  RequestIdentifier (Section 4)
+  M+ Via (Section 4)
+  O  SeenBy (Section 4)
+  O+ AdditionalKludgeLine (Section 4)
+
+  A File Sequence in a Message is encoded as a child whose outer Type
+  is assigned by the carrying standard.  It uses the embedded form in
+  section 3.2 and shares the enclosing Message's authentication state.
+
+  Origin is the system where the Message originated and is the address
+  used to construct a reply.  Its immediately following PublicKey is
+  present if and only if Origin is the anonymous address.  Destination
+  has the same conditional PublicKey rule.
+
+  3.2 File Sequence
+  ──────────────────
+
+  A File is embedded in a Message or is standalone.  A standalone File
+  is either a distribution File or a peer‑addressed File.  T means
+  mandatory for a standalone File and prohibited for an embedded File.
+  S means optional for a standalone File and prohibited for an
+  embedded File.  K means mandatory when the immediately preceding
+  Origin or SignedOrigin is the anonymous address and prohibited
+  otherwise.  F means mandatory for a standalone distribution File
+  and prohibited for an embedded or peer‑addressed File.
+
+  O  Filename (Section 4)
+  O  Timestamp (TTS‑0003)
+  M  Contents (Section 4)
+  F  Area (Section 4)
+  T  Origin (TTS‑0003)
+  K  PublicKey (TTS‑0003)
+  S  SignedOrigin (TTS‑0003)
+  K  PublicKey (TTS‑0003)
+  O  ShortDescription (Section 4)
+  O+ LongDescriptionLine (Section 4)
+  O  TearLine (Section 4)
+  O  MagicWord (Section 4)
+  O  Replaces (Section 4)
+  S  Signature (TTS‑0003)
+  T  RequestIdentifier (Section 4)
+  F+ Via (Section 4)
+  F+ SeenBy (Section 4)
+
+  A File embedded in a Message MUST NOT contain Origin, either
+  conditional PublicKey, SignedOrigin, Signature, RequestIdentifier,
+  Via, or SeenBy.  A peer‑addressed standalone File MUST NOT contain
+  Area, Via, or SeenBy.  A standalone distribution File MUST contain
+  one or more Via and one or more SeenBy values.
+
+  If a Timestamp is present, it represents the time of last
+  modification of the file.
+
+  3.3 FileRequest Sequence
+  ──────────────────────────
+
+  A FileRequest contains a mandatory Filename, optionally followed by
+  a Timestamp as defined in TTS‑0003, followed by a mandatory
+  RequestIdentifier.  It has no Origin, SignedOrigin, PublicKey, or
+  Signature.  If a Timestamp is present, the request is conditional on
+  the last modified time of Filename being newer than the Timestamp.
+
+  Existing FidoNet request types have optional passwords.  Public‑key
+  transport authentication makes a password inside the request
+  unnecessary, so this sequence has no password field.
+
+  A carrying standard defines the operation of a FileRequest and the
+  request namespace in which its RequestIdentifier is interpreted.
+
+
+4. Item Child Types
+──────────────────────
+
+  The following types are defined for use by the sequences in section
+  3.  Their assignments do not assign the outer Type of any item.
+
+  96. Filename
+  ────────────
+  The value is a UTF‑8 string containing the name of the file.  No
+  restrictions are placed on the value of this string, but the name
+  MUST NOT contain additional path components.  Software SHOULD NOT
+  use values that are not allowed by common operating systems.
+  Commonly this means no control characters (U+00 to U+1F, and U+7F),
+  and none of U+22 ('"'), U+2A ('*'), U+2F ('/'), U+3A (':'),
+  U+3C ('<'), U+3D ('>'), U+3F ('?'), U+5C ('\'), or U+7C ('|').
+
+  97. Contents
+  ────────────
+  An arbitrary sequence of bytes with no restrictions on contents or
+  length.
+
+  98. RequestIdentifier
+  ───────────────────────
+  Contains a number encoded using the same method as the Type and
+  Length values as defined by TTS‑0002.  A carrying standard defines
+  its namespace, uniqueness requirements, and response correlation.
+
+  101. LegacyAttributes
+  ───────────────────────
+  Contains a number encoded the same as the Type and Length values.
+  Its only permitted bits have these AttributeWord meanings from
+  FTS‑0001.016:
+
+    bit 0   Private
+    bit 1   Crash
+    bit 12  ReturnReceiptRequest
+    bit 13  IsReturnReceipt
+    bit 14  AuditRequest
+
+  These are the packet‑persistent legacy message attributes.  All
+  other AttributeWord bits are either redundant native facts or
+  mutable legacy bookkeeping and transport state, and MUST NOT be set
+  in this value.
+
+  A zero conveys nothing that the absence of this value does not, so
+  a zero MUST NOT be emitted and an absent value means that no legacy
+  attribute is asserted.  In particular, bit 4, FileAttached, is
+  represented by the File children of the Message; a legacy conversion
+  boundary sets that bit from the File children it emits.
+
+  102. TimestampOffset
+  ──────────────────────
+  Contains a signed number of seconds encoded as specified in
+  TTS‑0007.  If this number is added to the Timestamp, the result is
+  the local time and date when the message was written.
+
+  A zero conveys nothing that the absence of this value does not, so
+  a zero MUST NOT be emitted and an absent value means that the offset
+  is zero.
+
+  103. ToUserName
+  ────────────────
+  Contains a UTF‑8 string which is a user name on the destination
+  system.
+
+  104. FromUserName
+  ──────────────────
+  Contains a UTF‑8 string which is a user name on the origin system.
+
+  105. Subject
+  ─────────────
+  Contains a UTF‑8 string which is the subject of the message.
+
+  106. MessageText
+  ─────────────────
+  Contains a UTF‑8 string which is the contents of the message.
+
+  The string is zero or more paragraphs, each terminated by one U+000A.
+  It is therefore either empty or ends in U+000A, and the number of
+  U+000A values equals the number of paragraphs.  U+000A terminates a
+  paragraph; it does not separate one paragraph from the next, and a
+  final paragraph is terminated like every other.
+
+  U+000D MUST NOT appear.  A producer which has a carriage return, a
+  line feed, or a carriage return and line feed pair emits one U+000A
+  for it, so that one line break has one representation.  This matches
+  FTS‑0001.016, in which a hard carriage return marks the end of a
+  paragraph, and lets a legacy conversion map each terminator to one
+  hard carriage return and back without inventing or discarding a byte.
+
+  107. Area
+  ─────────
+  Contains an AreaName value optionally followed by an AreaDescription
+  value.
+
+  108. AreaName
+  ─────────────
+  Contains a UTF‑8 value which specifies which area the message is in.
+  This likely has a lot of legacy restrictions that are outside the
+  scope of this item format.
+
+  109. AreaDescription
+  ─────────────────────
+  Contains a UTF‑8 value which provides a description of the area for
+  use when automatically adding areas.
+
+  110. TearLine
+  ─────────────
+  Contains a UTF‑8 value which is an optional program specifier.  There
+  is no "---" prefix in this value.
+
+  111. OriginLine
+  ───────────────
+  Contains a small amount of information about the system where the
+  message originated.  The string SHOULD end with the node address in
+  parentheses.  The " * Origin: " part is not included.
+
+  112. SeenBy
+  ────────────
+  Contains a Trimmed Collection of addresses as specified in
+  TTS‑0004.  For a Message this collection is every system that is
+  expected to have received the message.
+
+  113. Via
+  ────────
+  A Via value contains a required Address, followed by a PublicKey if
+  and only if the Address is the anonymous address, followed by a
+  required Timestamp and a required UTF‑8 string.  The string MAY
+  contain the program name and version separated by a space.
+
+  The PublicKey identifies the particular anonymous system represented
+  by the Via.  It is path metadata and does not override an applicable
+  key or authenticate any other value.
+
+  A system originating a Message or distribution File MUST append a
+  Via for itself before first committing the item to a next hop.  Each
+  forwarding system MUST likewise append one Via for itself before
+  committing a new next hop.  Existing Via values MUST NOT be removed,
+  reordered, or modified.  Repackaging or retrying an item for the same
+  committed next hop MUST NOT append another Via.
+
+  114. MessageID
+  ───────────────
+  Contains a UTF‑8 string that uniquely identifies the message and the
+  Origin system.
+
+  115. ReplyTo
+  ────────────
+  Contains a required Address followed by a required UTF‑8 string that
+  was copied from the MessageID of a message that this one is a reply
+  to.
+
+  116. OriginalCharacterSet
+  ─────────────────────────
+  Contains a UTF‑8 string that indicates a previous value of the CHRS
+  control paragraph.  The Message will have been converted from this
+  to UTF‑8 before it was placed in the item.
+
+  117. AdditionalKludgeLine
+  ─────────────────────────
+  Contains a UTF‑8 string.  This string represents a control paragraph
+  at a legacy conversion boundary.  The Control‑A character is not
+  present.
+
+  118. ShortDescription
+  ───────────────────────
+  Contains a UTF‑8 string which describes the File.  This SHOULD be no
+  more than 45 characters and MUST NOT contain newlines.
+
+  119. LongDescriptionLine
+  ─────────────────────────
+  Contains a UTF‑8 string for each line of a multi‑line description.
+  Each line SHOULD be no more than 45 characters and MUST NOT contain
+  newlines.
+
+  120. MagicWord
+  ───────────────
+  Contains a UTF‑8 string indicating a potential alias for requesting
+  the file with.
+
+  121. Replaces
+  ──────────────
+  Contains a UTF‑8 string with wildcard characters '*' and '?' to
+  select files this replaces.  Configuration around sources and
+  signatures is outside this item format.
+
+
+5. Item Authentication and Identity
+────────────────────────────────────
+
+  A Message or standalone File MAY carry an end‑to‑end Signature.  A
+  FileRequest and a File embedded in a Message do not carry one.
+
+  When present, Signature signs the exact encoded bytes of every child
+  TLV preceding it.  For a Message this begins with the Type of Origin.
+  For a standalone File it begins with the Type of the first child
+  present.  In both cases it ends with the final byte of the last child
+  before Signature.  The Type and Length of the enclosing item and
+  Signature itself are not signed.
+
+  Origin selects the applicable key when that key is available from
+  the using context.  An invalid Signature MUST NOT be retried with
+  SignedOrigin.  If no key is available for Origin, SignedOrigin MUST
+  be present and its applicable key is used.  The immediately following
+  PublicKey is present if and only if the selected address is anonymous.
+  The selected address and key form the effective signer.
+  SignedOrigin does not replace Origin for a reply, MessageID, or
+  routing to a Message's Destination.
+
+  SignedOrigin is permitted only when Signature is present.  An absent
+  Signature means the item has no end‑to‑end item authentication.  It
+  does not make the item malformed in an authenticated container, its
+  Origin key need not be available, and SignedOrigin is prohibited.
+
+  When Signature is present, its signed child values and Signature
+  MUST NOT be modified in transit.  RequestIdentifier, Via, SeenBy, and
+  AdditionalKludgeLine values following it may be modified without
+  invalidating it.  When Signature is absent, these values follow the
+  last signed‑position child directly.
+
+  Authentication of a structurally valid Message or standalone File
+  has one of these outcomes:
+
+    Unsigned
+    SignedOrigin-Invalid
+    SignedOrigin-Valid
+    Origin-Invalid
+    Origin-Valid
+
+  Unsigned means Signature is absent.  Origin-Valid and Origin-Invalid
+  mean Origin was the effective signer and Signature respectively did
+  or did not verify over the exact received signed bytes under its
+  applicable key.  SignedOrigin-Valid and SignedOrigin-Invalid have the
+  same meanings when SignedOrigin was the effective signer.  A failure
+  establishes no cause and does not establish that a different byte
+  sequence was authenticated or that the item was modified in transit.
+  A FileRequest has Transport authentication supplied by its carrying
+  context and has no independent item authentication outcome.
+
+  A Message or standalone File whose Signature validates has a stable
+  signed‑item identity.  It consists of the canonical item kind
+  (Message or standalone File), effective signer address and PublicKey,
+  and exact Signature.  RequestIdentifier, Via, SeenBy,
+  AdditionalKludgeLine, and unknown values following Signature are not
+  part of that identity.  Signature MUST be validated before the
+  identity is used.
+
+  A File embedded in a Message is covered by the Message identity.
+  FileRequest values have no signed‑item identity.
+
+
+6. Reserialization and Conversion
+────────────────────────────────
+
+  Reserializing an existing item MUST preserve whether Signature is
+  present.  When present, it MUST preserve every byte of the signed
+  region and the exact Signature value.  It MUST NOT decode and
+  re‑encode a signed child, replace Signature, or silently turn the item
+  into a new authentication state.  When absent, a reserialization
+  MUST NOT add a Signature and claim to preserve the same item.
+
+  A representation which cannot retain those facts cannot serialize
+  that existing item.  The conversion MUST be refused or exposed as a
+  separately authorized presentation which is not the item and cannot
+  be restored as one.
+
+  Ordinary input from a format which carried no native item and no
+  retained native Signature may be converted by minting a new canonical
+  item.  Its producer supplies the applicable Origin, SignedOrigin, and
+  authentication state under the rules of the using context.  This is
+  creation of a new item, not restoration or continuation of an earlier
+  authenticated item, even when its application data resembles an item
+  seen before.
+
+
+7. Feedback and Discussion
+────────────────────────────
+
+  Separating item data from its carriers lets a native Bundle and a
+  legacy conversion describe the same Message, File, or FileRequest
+  without making either serialization define the other.  The exact
+  signed byte sequence remains native TITH data because the Signature
+  authenticates that sequence, while a legacy format may carry enough
+  information to reconstruct it exactly.
+
+
+A. References
+─────────────
+
+  [FTS‑0001.016] Revision 16, "A Basic FidoNet Technical Standard",
+  FTSC, 1995‑09‑30.
+
+  [FTS‑0004.001] "EchoMail Specification", Bob Hartman, Spark
+  Software, 1987‑12‑12.
+
+  [FSC‑0068.001] "A Proposed Replacement For FTS-0004", FTSC,
+  1992‑12‑13.
+
+  [TTS‑0002] "Type Length Value Encoding", TITH, 2026‑08‑16.
+
+  [TTS‑0003] "Common TLV Types", TITH, 2026‑08‑22.
+
+  [TTS‑0004] "Node Addresses", TITH, 2026‑08‑21.
+
+  [TTS‑0007] "Signed Integer Encoding", TITH, 2026‑08‑16.
+
+
+B. History
+──────────
+
+   Rev.1, 2026‑08‑22: Initial Release.  Extracted the Message, File,
+   and FileRequest child‑TLV sequences, item authentication, and stable
+   signed‑item identity from TTS‑0005 without changing their encodings.
+
+**********************************************************************

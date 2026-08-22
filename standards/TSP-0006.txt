@@ -3,10 +3,10 @@ TITH                                              THIS ISN'T THAT HARD
 **********************************************************************
 
 Publication:  TSP‑0006
-Revision:     11
+Revision:     12
 Title:        Outbound Job Submission
 Author(s):    Stephen Hurd
-Date:         2026‑08‑21
+Date:         2026‑08‑22
 ══════════════════════════════════════════════════════════════════════
 
 Status of this document
@@ -74,7 +74,7 @@ Contents
   atomically.
 
   The mailer ingests every Attachment into private storage before
-  commitment, constructs an ordinary TTS‑0005 NetMail Message, creates
+  commitment, constructs an ordinary TSP‑0016 NetMail Message, creates
   its TSP‑0005 Job and TSP‑0002 delivery copy, and returns a stable
   JobID.  A local pathname is not TITH data, is never sent to a remote
   peer, and is never substituted for Subject.
@@ -86,7 +86,7 @@ Contents
   grammar so an existing IPC version 1 operation is not silently
   changed.
 
-  TTS‑0005 addresses a standalone File in two different ways.  A
+  TSP‑0016 defines a standalone File in two different ways.  A
   distribution File carries an Area and travels to every configured
   link for that area.  A File which is not part of a distribution
   network carries no Area, Via, or SeenBy, and the enclosing Bundle
@@ -287,7 +287,7 @@ Contents
     [Failure-Policy Route|<disposition> Notify <notification>]
     End
 
-  One Job carries exactly one TTS‑0005 FileRequest.  An Application
+  One Job carries exactly one TSP‑0016 FileRequest.  An Application
   requesting several files submits one Job for each, which may be one
   Batch.  A FileRequest Job has no Source, no ingestion, and no
   cleanup obligation.
@@ -327,7 +327,7 @@ Contents
 
   Origin, Signed-Origin, and Signature describe a Message's end‐to‐end
   item authentication.  For an ordinary Message without Signature,
-  the effective item signer is selected exactly as TTS‑0005 specifies.
+  the effective item signer is selected exactly as TSP‑0016 specifies.
   Without Signed-Origin, Origin identifies a local identity whose
   secret signing key the Service possesses.  With Signed-Origin,
   Origin is a canonical non‐anonymous TTS‑0004 address used as the
@@ -339,7 +339,7 @@ Contents
   For a retained Message carrying Signature, Origin and Signed-Origin
   are instead the literal remotely signed fields reconstructed under
   TSP‑0003.  The Service resolves and verifies their effective key as
-  TTS‑0005 requires.  It MUST NOT require a remote signer to be a local
+  TSP‑0016 requires.  It MUST NOT require a remote signer to be a local
   identity, possess its secret key, or have local Routes or Areas.
 
   A Local-Identity submission field occurs only in a Message Job.  It
@@ -401,7 +401,7 @@ Contents
   the Message contains the anonymous address and that peer's PublicKey.
   Without Signed-Origin, the Message likewise contains the Origin
   PublicKey when its resolved Origin is anonymous.  Signed-Origin itself
-  has the conditional PublicKey required by TTS‑0005.
+  has the conditional PublicKey required by TSP‑0016.
 
   Destination occurs for NetMail, Peer-File, and FileRequest.  For a
   NetMail it is the Message Destination and the item's ultimate
@@ -413,24 +413,24 @@ Contents
   value.
 
   Area occurs only for EchoMail and File and supplies the exact
-  nonempty TTS‑0005 AreaName.  It is compared with TSP‑0002
+  nonempty TSP‑0016 AreaName.  It is compared with TSP‑0002
   configuration by exact UTF‑8 bytes without normalization or case
   folding.  It MUST NOT contain a control code point, Space, or
   Horizontal Tab at either end.
 
-  Filename occurs only for FileRequest and supplies the TTS‑0005
+  Filename occurs only for FileRequest and supplies the TSP‑0016
   Filename naming the requested file.  It MUST be nonempty and MUST NOT
-  contain a path component.  Newer-Than supplies the optional TTS‑0005
+  contain a path component.  Newer-Than supplies the optional TSP‑0016
   FileRequest Timestamp, which makes the request conditional on the
   requested file being newer than that instant.  Auto is not accepted;
   a condition has no local instant to derive.
 
-  To-User and From-User occur only for a Message and supply TTS‑0005
+  To-User and From-User occur only for a Message and supply TSP‑0016
   ToUserName and FromUserName.
   Subject and Message-Text supply Subject and MessageText.  An omitted
   Subject or Message-Text supplies an empty value.  All four are UTF‑8.
 
-  TTS‑0005 makes MessageText paragraphs each terminated by one U+000A.
+  TSP‑0016 makes MessageText paragraphs each terminated by one U+000A.
   Message-Text is the text of the message and not that encoding, so the
   service supplies a final U+000A when a nonempty value does not end in
   one, and replaces each CRLF pair and each remaining U+000D with one
@@ -448,7 +448,7 @@ Contents
   uses the instant at which the Job is committed.  Legacy-Attributes,
   Timestamp-Offset, Tear-Line, Origin-Line, Message-ID, Reply-To, and
   Additional-Kludge-Line have the meanings, encodings, ordering, and
-  restrictions specified by TTS‑0005.  For ordinary origination the
+  restrictions specified by TSP‑0016.  For ordinary origination the
   Service supplies Signature.  It always supplies RequestIdentifier,
   appends Via, and supplies routing metadata.
 
@@ -456,9 +456,9 @@ Contents
   the 64‑byte TTS‑0003 Signature.  Its presence selects retained
   Message reconstruction rather than local origination.  Timestamp
   MUST then be an explicit integer, Message-Text MUST already have the
-  exact TTS‑0005 paragraph encoding, and Auto normalization is
+  exact TSP‑0016 paragraph encoding, and Auto normalization is
   prohibited for every signed field.  Signed-Origin is then the actual
-  signed TTS‑0005 address rather than a local identity reference.
+  signed SignedOrigin address rather than a local identity reference.
   Signed-Origin-Public-Key occurs if and only if that address is the
   anonymous address and contains its 43‑character unpadded RFC‑4648
   PublicKey.
@@ -547,7 +547,7 @@ Contents
   Attachment Wire-Filename defaults to Generate.  A standalone File
   requires an explicit Wire-Filename.  File-Timestamp defaults to Auto.
 
-  Wire-Filename supplies the TTS‑0005 Filename.  A supplied value MUST
+  Wire-Filename supplies the TSP‑0016 Filename.  A supplied value MUST
   be nonempty and MUST NOT contain a path component.  WireFilenames in
   one Job are distinct by exact UTF‑8 bytes.  A standalone File name is
   not inferred from Source-Path.
@@ -557,13 +557,13 @@ Contents
   explicitly supplies the TTS‑0003 Timestamp.
 
   Short-Description, Long-Description-Line, Tear-Line, Magic-Word, and
-  Replaces in a standalone File have the corresponding TTS‑0005
+  Replaces in a standalone File have the corresponding TSP‑0016
   meanings, encodings, ordering, and restrictions.  For a distribution
   File the Service supplies its Area, Origin, PublicKey when required,
   Signature, RequestIdentifier, initial Via, and routing metadata.  For
   a Peer-File it supplies the Origin, PublicKey when required,
   Signature, and RequestIdentifier, and supplies no Area, Via, or
-  SeenBy, because TTS‑0005 section 3 type 65 marks all three as values
+  SeenBy, because TSP‑0016 section 3.2 marks all three as values
   of a file that is part of a distribution network.
 
   Expected-Size is the exact Source byte count.  Expected-Hash is the
@@ -638,12 +638,12 @@ Contents
 6. Item Construction and Routing
 ────────────────────────────────
 
-  A NetMail Job produces exactly one TTS‑0005 NetMail Message.  It
+  A NetMail Job produces exactly one TSP‑0016 NetMail Message.  It
   contains the resolved Origin, optional SignedOrigin, Destination, and
   Timestamp, submitted user names, Subject, MessageText, optional
   Message fields, and one File child for each Attachment.
 
-  An EchoMail Job produces exactly one TTS‑0005 EchoMail Message.  It
+  An EchoMail Job produces exactly one TSP‑0016 EchoMail Message.  It
   contains the resolved Origin, optional SignedOrigin, submitted
   Timestamp, user names, Subject, MessageText, Area, optional Message
   fields, and one File child for each Attachment.  It contains no
@@ -655,17 +655,17 @@ Contents
   no independent Origin, PublicKey, SignedOrigin, Signature,
   RequestIdentifier, Via, or SeenBy.
 
-  A File Job produces one standalone TTS‑0005 File.  It contains the
+  A File Job produces one standalone TSP‑0016 File.  It contains the
   submitted Filename, optional Timestamp, exact private copy bytes as
   Contents, Area, resolved Origin, optional SignedOrigin, each
   conditionally required PublicKey, and the submitted optional File
   metadata.
 
-  A Peer-File Job produces one standalone TTS‑0005 File containing the
+  A Peer-File Job produces one standalone TSP‑0016 File containing the
   same values except Area.  It contains no Area, no Via, and no SeenBy.
   The Bundle carrying it addresses its recipient.
 
-  A FileRequest Job produces one TTS‑0005 FileRequest containing the
+  A FileRequest Job produces one TSP‑0016 FileRequest containing the
   submitted Filename, the Newer-Than Timestamp when one was supplied,
   and a RequestIdentifier.  It has no Origin, SignedOrigin, PublicKey,
   or Signature, and the Service MUST NOT add one.  Its enclosing
@@ -700,7 +700,7 @@ Contents
   For a Message Job carrying Signature, the Service reconstructs the
   canonical TSP‑0003 signed children from the named UTF‑8 fields and
   ingested Attachment Sources.  It resolves the effective Origin or
-  SignedOrigin key exactly as TTS‑0005 requires, verifies Signature
+  SignedOrigin key exactly as TSP‑0016 requires, verifies Signature
   over those exact encoded children, and refuses the Job if the key is
   unknown or verification fails.  It MUST NOT re‐sign, normalize, or
   silently omit a signed field.  It then retains Signature, replaces
@@ -1256,11 +1256,13 @@ A. References
 
   [TSP‑0015] "Public Key Trust and Continuity", TITH, 2026‑08‑20.
 
+  [TSP‑0016] "Item Format", TITH, 2026‑08‑22.
+
   [TTS‑0003] "Common TLV Types", TITH, 2026‑08‑22.
 
   [TTS‑0004] "Node Addresses", TITH, 2026‑08‑21.
 
-  [TTS‑0005] "Bundle Format", TITH, 2026‑08‑21.
+  [TTS‑0005] "Bundle Format", TITH, 2026‑08‑22.
 
   [TTS‑0007] "Signed Integer Encoding", TITH, 2026‑08‑16.
 
@@ -1307,5 +1309,9 @@ B. History
    Rev.11, 2026‑08‑21: Made a Message's local routing and transport
    identity independent of its end‐to‐end signer, including retained
    remotely signed Messages.
+
+   Rev.12, 2026‑08‑22: Referred item construction, child fields,
+   Signature handling, and item‑signer selection to TSP‑0016 while
+   retaining TTS‑0005 Bundle delivery and reply behaviour.
 
 **********************************************************************
