@@ -37,10 +37,10 @@ jobs:
           cargo +nightly-2026-08-20 llvm-cov clean --workspace
           cargo +nightly-2026-08-20 llvm-cov --branch --workspace --json --output-path tts-0004-coverage.json
 
-      - name: Report uncovered address lines
+      - name: Report source coverage
         run: cargo +nightly-2026-08-20 llvm-cov report --branch --text --show-missing-lines
 
-      - name: Require complete address coverage
+      - name: Require complete conformance coverage
         run: |
           sha256sum tts-0004-coverage.json
           python3 qualification/check_source_coverage.py \
