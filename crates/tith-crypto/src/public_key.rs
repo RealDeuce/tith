@@ -1,5 +1,7 @@
 //! Fixed-size Libhydrogen signing public keys from TTS-0004.
 
+use std::array::TryFromSliceError;
+
 use libhydrogen_sys as hydro;
 
 pub const PUBLIC_KEY_BYTES: usize = hydro::hydro_sign_PUBLICKEYBYTES as usize;
@@ -16,5 +18,13 @@ impl PublicKey {
 	#[must_use]
 	pub const fn as_bytes(&self) -> &[u8; PUBLIC_KEY_BYTES] {
 		&self.0
+	}
+}
+
+impl<'a> TryFrom<&'a [u8]> for PublicKey {
+	type Error = TryFromSliceError;
+
+	fn try_from(bytes: &'a [u8]) -> Result<Self, Self::Error> {
+		Ok(Self::from_bytes(bytes.try_into()?))
 	}
 }

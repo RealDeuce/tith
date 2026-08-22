@@ -768,12 +768,7 @@ fn parse_address(value: &OwnedTlv) -> Result<Address, BundleError> {
 }
 
 fn parse_public_key(value: &OwnedTlv) -> Result<PublicKey, BundleError> {
-	let bytes = value
-		.value
-		.as_slice()
-		.try_into()
-		.map_err(|_| BundleError::WrongLength("PublicKey"))?;
-	Ok(PublicKey::from_bytes(bytes))
+	PublicKey::try_from(value.value.as_slice()).map_err(|_| BundleError::WrongLength("PublicKey"))
 }
 
 fn parse_signature(value: &OwnedTlv) -> Result<Signature, BundleError> {

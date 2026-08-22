@@ -116,12 +116,7 @@ fn address_value(value: &OwnedTlv) -> Result<Address, BundleError> {
 }
 
 fn public_key_value(value: &OwnedTlv) -> Result<PublicKey, BundleError> {
-	let bytes: [u8; 32] = value
-		.value
-		.as_slice()
-		.try_into()
-		.map_err(|_| BundleError::WrongLength("PublicKey"))?;
-	Ok(PublicKey::from_bytes(bytes))
+	PublicKey::try_from(value.value.as_slice()).map_err(|_| BundleError::WrongLength("PublicKey"))
 }
 
 fn signature_value(value: &OwnedTlv) -> Result<Signature, BundleError> {

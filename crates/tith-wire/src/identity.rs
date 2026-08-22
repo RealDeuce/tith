@@ -36,6 +36,13 @@ mod tests {
 
 	#[test]
 	fn identity_uses_a_key_only_for_an_anonymous_address() {
+		let bytes = [1; 32];
+		assert_eq!(
+			PublicKey::try_from(bytes.as_slice()).unwrap().as_bytes(),
+			&bytes
+		);
+		assert!(PublicKey::try_from(&bytes[..31]).is_err());
+
 		assert!(identity("fidonet#1/2", 1).same_system_as(&identity("fidonet#1/2", 2)));
 		assert!(!identity("fidonet#1/2", 1).same_system_as(&identity("fidonet#1/3", 1)));
 		assert!(identity("p2p#-1", 1).same_system_as(&identity("p2p#-1", 1)));
