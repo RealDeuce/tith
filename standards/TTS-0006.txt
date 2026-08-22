@@ -3,7 +3,7 @@ TITH                                              THIS ISN'T THAT HARD
 **********************************************************************
 
 Publication:  TTS‑0006
-Revision:     9
+Revision:     10
 Title:        Bundle Exchange Protocol
 Author(s):    Stephen Hurd
 Date:         2026‑08‑22
@@ -240,6 +240,15 @@ Contents
   for that request.  If the request does not contain a valid
   RequestIdentifier, the receiver MUST close the connection.
 
+  These reason 1 responses do not change the independent end‐to‐end
+  item authentication states defined by TSP‑0016.
+
+  For the request types defined by TTS‑0005 and TSP‑0016, the receiver
+  MUST NOT generate a Rejected response with reason number 2 except
+  for a FileRequest which contains a Timestamp and whose condition is
+  unmet.  A file last modified at a time equal to or older than the
+  Timestamp does not satisfy the condition.
+
   Closing the connection because of an error does not undo any
   Accepted or Rejected responses already completed.  Requests for
   which no response was completed remain unacknowledged and may be
@@ -302,5 +311,9 @@ B. History
 
    Rev.9, 2026‑08‑22: Referred end‑to‑end Message and File
    authentication states to the data‑level Item Format proposal.
+
+   Rev.10, 2026‑08‑22: Kept request‐specific uses of rejection reasons
+   at the exchange edge while TTS‑0005 defines their shared retry
+   semantics.
 
 **********************************************************************

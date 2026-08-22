@@ -3,7 +3,7 @@ TITH                                              THIS ISN'T THAT HARD
 **********************************************************************
 
 Publication:  TTS‑0005
-Revision:     13
+Revision:     14
 Title:        Bundle Format
 Author(s):    Stephen Hurd
 Date:         2026‑08‑22
@@ -185,18 +185,10 @@ Contents
 
   1 — Indicates that the fact preventing acceptance is not one which
       the peer is permitted to change.  The TLV value has permanently
-      failed and MUST NOT be retried.  An unauthenticated payload
-      SignedTLV and an authenticated request with an irreparable data
-      error use this reason when TTS‑0006 permits a response.  This does
-      not change the independent end‑to‑end item authentication states
-      defined by TSP‑0016.  A Timestamp is prohibited.
+      failed and MUST NOT be retried.  A Timestamp is prohibited.
   2 — Indicates that a condition controlled by the peer was not met.
-      The current request has permanently failed and MUST NOT be
-      retried unchanged; the peer may submit a new request with a
-      permitted change which satisfies the condition.  This reason is
-      used only for a FileRequest whose Timestamp condition is unmet,
-      including when the file's last modified time is equal to or older
-      than that Timestamp.  A Timestamp is prohibited.
+      The TLV value MUST NOT be retried without modification.  A
+      Timestamp is prohibited.
   3 — Indicates that the receiver is not willing to accept the TLV
       value at this time, but expects the same unchanged value may be
       accepted later.  The TLV value remains eligible for retry.  Its
@@ -438,8 +430,6 @@ A. References
 
   [TTS‑0004] "Node Addresses", TITH, 2026‑08‑21.
 
-  [TTS‑0006] "Bundle Exchange Protocol", TITH, 2026‑08‑21.
-
   [TTS‑5000] "The Distribution Nodelist", TITH, 2026‑08‑21.
 
 
@@ -495,5 +485,9 @@ B. History
    sequences, item authentication, and signed‑item identity to
    TSP‑0016 while retaining their outer Bundle type assignments and all
    request, response, polling, and duplicate‑acceptance behaviour.
+
+   Rev.14, 2026‑08‑22: Confined rejection reasons 1 and 2 to their
+   shared retry semantics and left request‐specific applicability to
+   the exchange protocol.
 
 **********************************************************************

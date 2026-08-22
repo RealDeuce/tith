@@ -434,11 +434,11 @@ falling back to the usable TITH endpoints in its nodelist entry.
 
 Responses are applied per TSP-0002 section 6. Rejected reason 1 from an
 intermediate next hop fails as Relay-Denied, while the same response from the
-ultimate Destination fails as Rejected. Reason 2 permanently fails an unmet
-conditional FileRequest, which may be replaced by a new request with a changed
-condition. Reason 3 retries the same value no earlier than its Timestamp, or at
-the next activation of the schedule when it carries none. A request with no
-complete response stays eligible and does
+ultimate Destination fails as Rejected. Reason 2 permanently fails the
+unchanged request, which may be replaced by a new request containing a
+permitted change which satisfies the condition. Reason 3 retries the same value
+no earlier than its Timestamp, or at the next activation of the schedule when
+it carries none. A request with no complete response stays eligible and does
 not invoke permanent failure policy, which is also what happens to every copy
 in a connection that fails outright. Copies left claimed by a killed daemon
 are returned to the queue at startup.

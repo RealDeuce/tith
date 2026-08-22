@@ -3,7 +3,7 @@ TITH                                              THIS ISN'T THAT HARD
 **********************************************************************
 
 Publication:  TSP‑0002
-Revision:     14
+Revision:     15
 Title:        Routing and Distribution Configuration
 Author(s):    Stephen Hurd
 Date:         2026‑08‑22
@@ -415,9 +415,9 @@ Contents
   Rejected reason 1 from an intermediate next hop fails as
   Relay-Denied; reason 1 from the ultimate Destination fails as
   Rejected.  Exact identity comparison includes the PublicKey of an
-  anonymous address.  Reason 2 fails as Rejected.  It applies only to
-  the conditional FileRequest which received that response; a peer
-  which can satisfy the condition submits a new changed request.
+  anonymous address.  Reason 2 fails as Rejected.  A peer which can
+  satisfy the condition may submit a new request containing a permitted
+  change.
   Reason 3 retains the unchanged item for retry no earlier than its
   Timestamp, or for the next applicable schedule when no Timestamp is
   present.  A request for which no complete response was received
@@ -800,7 +800,7 @@ A. References
 
   [TTS‑0005] "Bundle Format", TITH, 2026‑08‑22.
 
-  [TTS‑0006] "Bundle Exchange Protocol", TITH, 2026‑08‑21.
+  [TTS‑0006] "Bundle Exchange Protocol", TITH, 2026‑08‑22.
 
   [TTS‑5000] "The Distribution Nodelist", TITH, 2026‑08‑21.
 
@@ -865,5 +865,8 @@ B. History
 
    Rev.14, 2026‑08‑22: Referred item Area and Via data to TSP‑0016
    while retaining TTS‑0005 polling and acceptance behaviour.
+
+   Rev.15, 2026‑08‑22: Handled peer‐correctable rejection reason 2
+   without restricting the shared reason to FileRequest.
 
 **********************************************************************

@@ -852,9 +852,10 @@ fn is_signature_failure(error: &(dyn Error + 'static)) -> bool {
 /// The TSP-0002 section 6 rule for one completed response.
 ///
 /// Reason 1 fails as Relay-Denied for an intermediate next hop and Rejected for
-/// the ultimate Destination. Reason 2 fails a conditional request as Rejected.
-/// Reason 3 retains the unchanged item for retry no earlier than its Timestamp,
-/// or for the next applicable schedule when it carries none.
+/// the ultimate Destination. Reason 2 fails a request with a peer-correctable
+/// condition as Rejected. Reason 3 retains the unchanged item for retry no
+/// earlier than its Timestamp, or for the next applicable schedule when it
+/// carries none.
 fn outcome_for(response: &CompletedResponse, next_attempt: u64, relayed: bool) -> DeliveryOutcome {
 	match response.response {
 		ResponseKind::Accepted => DeliveryOutcome::Delivered("accepted".to_owned()),

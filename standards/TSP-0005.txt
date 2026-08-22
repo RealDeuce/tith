@@ -3,7 +3,7 @@ TITH                                              THIS ISN'T THAT HARD
 **********************************************************************
 
 Publication:  TSP‑0005
-Revision:     10
+Revision:     11
 Title:        Durable Outbound Jobs
 Author(s):    Stephen Hurd
 Date:         2026‑08‑22
@@ -220,11 +220,10 @@ Contents
   part of this Job, and an accepted request which returns none is still
   Delivered.
 
-  A complete Rejected response with reason 2 arises only for a
-  FileRequest carrying a condition Timestamp.  It permanently fails
-  that copy, which becomes Rejected and MUST NOT be retried unchanged.
-  The Application may submit a new Job with a changed or absent
-  condition Timestamp.
+  A complete Rejected response with reason 2 permanently fails that
+  copy, which becomes Rejected and MUST NOT be retried unchanged.  The
+  Application may submit a new Job containing a permitted change which
+  satisfies the condition.
 
   Rejected means a complete remote response permanently rejected that
   copy's item.  TTS‑0005 reasons 1 and 2 produce Rejected; TSP‑0002
@@ -656,7 +655,7 @@ A. References
 ─────────────
 
   [TSP‑0002] "Routing and Distribution Configuration", TITH,
-  2026‑08‑21.
+  2026‑08‑22.
 
   [TSP‑0004] "Local IPC Format", TITH, 2026‑08‑17.
 
@@ -707,5 +706,8 @@ B. History
    Rev.10, 2026‑08‑22: Referred immutable item data and child fields
    to TSP‑0016 while retaining TTS‑0005 response and duplicate‑acceptance
    behaviour.
+
+   Rev.11, 2026‑08‑22: Applied rejection reason 2 generically while
+   retaining its terminal copy state and modified replacement Job.
 
 **********************************************************************
