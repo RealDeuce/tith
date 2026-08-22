@@ -102,7 +102,9 @@ mod tests {
 			encode_u64(u64::MAX),
 			[0x81, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x7f]
 		);
-		assert_eq!(decode_u64(&encode_u64(u64::MAX)), Ok(u64::MAX));
+		for value in [u64::from(u32::MAX), i64::MAX.cast_unsigned(), u64::MAX] {
+			assert_eq!(decode_u64(&encode_u64(value)), Ok(value));
+		}
 	}
 
 	#[test]
