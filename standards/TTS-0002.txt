@@ -3,10 +3,10 @@ TITH                                              THIS ISN'T THAT HARD
 **********************************************************************
 
 Publication:  TTS‑0002
-Revision:     2
+Revision:     3
 Title:        Type Length Value Encoding
 Author(s):    Stephen Hurd
-Date:         2026‑08‑16
+Date:         2026‑08‑22
 ══════════════════════════════════════════════════════════════════════
 
 Status of this document
@@ -121,7 +121,7 @@ Contents
   Values MUST be encoded in the shortest possible form.  Zero is
   encoded as the single byte zero (0x00).
 
-  Encoding is a bit trickier because the most significant seven byte
+  Encoding is a bit trickier because the most significant seven‐bit
   group is encoded first.  The easiest is to find the position of the
   most significant set bit in the value and divide it by seven
   rounding up:
@@ -134,16 +134,20 @@ Contents
   divided by seven is one and two sevenths (1²⁄₇, or 1.29) which,
   rounded up, is two indicating that it will take two bytes to encode.
 
-  For each byte, we can take the original number, and divide it by 128
-  times the number of bytes that will follow it (ie: right shift seven
-  times times the number of following bytes), take the lowest seven
-  bits of the result and, if there are any bytes after it, set the
-  high bit to one.
+  For a byte with n bytes following it, divide the original number by
+  128 raised to the power n (that is, shift it right by 7n bits), and
+  take the lowest seven bits of the result.  If n is nonzero, set the
+  high bit of that byte to one; otherwise, leave the high bit zero.
 
   So 378 divided by 128 is 2, and there's an additional byte left,
   so the first encoded byte would be 130. For the next byte, there's
   no need to divide anymore and we just take the low seven bits as‐is
   and our second byte is 122.
+
+  As a three‑byte boundary example, 16,384 has one followed by fourteen
+  zero bits.  The three seven‐bit groups are therefore 1, 0, and 0.
+  Setting the continuation bit on the first two bytes produces 0x81,
+  0x80, 0x00.
 
 
 A. References
@@ -159,5 +163,8 @@ B. History
    Rev.1, 2025‑11‑14: Initial Release.
 
    Rev.2, 2026‑08‑16: Required minimal Type and Length encodings.
+
+   Rev.3, 2026‑08‑22: Corrected the general multi‐byte encoding
+   formula and added a three‑byte example.
 
 **********************************************************************
