@@ -3,7 +3,7 @@ TITH                                              THIS ISN'T THAT HARD
 **********************************************************************
 
 Publication:  TPS‑0001
-Revision:     1
+Revision:     2
 Title:        TITH Standards Process
 Author(s):    Stephen Hurd
 Date:         2026‑08‑22
@@ -134,10 +134,26 @@ Contents
 
   Each identifier consists of its three‐letter class, a HYPHEN-MINUS
   (U+002D) in filenames or a NON-BREAKING HYPHEN (U+2011) in prose, and
-  four decimal digits.  An assigned number MUST NOT be reused for an
-  unrelated document.  A promoted TSP and its resulting TTS use the same
-  four digits because they are successive states of the same technical
-  specification.
+  four decimal digits.  An assigned TTS, TPS, or TRD number MUST NOT be
+  reused for an unrelated document.
+
+  A TSP number identifies one currently published proposal, not a future
+  TTS number or a permanent document lineage.  A proposal for a new
+  technical specification MAY be accepted under any unoccupied TSP
+  number which has not also been assigned to a TTS.  This does not
+  reserve the same TTS number.
+
+  A TSP number which is also an assigned TTS number is reserved for a
+  proposal to revise that TTS.  It MUST NOT be assigned to an unrelated
+  proposal.  Thus TSP‑NNNN may coexist with TTS‑NNNN while a revision to
+  that standard is developed.
+
+  After a proposal is promoted or withdrawn and no current document
+  refers to it, its TSP number MAY be assigned again.  If the same number
+  is then assigned to a TTS, the new proposal MUST propose a revision to
+  that TTS; otherwise it MAY be unrelated.  The new proposal begins at
+  revision 1.  Repository history MUST retain the earlier proposal and
+  the change which retired it.
 
   The files in the repository's published standards directory on its
   default branch are the published documents.  Work on an unpublished
@@ -158,6 +174,12 @@ Contents
   unresolved assigned value MUST remain recorded in a public issue until
   a commit resolves it.
 
+  Publishing a TSP accepts it for experimental development only.  It
+  does not assert that the proposal is complete, implementable,
+  dependency‐ready, or likely to become a TTS.  Publication does not
+  require an implementation, conformance tests, coverage, qualification,
+  an acyclic dependency graph, or completed external assignments.
+
   Promotion work begins with a public tracking issue identifying the
   candidate publication and revision.  The exact candidate text,
   reference‐implementation source, tests, dependencies, and toolchains
@@ -176,8 +198,8 @@ Contents
   The evidence for TTS‑NNNN revision R is stored in the repository as
   "qualification/TTS-NNNN.RRR.md", where RRR is the revision padded to
   three decimal digits.  The record for a promotion uses the resulting
-  TTS identifier and revision even when the evidence branch still names
-  the candidate TSP.
+  TTS identifier and revision and separately identifies the candidate
+  TSP identifier and revision.  Their four digits need not be equal.
 
   A qualification record MUST contain:
 
@@ -321,7 +343,8 @@ Contents
 
   The publishing change:
 
-    1. renames TSP‑NNNN to TTS‑NNNN;
+    1. assigns an unused TTS number and moves the candidate TSP to that
+       TTS identifier, whether or not their four digits are equal;
     2. sets the first TTS revision to 1 and the current publication
        date;
     3. replaces the proposal status text with the TTS status text;
@@ -333,7 +356,9 @@ Contents
 
   The normative technical body qualified on the evidence branch MUST be
   the body published as TTS revision 1.  A technical change made during
-  promotion invalidates the evidence and MUST be qualified again.
+  promotion invalidates the evidence and MUST be qualified again.  Once
+  the publishing change has updated every current reference to the
+  candidate, its former TSP number is available under section 3.
 
 
 8. Existing Standards and Later Revisions
@@ -345,11 +370,13 @@ Contents
   qualification uses its then‐current TTS identifier and revision and
   MUST satisfy every requirement in section 6.
 
-  After a TTS has qualified, a normative revision MUST be developed
-  outside the published default branch and MUST satisfy sections 5 and 6
-  before publication.  Its publishing change increments the TTS
-  revision, publishes the new qualification record, updates affected
-  dependency records, and closes its tracking issue through the commit.
+  After a TTS has qualified, a normative revision MUST be developed as
+  TSP‑NNNN, where NNNN is the existing TTS number.  The proposal is
+  governed by section 4 and MUST satisfy sections 5 and 6 before it
+  replaces the current TTS revision.  Its publishing change removes the
+  TSP, increments the TTS revision, publishes the new qualification
+  record, updates affected dependency records, and closes its tracking
+  issue through the commit.
 
   An editorial revision MAY carry qualification evidence forward
   without rerunning unaffected tests.  Its new qualification record MUST
@@ -373,14 +400,18 @@ Contents
   documents and retains the superseded document in the archive.  A
   superseded document is not current for section 11.
 
-  The repository owner MAY withdraw a document which is unsafe,
+  The repository owner MAY withdraw a TTS, TPS, or TRD which is unsafe,
   unusable, or no longer applicable.  The withdrawal change records its
   reason and date and retains the document and identifier in the
   archive.  Withdrawal does not erase or reuse its number.  A withdrawn
   document is not current for section 11.
 
-  A TSP or TRD MAY be withdrawn without technical qualification.  A TPS
-  MAY be superseded only by a later TPS revision or another TPS which
+  A TSP MAY be withdrawn without technical qualification.  The change
+  removes it from the published standards directory, updates every
+  current reference to it, and records why it was withdrawn.  Repository
+  history retains its text; its number is then available under section
+  3.  A TRD MAY be withdrawn without technical qualification.  A TPS MAY
+  be superseded only by a later TPS revision or another TPS which
   explicitly assumes its process responsibilities.
 
 
@@ -438,5 +469,10 @@ B. History
 ──────────
 
    Rev.1, 2026‑08‑22: Initial Release.
+
+   Rev.2, 2026‑08‑22: Separated proposal numbers from standard numbers,
+   allowed retired TSP numbers to be reused, reserved TTS‐numbered TSP
+   slots for revisions to their matching standards, and permitted
+   promotion to assign a different TTS number.
 
 **********************************************************************

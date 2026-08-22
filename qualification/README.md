@@ -10,10 +10,10 @@ A record uses this structure:
 ```markdown
 # Qualification: TTS‑NNNN revision R
 
-- Candidate: TSP‑NNNN revision R at COMMIT, or existing TTS‑NNNN revision R
+- Candidate: TSP‑MMMM revision R at COMMIT, or existing TTS‑NNNN revision R
 - Qualified document SHA‑256: DIGEST
 - Evidence commit: COMMIT
-- TPS revision: TPS‑0001 revision 1
+- TPS revision: TPS‑0001 revision 2
 - Approval: OWNER, ISO-DATE
 
 ## Normative dependencies
