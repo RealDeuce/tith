@@ -3,10 +3,10 @@ TITH                                              THIS ISN'T THAT HARD
 **********************************************************************
 
 Publication:  TTS‑0003
-Revision:     5
+Revision:     6
 Title:        Common TLV Types
 Author(s):    Stephen Hurd
-Date:         2026‑08‑21
+Date:         2026‑08‑22
 ══════════════════════════════════════════════════════════════════════
 
 Status of this document
@@ -73,9 +73,10 @@ Contents
       and whether it is also a reply address.  For an anonymous Origin,
       where an enclosing standard permits it, an accompanying
       PublicKey identifies its key.  For a non‐anonymous Origin, the
-      effective key is resolved according to TSP‑0015.  A supplied
-      PublicKey MUST NOT override that effective key except in the
-      dedicated continuity exchange defined by TTS‑0005.
+      enclosing standard defines how its applicable public key is
+      obtained.  A supplied PublicKey MUST NOT override that key unless
+      the enclosing standard explicitly defines an authenticated
+      key‐continuity use.
 
       When an enclosing standard permits SignedOrigin and no public
       key is available for Origin, SignedOrigin selects the signing
@@ -201,9 +202,9 @@ Contents
 
       If SignedOrigin is the anonymous address, it MUST be immediately
       followed by one PublicKey.  For any other SignedOrigin, a
-      PublicKey at that position is prohibited and its effective key is
-      resolved according to TSP‑0015.  SignedOrigin never overrides an
-      available effective Origin key.
+      PublicKey at that position is prohibited and the enclosing
+      standard defines how its applicable public key is obtained.
+      SignedOrigin never overrides an available Origin key.
 
 
 A. References
@@ -212,10 +213,6 @@ A. References
   [TTS‑0002] "Type Length Value Encoding" TITH, 2026‑08‑16.
 
   [TTS‑0004] "Node Addresses", TITH, 2026‑08‑21.
-
-  [TTS‑0005] "Bundle Format", TITH, 2026‑08‑21.
-
-  [TSP‑0015] "Public Key Trust and Continuity", TITH, 2026‑08‑20.
 
   [FTA‑1006.002] "Key words to indicate requirement levels" FTSC,
   1998‑01‑17.
@@ -246,5 +243,8 @@ B. History
 
    Rev.5, 2026‑08‑21: Made PublicKey the TLV representation of the
    public key defined by TTS‑0004.
+
+   Rev.6, 2026‑08‑22: Made enclosing standards own non‐anonymous key
+   selection and authenticated key‐continuity exceptions.
 
 **********************************************************************
