@@ -35,6 +35,9 @@ def main() -> int:
 			if counts["covered"] != counts["count"]:
 				failed = True
 		print(f"{source}: " + ", ".join(parts))
+		for segment in matches[0].get("segments", []):
+			if segment[3] and segment[4] and segment[2] == 0:
+				print(f"{source}: uncovered region {segment}")
 		for branch in matches[0].get("branches", []):
 			if branch[4] == 0 or branch[5] == 0:
 				print(f"{source}: uncovered branch {branch}")
