@@ -564,7 +564,7 @@ mod tests {
 		for value in ["1", "9", "10", "32767"] {
 			assert!(parse_node_number(value).is_some(), "{value}");
 		}
-		for value in ["", "0", "00", "01", "+1", " 1", "1 ", "32768", "１"] {
+		for value in ["", "-1", "0", "00", "01", "+1", " 1", "1 ", "32768", "１"] {
 			assert!(parse_node_number(value).is_none(), "{value}");
 		}
 	}
