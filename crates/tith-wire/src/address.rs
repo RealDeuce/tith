@@ -679,9 +679,36 @@ mod tests {
 		}
 		assert_eq!("fidonet".parse::<Address>(), Err(AddressError::MissingZone));
 		assert_eq!(
+			Address::new(String::new(), 1, 1, 0, 0),
+			Err(AddressError::EmptyDomain)
+		);
+		assert_eq!(
 			"fidonet#1/2:3".parse::<Address>(),
 			Err(AddressError::InvalidOrder)
 		);
+	}
+
+	#[test]
+	fn display_propagates_every_formatter_failure() {
+		struct FailAfter(usize);
+
+		impl fmt::Write for FailAfter {
+			fn write_str(&mut self, value: &str) -> fmt::Result {
+				if self.0 == 0 {
+					Err(fmt::Error)
+				} else {
+					self.0 -= 1;
+					let _ = value;
+					Ok(())
+				}
+			}
+		}
+
+		let value = address("fidonet#1:2/3.4");
+		for successful_writes in 0..16 {
+			let mut output = FailAfter(successful_writes);
+			let _ = write!(&mut output, "{value}");
+		}
 	}
 
 	#[test]
@@ -874,9 +901,20 @@ mod tests {
 	#[test]
 	fn rejects_a_trimmed_list_which_cannot_inherit_or_is_misordered() {
 		assert_eq!(parse_trimmed_list("").unwrap(), []);
-		for text in ["/2", ":2", ".1", "#1", "fidonet#1,/2:3", "fidonet#1,/x"] {
+		for text in [
+			"/2",
+			":2",
+			".1",
+			"#1",
+			"fidonet#1,#x",
+			"fidonet#1,/2:3",
+			"fidonet#1,/x",
+			"fidonet#1,.x",
+			"fidonet#1,.65536",
+		] {
 			assert!(parse_trimmed_list(text).is_err(), "{text}");
 		}
+		assert!(parse_trimmed_collection("/2").is_err());
 	}
 
 	#[test]
@@ -988,6 +1026,9 @@ mod tests {
 		for text in [
 			"fidonet",
 			"fidonet#1",
+			"bad*domain#*",
+			"<fidonet,>#*",
+			"fidonet#x:*",
 			"fidonet#32768:*",
 			"fidonet#<3-1>",
 			"fidonet#<1-32768>",
