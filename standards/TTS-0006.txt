@@ -3,7 +3,7 @@ TITH                                              THIS ISN'T THAT HARD
 **********************************************************************
 
 Publication:  TTS‑0006
-Revision:     11
+Revision:     12
 Title:        Bundle Exchange Protocol
 Author(s):    Stephen Hurd
 Date:         2026‑08‑22
@@ -161,13 +161,14 @@ Contents
 
   When a non‐anonymous peer's reply fails authentication with the
   currently trusted key, the Client MAY make one PublicKeyRequest for
-  that exact predecessor and then retry the original exchange once in
-  the same schedule activation.  It MUST accept the returned key only
-  from a reply which supplies the authenticated continuity proof defined
-  by TTS‑0005 before submitting that proof to TSP‑0015, persisting the
-  key, or using it.
-  Failure of either the probe or the one retry ends that attempt; this
-  rule does not create an unbounded retry loop.
+  that exact predecessor and then retry the original exchange once.
+  The failed original exchange, the probe, and the one retry form one
+  continuity‐recovery sequence.  The Client MUST accept the returned
+  key only from a reply which supplies the authenticated continuity
+  proof defined by TTS‑0005 before submitting that proof to TSP‑0015,
+  persisting the key, or using it.  Failure of either the probe or the
+  one retry ends that sequence; this rule does not create an unbounded
+  retry loop.
 
   A first‐contact PublicKeyRequest omits the non‐anonymous Destination
   PublicKey.  A Client MUST do this only when its local configuration
@@ -321,5 +322,8 @@ B. History
 
    Rev.11, 2026‑08‑22: Submitted completely validated first‐contact and
    continuity results to the channel‐independent TSP‑0015 trust model.
+
+   Rev.12, 2026‑08‑22: Defined continuity recovery as a bounded exchange
+   sequence independent of scheduling.
 
 **********************************************************************

@@ -3,7 +3,7 @@ TITH                                              THIS ISN'T THAT HARD
 **********************************************************************
 
 Publication:  TSP‑0002
-Revision:     16
+Revision:     17
 Title:        Routing and Distribution Configuration
 Author(s):    Stephen Hurd
 Date:         2026‑08‑22
@@ -555,10 +555,11 @@ Contents
   at most once by that activation.  Connections begun before the end
   run to completion.
 
-  The one PublicKeyRequest and one operational retry permitted by
-  TTS‑0006 after an authentication failure are part of the same
-  delivery attempt and occur in the same activation.  A failed probe
-  or retry does not begin another attempt in that activation.
+  The failed exchange, PublicKeyRequest, and operational retry which
+  form the continuity‐recovery sequence permitted by TTS‑0006 are part
+  of the same delivery attempt and occur in the same activation.  A
+  failed probe or retry does not begin another attempt in that
+  activation.
 
   Repeat-After gives the elapsed interval from one nominal end to the
   next nominal beginning.  If an activation begins after its nominal
@@ -873,5 +874,8 @@ B. History
    Rev.16, 2026‑08‑22: Classified an explicitly authorized and
    completely validated first‐contact result as an initial trust
    observation while leaving the pin transition to TSP‑0015.
+
+   Rev.17, 2026‑08‑22: Mapped the complete TTS‑0006 continuity‐recovery
+   sequence to one delivery attempt and schedule activation.
 
 **********************************************************************
