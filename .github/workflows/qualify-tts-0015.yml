@@ -12,7 +12,7 @@ on:
       - "crates/tithd/src/mail.rs"
       - "crates/tithd/src/main.rs"
       - "crates/tithd/src/submission.rs"
-      - "qualification/check_source_coverage.py"
+      - "qualification/check_source_line_coverage.py"
       - ".github/workflows/qualify-tts-0015.yml"
   workflow_dispatch:
 
@@ -46,6 +46,6 @@ jobs:
       - name: Require complete conformance coverage
         run: |
           sha256sum tts-0015-coverage.json
-          python3 qualification/check_source_coverage.py \
+          python3 qualification/check_source_line_coverage.py \
             tts-0015-coverage.json \
             crates/tith-store/src/key_pin.rs

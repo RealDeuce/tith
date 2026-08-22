@@ -229,10 +229,9 @@ mod tests {
 		let established = pins.observe_initial(&address, key(1), None, 7).unwrap();
 		assert!(matches!(established, InitialObservation::Established(_)));
 		assert_eq!(established.effective_key(), key(1));
-		assert_eq!(
-			pins.observe_initial(&address, key(2), None, 8).unwrap(),
-			InitialObservation::Unchanged(key(1))
-		);
+		let unchanged = pins.observe_initial(&address, key(2), None, 8).unwrap();
+		assert_eq!(unchanged, InitialObservation::Unchanged(key(1)));
+		assert_eq!(unchanged.effective_key(), key(1));
 		let other: Address = "fidonet#1/3".parse().unwrap();
 		assert_eq!(
 			pins.observe_initial(&other, key(2), Some(key(3)), 9)
