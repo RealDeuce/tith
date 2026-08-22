@@ -180,8 +180,9 @@ impl FromStr for Address {
 		let mut point = 0_u16;
 		let mut last_prefix = 0;
 		while !rest.is_empty() {
-			let prefix = rest.chars().next().ok_or(AddressError::InvalidOrder)?;
-			rest = &rest[prefix.len_utf8()..];
+			// `take_component` leaves one of its ASCII terminators at the front.
+			let prefix = char::from(rest.as_bytes()[0]);
+			rest = &rest[1..];
 			let order = if prefix == ':' {
 				1
 			} else if prefix == '/' {
@@ -570,8 +571,9 @@ impl FromStr for AddressPattern {
 		let mut last = 0;
 		let mut wildcard_seen = matches!(domain, DomainPattern::Any | DomainPattern::List(_));
 		while !rest.is_empty() {
-			let prefix = rest.chars().next().ok_or(AddressError::InvalidWildcard)?;
-			rest = &rest[prefix.len_utf8()..];
+			// The initial search and `take_component` leave an ASCII prefix here.
+			let prefix = char::from(rest.as_bytes()[0]);
+			rest = &rest[1..];
 			let order = if prefix == '#' {
 				1
 			} else if prefix == ':' {
@@ -676,6 +678,10 @@ mod tests {
 			assert_eq!(error.to_string(), message);
 		}
 		assert_eq!("fidonet".parse::<Address>(), Err(AddressError::MissingZone));
+		assert_eq!(
+			"fidonet#1/2:3".parse::<Address>(),
+			Err(AddressError::InvalidOrder)
+		);
 	}
 
 	#[test]
