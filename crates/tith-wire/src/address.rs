@@ -182,38 +182,28 @@ impl FromStr for Address {
 		while !rest.is_empty() {
 			let prefix = rest.chars().next().ok_or(AddressError::InvalidOrder)?;
 			rest = &rest[prefix.len_utf8()..];
-			let order = match prefix {
-				':' => 1,
-				'/' => 2,
-				'.' => 3,
-				_ => return Err(AddressError::InvalidOrder),
+			let order = if prefix == ':' {
+				1
+			} else if prefix == '/' {
+				2
+			} else {
+				3
 			};
 			if order <= last_prefix {
 				return Err(AddressError::InvalidOrder);
 			}
 			last_prefix = order;
 			let value = take_component(&mut rest, &[':', '/', '.']);
-			match prefix {
-				':' => {
-					net = parse_number(value, true)?;
-					if net == zone {
-						return Err(AddressError::NonCanonical);
-					}
+			if prefix == ':' {
+				net = parse_number(value, true)?;
+				if net == zone {
+					return Err(AddressError::NonCanonical);
 				}
-				'/' => {
-					node = parse_number(value, true)?;
-					if node == 0 {
-						return Err(AddressError::NonCanonical);
-					}
-				}
-				'.' => {
-					let parsed = parse_number(value, false)?;
-					point = u16::try_from(parsed).map_err(|_| AddressError::OutOfRange)?;
-					if point == 0 {
-						return Err(AddressError::NonCanonical);
-					}
-				}
-				_ => unreachable!(),
+			} else if prefix == '/' {
+				node = parse_number(value, true)?;
+			} else {
+				let parsed = parse_number(value, false)?;
+				point = u16::try_from(parsed).map_err(|_| AddressError::OutOfRange)?;
 			}
 		}
 
@@ -409,11 +399,12 @@ fn parse_trimmed_element(
 			break;
 		};
 		rest = &rest[separator.len_utf8()..];
-		let following = match separator {
-			':' => 1,
-			'/' => 2,
-			'.' => 3,
-			_ => return Err(AddressError::InvalidOrder),
+		let following = if separator == ':' {
+			1
+		} else if separator == '/' {
+			2
+		} else {
+			3
 		};
 		if following <= order {
 			return Err(AddressError::InvalidOrder);
@@ -497,9 +488,6 @@ fn parse_domain_pattern(text: &str) -> Result<DomainPattern, AddressError> {
 			validate_domain(value)?;
 			values.push(value.to_owned());
 		}
-		if values.is_empty() {
-			return Err(AddressError::InvalidWildcard);
-		}
 		return Ok(DomainPattern::List(values));
 	}
 	validate_domain(text)?;
@@ -537,9 +525,6 @@ fn parse_number_pattern(
 				return Err(AddressError::InvalidWildcard);
 			}
 			ranges.push((start, end));
-		}
-		if ranges.is_empty() {
-			return Err(AddressError::InvalidWildcard);
 		}
 		return Ok(NumberPattern::List(ranges));
 	}
@@ -587,30 +572,34 @@ impl FromStr for AddressPattern {
 		while !rest.is_empty() {
 			let prefix = rest.chars().next().ok_or(AddressError::InvalidWildcard)?;
 			rest = &rest[prefix.len_utf8()..];
-			let order = match prefix {
-				'#' => 1,
-				':' => 2,
-				'/' => 3,
-				'.' => 4,
-				_ => return Err(AddressError::InvalidWildcard),
+			let order = if prefix == '#' {
+				1
+			} else if prefix == ':' {
+				2
+			} else if prefix == '/' {
+				3
+			} else {
+				4
 			};
 			if order <= last {
 				return Err(AddressError::InvalidOrder);
 			}
 			last = order;
 			let value = take_component(&mut rest, &['#', ':', '/', '.']);
-			let parsed = match prefix {
-				'#' | ':' | '/' => parse_number_pattern(value, -1, 32_767)?,
-				'.' => parse_number_pattern(value, 0, 65_535)?,
-				_ => unreachable!(),
+			let parsed = if prefix == '.' {
+				parse_number_pattern(value, 0, 65_535)?
+			} else {
+				parse_number_pattern(value, -1, 32_767)?
 			};
 			wildcard_seen |= matches!(parsed, NumberPattern::Any | NumberPattern::List(_));
-			match prefix {
-				'#' => zone = parsed,
-				':' => net = parsed,
-				'/' => node = parsed,
-				'.' => point = parsed,
-				_ => unreachable!(),
+			if prefix == '#' {
+				zone = parsed;
+			} else if prefix == ':' {
+				net = parsed;
+			} else if prefix == '/' {
+				node = parsed;
+			} else {
+				point = parsed;
 			}
 		}
 		if !wildcard_seen {
@@ -645,6 +634,48 @@ mod tests {
 		] {
 			assert_eq!(address(text).to_string(), text);
 		}
+	}
+
+	#[test]
+	fn public_address_api_and_errors_are_complete() {
+		let value = address("fidonet#32767:1/32767.65535");
+		assert_eq!(value.zone(), 32_767);
+		assert_eq!(value.net(), 1);
+		assert_eq!(value.node(), 32_767);
+		assert_eq!(value.point(), 65_535);
+		assert_eq!(
+			value.partial_cmp(&address("fidonet#32767")),
+			Some(Ordering::Less)
+		);
+
+		for (error, message) in [
+			(AddressError::EmptyDomain, "address domain is empty"),
+			(
+				AddressError::InvalidDomain,
+				"address domain contains a prohibited value",
+			),
+			(AddressError::MissingZone, "address zone is missing"),
+			(
+				AddressError::InvalidNumber,
+				"address component is not a canonical decimal number",
+			),
+			(
+				AddressError::OutOfRange,
+				"address component is out of range",
+			),
+			(
+				AddressError::NonCanonical,
+				"address contains an explicitly encoded default component",
+			),
+			(
+				AddressError::InvalidOrder,
+				"address components are out of order or repeated",
+			),
+			(AddressError::InvalidWildcard, "invalid address wildcard"),
+		] {
+			assert_eq!(error.to_string(), message);
+		}
+		assert_eq!("fidonet".parse::<Address>(), Err(AddressError::MissingZone));
 	}
 
 	#[test]
@@ -694,6 +725,16 @@ mod tests {
 			"fidonet#-2",
 		] {
 			assert!(text.parse::<Address>().is_err(), "{text}");
+		}
+		for (zone, net, node, point) in [
+			(0, 1, 0, 0),
+			(-1, 1, -1, 0),
+			(-1, -1, 0, 0),
+			(-1, -1, -1, 1),
+			(1, 0, 0, 0),
+			(1, 1, -1, 0),
+		] {
+			assert!(Address::new("fidonet".to_owned(), zone, net, node, point).is_err());
 		}
 	}
 
@@ -795,6 +836,20 @@ mod tests {
 				"{formatted}"
 			);
 		}
+	}
+
+	#[test]
+	fn trimming_resets_and_reemits_every_lower_component() {
+		let addresses = [
+			"fidonet#1",
+			"fidonet#2:3/4.5",
+			"fidonet#2:4.6",
+			"fidonet#2:4/7.8",
+		]
+		.map(address);
+		let encoded = "fidonet#1,#2:3/4.5,:4.6,/7.8";
+		assert_eq!(format_trimmed_list(&addresses), encoded);
+		assert_eq!(parse_trimmed_list(encoded).unwrap(), addresses);
 	}
 
 	#[test]
@@ -901,6 +956,37 @@ mod tests {
 	#[test]
 	fn malformed_unicode_wildcard_numbers_are_rejected_without_panicking() {
 		for text in ["fidonet#<é>", "fidonet#<é-1>", "fidonet#<1-é>"] {
+			assert!(text.parse::<AddressPattern>().is_err(), "{text}");
+		}
+	}
+
+	#[test]
+	fn wildcard_grammar_covers_each_component_and_failure_boundary() {
+		let exact_domain: AddressPattern = "fidonet#1:*".parse().unwrap();
+		assert!(exact_domain.matches(&address("fidonet#1:2/3.4")));
+		assert!(!exact_domain.matches(&address("other#1:2/3.4")));
+
+		let point: AddressPattern = "fidonet#1:2/3.*".parse().unwrap();
+		assert!(point.matches(&address("fidonet#1:2/3.4")));
+		assert!(!point.matches(&address("fidonet#3:2/3.4")));
+		assert!(!point.matches(&address("fidonet#1:3/3.4")));
+		assert!(!point.matches(&address("fidonet#1:2/4.4")));
+
+		let zones: AddressPattern = "<fidonet,other>#<1-3,5>:2/3.4".parse().unwrap();
+		assert!(zones.matches(&address("other#3:2/3.4")));
+		assert!(!zones.matches(&address("another#3:2/3.4")));
+		assert!(!zones.matches(&address("other#4:2/3.4")));
+
+		for text in [
+			"fidonet",
+			"fidonet#1",
+			"fidonet#32768:*",
+			"fidonet#<3-1>",
+			"fidonet#<1-32768>",
+			"fidonet#*:*/3#1",
+			"fidonet#*#1",
+			"fidonet#1:2/3.<-1>",
+		] {
 			assert!(text.parse::<AddressPattern>().is_err(), "{text}");
 		}
 	}
