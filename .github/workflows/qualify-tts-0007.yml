@@ -3,6 +3,8 @@ name: Qualify TTS-0007
 on:
   push:
     paths:
+      - "standards/TTS-0007.txt"
+      - "standards/TTS-0002.txt"
       - "crates/tith-wire/src/signed_integer.rs"
       - "crates/tith-wire/src/integer.rs"
       - "qualification/check_source_coverage.py"

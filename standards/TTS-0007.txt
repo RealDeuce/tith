@@ -3,10 +3,10 @@ TITH                                              THIS ISN'T THAT HARD
 **********************************************************************
 
 Publication:  TTS‑0007
-Revision:     1
+Revision:     2
 Title:        Signed Integer Encoding
 Author(s):    Stephen Hurd
-Date:         2026‑08‑16
+Date:         2026‑08‑22
 ══════════════════════════════════════════════════════════════════════
 
 Status of this document
@@ -124,12 +124,15 @@ A. References
   [FTA‑1006.002] "Key words to indicate requirement levels" FTSC,
   1998‑01‑17.
 
-  [TTS‑0002] "Type Length Value Encoding", TITH, 2026‑08‑16.
+  [TTS‑0002] "Type Length Value Encoding", TITH, 2026‑08‑22.
 
 
 B. History
 ──────────
 
    Rev.1, 2026‑08‑16: Initial Release.
+
+   Rev.2, 2026‑08‑22: Updated the TTS‑0002 reference to its corrected
+   revision.
 
 **********************************************************************
