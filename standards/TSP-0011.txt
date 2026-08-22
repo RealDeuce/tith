@@ -104,7 +104,7 @@ Contents
   authenticated top‐level Origin of the Bundle which carried the item.
   Its recorded key is the exact key used to authenticate that peer:
   the accompanying key for an anonymous identity or the effective key
-  resolved under TSP‑0015 for a non‐anonymous identity.  It does not
+  resolved under TTS‑0008 for a non‐anonymous identity.  It does not
   replace the Origin or PublicKey inside a Message or standalone File.
 
   ItemAuthentication is one of these values for a Message or
@@ -489,7 +489,7 @@ A. References
   [TSP‑0013] "Legacy Mailer and Tosser IPC Adapters", TITH,
   2026‑08‑20.
 
-  [TSP‑0015] "Public Key Trust and Continuity", TITH, 2026‑08‑20.
+  [TTS‑0008] "Public Key Trust and Continuity", TITH, 2026‑08‑22.
 
   [TSP‑0016] "Item Format", TITH, 2026‑08‑22.
 

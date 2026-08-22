@@ -238,8 +238,9 @@ B. History
    Rev.3, 2026‑08‑18: Added SignedOrigin as the fallback signing‐key
    identity when an Origin has no available public key.
 
-   Rev.4, 2026‑08‑20: Applied the TSP‑0015 effective key consistently
-   to non‐anonymous Origin and SignedOrigin values.
+   Rev.4, 2026‑08‑20: Applied the effective key now defined by
+   TTS‑0008 consistently to non‐anonymous Origin and SignedOrigin
+   values.
 
    Rev.5, 2026‑08‑21: Made PublicKey the TLV representation of the
    public key defined by TTS‑0004.

@@ -415,7 +415,7 @@ Contents
      carry.  It publishes the key but no endpoint; see field 1.
 
      The IIH PublicKey supplies the authoritative external anchor for
-     this address as defined by TSP‑0015.  That document determines
+     this address as defined by TTS‑0008.  That document determines
      whether the anchor or an authenticated successor is the effective
      key for a particular implementation.
 
@@ -510,7 +510,7 @@ A. References
 
   [TTS‑0004] "Node Addresses", TITH, 2026‑08‑21.
 
-  [TSP‑0015] "Public Key Trust and Continuity", TITH, 2026‑08‑22.
+  [TTS‑0008] "Public Key Trust and Continuity", TITH, 2026‑08‑22.
 
   [TSP‑0016] "Item Format", TITH, 2026‑08‑22.
 
@@ -540,7 +540,7 @@ B. History
 
    Rev.5, 2026‑08‑20: Distinguished publication in a nodelist from
    observer‐relative listing and identified IIH as the external trust
-   anchor used by TSP‑0015 effective key resolution.
+   anchor used by TTS‑0008 effective key resolution.
 
    Rev.6, 2026‑08‑21: Made the empty Keyword and Phone alternatives
    consistent with their field grammars, made the Phone length limit
@@ -551,6 +551,6 @@ B. History
    defined contextual flag combinations and coordinator cardinality.
 
    Rev.8, 2026‑08‑22: Classified the IIH PublicKey as the authoritative
-   external anchor supplied to TSP‑0015 effective key resolution.
+   external anchor supplied to TTS‑0008 effective key resolution.
 
 **********************************************************************

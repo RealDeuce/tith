@@ -69,7 +69,7 @@ Contents
   defined below.  For the anonymous address, this
   PublicKey is the key applicable to the SignedTLV values that follow.
   For any other Origin, the applicable key is the effective key
-  resolved under TSP‑0015, and a supplied PublicKey MUST NOT override
+  resolved under TTS‑0008, and a supplied PublicKey MUST NOT override
   it.
 
   A reply to a PublicKeyRequest is the sole exception for a non‐anonymous
@@ -383,7 +383,7 @@ Contents
   self‐signed reply supplies an observation of that key.  It does not by
   itself bind the key to the intended address; only local authorization
   of that exact contact can classify it as an authorized initial
-  observation under TSP‑0015.
+  observation under TTS‑0008.
 
   When a Poll or FileRequest is Accepted, every value returned in
   response to it MUST be in the same SignedTLV as its Accepted value.
@@ -427,7 +427,7 @@ Contents
 A. References
 ─────────────
 
-  [TSP‑0015] "Public Key Trust and Continuity", TITH, 2026‑08‑22.
+  [TTS‑0008] "Public Key Trust and Continuity", TITH, 2026‑08‑22.
 
   [TSP‑0016] "Item Format", TITH, 2026‑08‑22.
 
@@ -480,7 +480,7 @@ B. History
    and rotation continuity.
 
    Rev.10, 2026‑08‑20: Distinguished anonymous address grammar from
-   listing status and applied the TSP‑0015 effective key to all item
+   listing status and applied the TTS‑0008 effective key to all item
    signatures and duplicate identities.
 
    Rev.11, 2026‑08‑21: Distinguished permanent, peer‐correctable

@@ -2,8 +2,8 @@
 TITH                                              THIS ISN'T THAT HARD
 **********************************************************************
 
-Publication:  TSP‑0015
-Revision:     3
+Publication:  TTS‑0008
+Revision:     1
 Title:        Public Key Trust and Continuity
 Author(s):    Stephen Hurd
 Date:         2026‑08‑22
@@ -12,9 +12,10 @@ Date:         2026‑08‑22
 Status of this document
 ───────────────────────
 
-  This document is a TITH Standard Proposal (TSP) — it documents a
-  proposed standard and solicits discussion.  Until promoted to a TTS,
-  this is experimental only and does not describe required behaviour.
+  This document is a TITH Technical Standard (TTS) — it specifies
+  the current technical requirements and recommendations for TITH
+  software developers, coordinators and sysops of the Fidonet network
+  and other networks using FTN technology.
 
   This document is released to the public domain, and may be used,
   copied or modified for any purpose whatever.
@@ -228,14 +229,17 @@ A. References
 B. History
 ──────────
 
-   Rev.1, 2026‑08‑20: Initial release.
+   TSP Rev.1, 2026‑08‑20: Initial release.
 
-   Rev.2, 2026‑08‑20: Distinguished anonymous address grammar from
+   TSP Rev.2, 2026‑08‑20: Distinguished anonymous address grammar from
    listing status and made one effective key govern all authentication
    and identity decisions for a non‐anonymous identity.
 
-   Rev.3, 2026‑08‑22: Defined channel‐independent trust evidence and
+   TSP Rev.3, 2026‑08‑22: Defined channel‐independent trust evidence and
    left each input document responsible for qualifying its own anchor,
    initial observation, or continuity proof.
+
+   TTS Rev.1, 2026‑08‑22: Promoted TSP‑0015 revision 3 without technical
+   changes.
 
 **********************************************************************

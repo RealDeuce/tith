@@ -360,7 +360,7 @@ Contents
 
   A directed observation made while local policy explicitly designates
   that exact contact as trusted supplies an authorized initial
-  observation to TSP‑0015.  Merely calling the same endpoint again does
+  observation to TTS‑0008.  Merely calling the same endpoint again does
   not prove that the formerly trusted private key authorized a change,
   so a later directed observation does not supply an authenticated
   continuity proof.
@@ -378,7 +378,7 @@ Contents
 
   Directed legacy discovery is weaker than an authoritative external
   anchor and this document does not pretend otherwise.  It remains an
-  input at the legacy conversion boundary while TSP‑0015 defines the
+  input at the legacy conversion boundary while TTS‑0008 defines the
   shared trust decision.
 
 
@@ -437,7 +437,7 @@ Contents
   selection rule and the resulting authentication state.
 
   The key applicable to Origin is the effective key resolved under
-  TSP‑0015, including its nodelist precedence rules.  A successful
+  TTS‑0008, including its nodelist precedence rules.  A successful
   initial pin makes an otherwise unlisted Origin listed for that
   verifier.
 
@@ -477,7 +477,7 @@ Contents
     • authority over EchoMail area membership or distribution; or
     • any means of revoking a key whose holder has lost control of it.
 
-  TSP‑0015 and TTS‑0005 provide predecessor‑signed rotation continuity.
+  TTS‑0008 and TTS‑0005 provide predecessor‑signed rotation continuity.
   They do not provide revocation.  A compromised predecessor can
   certify an attacker's successor exactly as convincingly as the holder
   can.  Recovery therefore requires a separately trusted nodelist or
@@ -556,7 +556,7 @@ A. References
 
   [TSP‑0011] "Durable Inbound Delivery Items", TITH, 2026‑08‑21.
 
-  [TSP‑0015] "Public Key Trust and Continuity", TITH, 2026‑08‑22.
+  [TTS‑0008] "Public Key Trust and Continuity", TITH, 2026‑08‑22.
 
   [TSP‑0016] "Item Format", TITH, 2026‑08‑22.
 
@@ -581,7 +581,7 @@ B. History
    Rev.1, 2026‑08‑20: Initial Release.
 
    Rev.2, 2026‑08‑20: Distinguished anonymous addresses from
-   observer‐relative listing and required the shared TSP‑0015 effective
+   observer‐relative listing and required the shared TTS‑0008 effective
    key for legacy signature verification.
 
    Rev.3, 2026‑08‑22: Referred the Message child order, Signature byte
@@ -592,6 +592,6 @@ B. History
 
    Rev.5, 2026‑08‑22: Classified legacy channels as trust evidence
    inputs and left pin transitions and effective key resolution solely
-   to TSP‑0015.
+   to TTS‑0008.
 
 **********************************************************************

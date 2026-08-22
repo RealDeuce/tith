@@ -333,7 +333,7 @@ Contents
   Origin is a canonical non‐anonymous TTS‑0004 address used as the
   item's originating and reply address, and Signed-Origin identifies
   the local identity whose secret key signs it.  Origin MUST have no
-  effective key under TSP‑0015, because SignedOrigin cannot override
+  effective key under TTS‑0008, because SignedOrigin cannot override
   that key.
 
   For a retained Message carrying Signature, Origin and Signed-Origin
@@ -1254,7 +1254,7 @@ A. References
 
   [TSP‑0012] "Tosser Consumption IPC", TITH, 2026‑08‑18.
 
-  [TSP‑0015] "Public Key Trust and Continuity", TITH, 2026‑08‑20.
+  [TTS‑0008] "Public Key Trust and Continuity", TITH, 2026‑08‑22.
 
   [TSP‑0016] "Item Format", TITH, 2026‑08‑22.
 
@@ -1303,7 +1303,7 @@ B. History
    responses.
 
    Rev.10, 2026‑08‑20: Distinguished anonymous address grammar from
-   listing status and used the TSP‑0015 effective key for Signed-Origin
+   listing status and used the TTS‑0008 effective key for Signed-Origin
    fallback decisions.
 
    Rev.11, 2026‑08‑21: Made a Message's local routing and transport

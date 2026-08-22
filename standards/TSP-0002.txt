@@ -147,7 +147,7 @@ Contents
   that configured contact only while the identity is unlisted and no
   authoritative anchor or local pin exists.  A self‐signed key returned
   by a completely validated reply from that contact is an authorized
-  initial observation under TSP‑0015.
+  initial observation under TTS‑0008.
   This directive deliberately accepts the risk that an attacker at
   first contact can become pinned; it MUST NOT be enabled by default.
 
@@ -163,7 +163,7 @@ Contents
   canonical non‐anonymous address or a peer reference naming an
   anonymous Peer.  The host MUST have the corresponding secret signing
   key.  For a non‐anonymous address, its public half MUST equal the
-  effective key resolved according to TSP‑0015.  For an anonymous Peer,
+  effective key resolved according to TTS‑0008.  For an anonymous Peer,
   it MUST equal that Peer's Public-Key.
 
   Every local identity is distinct.  Controlling more than one does not
@@ -651,7 +651,7 @@ Contents
   resolved policies.  Current schedules determine when their classes
   run, and current Endpoints determine how their Peer is contacted.  A
   non‐anonymous next hop uses the current trusted key resolved
-  according to TSP‑0015.  A configured key cannot override that
+  according to TTS‑0008.  A configured key cannot override that
   effective key.
 
   An implementation recovering after a failed connection MUST treat
@@ -792,7 +792,7 @@ A. References
   [TSP‑0013] "Legacy Mailer and Tosser IPC Adapters", TITH,
   2026‑08‑20.
 
-  [TSP‑0015] "Public Key Trust and Continuity", TITH, 2026‑08‑22.
+  [TTS‑0008] "Public Key Trust and Continuity", TITH, 2026‑08‑22.
 
   [TSP‑0016] "Item Format", TITH, 2026‑08‑22.
 
@@ -852,7 +852,7 @@ B. History
    and made relay acceptance the durable responsibility boundary.
 
    Rev.10, 2026‑08‑20: Distinguished anonymous address grammar from
-   listing status and used the TSP‑0015 effective key throughout
+   listing status and used the TTS‑0008 effective key throughout
    identity, routing, and authorization decisions.
 
    Rev.11, 2026‑08‑21: Reduced permanent failure policy to relay denial
@@ -873,7 +873,7 @@ B. History
 
    Rev.16, 2026‑08‑22: Classified an explicitly authorized and
    completely validated first‐contact result as an initial trust
-   observation while leaving the pin transition to TSP‑0015.
+   observation while leaving the pin transition to TTS‑0008.
 
    Rev.17, 2026‑08‑22: Mapped the complete TTS‑0006 continuity‐recovery
    sequence to one delivery attempt and schedule activation.

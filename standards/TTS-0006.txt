@@ -105,7 +105,7 @@ Contents
   private key.  It does not establish membership in a network which
   uses a nodelist.  Except for the dedicated PublicKeyRequest exchange
   defined by TTS‑0005, a supplied PublicKey MUST NOT be used in place
-  of the effective key for any non‐anonymous Origin.  TSP‑0015 defines
+  of the effective key for any non‐anonymous Origin.  TTS‑0008 defines
   how that key is resolved, pinned, and advanced.
 
 
@@ -165,7 +165,7 @@ Contents
   The failed original exchange, the probe, and the one retry form one
   continuity‐recovery sequence.  The Client MUST accept the returned
   key only from a reply which supplies the authenticated continuity
-  proof defined by TTS‑0005 before submitting that proof to TSP‑0015,
+  proof defined by TTS‑0005 before submitting that proof to TTS‑0008,
   persisting the key, or using it.  Failure of either the probe or the
   one retry ends that sequence; this rule does not create an unbounded
   retry loop.
@@ -174,7 +174,7 @@ Contents
   PublicKey.  A Client MUST do this only when its local configuration
   explicitly authorizes trust on first use for that contact and fixes
   the endpoint used.  A completely validated reply from that contact
-  supplies the authorized initial observation defined by TSP‑0015.
+  supplies the authorized initial observation defined by TTS‑0008.
   Receipt of a self‑signed response without that authorization is not
   evidence that the endpoint belongs to the intended operator.
 
@@ -270,7 +270,7 @@ Contents
 A. References
 ─────────────
 
-  [TSP‑0015] "Public Key Trust and Continuity", TITH, 2026‑08‑22.
+  [TTS‑0008] "Public Key Trust and Continuity", TITH, 2026‑08‑22.
 
   [TSP‑0016] "Item Format", TITH, 2026‑08‑22.
 
@@ -302,7 +302,7 @@ B. History
    exchange and a single same‐activation continuity retry.
 
    Rev.6, 2026‑08‑20: Distinguished anonymous address grammar from
-   listing status and required the TSP‑0015 effective key for every
+   listing status and required the TTS‑0008 effective key for every
    non‐anonymous transport identity.
 
    Rev.7, 2026‑08‑21: Assigned permanent rejection reason 1 without a
@@ -321,7 +321,7 @@ B. History
    semantics.
 
    Rev.11, 2026‑08‑22: Submitted completely validated first‐contact and
-   continuity results to the channel‐independent TSP‑0015 trust model.
+   continuity results to the channel‐independent TTS‑0008 trust model.
 
    Rev.12, 2026‑08‑22: Defined continuity recovery as a bounded exchange
    sequence independent of scheduling.
