@@ -2145,6 +2145,13 @@ mod tests {
 			OwnedTlv::new(types::ADDITIONAL_KLUDGE_LINE, vec![0xff]).unwrap(),
 		]);
 		assert!(validate_message(&container(types::MESSAGE, &invalid_kludge), &resolver).is_err());
+		let mut valid_kludge = message_prefix();
+		valid_kludge.extend([
+			OwnedTlv::new(types::REQUEST_IDENTIFIER, vec![1]).unwrap(),
+			via_value(provenance.signer.as_ref().unwrap(), 1, "test"),
+			OwnedTlv::new(types::ADDITIONAL_KLUDGE_LINE, b"FLAGS KFS".to_vec()).unwrap(),
+		]);
+		assert!(validate_message(&container(types::MESSAGE, &valid_kludge), &resolver).is_ok());
 
 		let malformed_file = container(
 			types::FILE,
@@ -2177,6 +2184,17 @@ mod tests {
 			],
 		);
 		assert!(validate_file(&invalid_long_description, true, &resolver).is_err());
+		let valid_descriptions = container(
+			types::FILE,
+			&[
+				OwnedTlv::new(types::CONTENTS, Vec::new()).unwrap(),
+				origin_value.clone(),
+				OwnedTlv::new(types::SHORT_DESCRIPTION, b"short".to_vec()).unwrap(),
+				OwnedTlv::new(types::LONG_DESCRIPTION_LINE, b"long".to_vec()).unwrap(),
+				OwnedTlv::new(types::REQUEST_IDENTIFIER, vec![1]).unwrap(),
+			],
+		);
+		assert!(validate_file(&valid_descriptions, true, &resolver).is_ok());
 
 		let malformed_request = container(
 			types::FILE_REQUEST,
