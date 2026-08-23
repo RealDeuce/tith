@@ -424,7 +424,9 @@ mod tests {
 		});
 		let mut client = TcpStream::connect(address).unwrap();
 		client.write_all(request).unwrap();
-		client.shutdown(Shutdown::Write).unwrap();
+		if let Err(error) = client.shutdown(Shutdown::Write) {
+			assert_eq!(error.kind(), std::io::ErrorKind::NotConnected);
+		}
 		let mut response = Vec::new();
 		client.read_to_end(&mut response).unwrap();
 		(response, server.join().unwrap())
