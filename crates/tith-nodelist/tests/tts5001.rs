@@ -83,11 +83,16 @@ fn file_request_flags_expose_the_exact_capability_table() {
 
 #[test]
 fn standalone_lists_parse_format_iterate_and_validate_construction() {
-	let system: SystemFlags = "CM,LO,MN,ICM,XA,#02,!09,TAB,TuB".parse().unwrap();
-	assert_eq!(system.to_string(), "CM,LO,MN,ICM,XA,#02,!09,TAB,TuB");
-	assert_eq!(system.as_ref().len(), 9);
-	assert_eq!(system.clone().into_vec().len(), 9);
-	assert_eq!((&system).into_iter().count(), 9);
+	let system: SystemFlags = "CM,LO,MN,ICM,XA,XB,XC,XP,XR,XW,XX,#02,!09,TAB,TuB"
+		.parse()
+		.unwrap();
+	assert_eq!(
+		system.to_string(),
+		"CM,LO,MN,ICM,XA,XB,XC,XP,XR,XW,XX,#02,!09,TAB,TuB"
+	);
+	assert_eq!(system.as_ref().len(), 15);
+	assert_eq!(system.clone().into_vec().len(), 15);
+	assert_eq!((&system).into_iter().count(), 15);
 	assert_eq!(SystemFlags::default().to_string(), "");
 
 	let pstn_text = "V22,V29,V32,V32b,V34,V90C,V90S,V32T,VFC,HST,H14,H16,X2C,X2S,ZYX,Z19,H96,PEP,CSP,MNP,V42,V42b,V110L,V110H,V120L,V120H,X75,ISDN";
@@ -150,7 +155,7 @@ fn system_lists_cover_period_boundaries_and_rejections() {
 	}
 	for invalid in [
 		",", "CM,", ",CM", "CM,,LO", "cm", "CM:x", "#0", "#000", "#24", "!99", "#02,!02",
-		"!02,#02", "TAY", "TYA", "TAA,TAA", "TuB,TAB",
+		"!02,#02", "ABC", "TAY", "TYA", "TAA,TAA", "TuB,TAB",
 	] {
 		assert!(invalid.parse::<SystemFlags>().is_err(), "{invalid}");
 	}
@@ -245,6 +250,7 @@ fn internet_grammar_and_public_keys_are_canonical() {
 		"IBN::1".to_owned(),
 		"IBN::65535".to_owned(),
 		"IBN:192.0.2.1:24555".to_owned(),
+		"IBN:[2001:db8::1]".to_owned(),
 		format!("IIH:{encoded_key}"),
 		format!("IIH:mail.example:{encoded_key}"),
 		format!("IIH::24555:{encoded_key}"),
@@ -258,12 +264,16 @@ fn internet_grammar_and_public_keys_are_canonical() {
 		"INA:a..example".to_owned(),
 		"INA:-a.example".to_owned(),
 		"INA:a-.example".to_owned(),
+		format!("INA:{}", "a".repeat(64)),
+		format!("INA:{}.example", "a".repeat(254)),
+		"INA:a_b.example".to_owned(),
 		"INA:A.example".to_owned(),
 		"IBN:".to_owned(),
 		"IBN::0".to_owned(),
 		"IBN::01".to_owned(),
 		"IBN::65536".to_owned(),
 		"IBN:+1".to_owned(),
+		"IBN:[2001:db8::1]x".to_owned(),
 		"IBNx".to_owned(),
 		"INO4:x".to_owned(),
 		"IP,IP".to_owned(),

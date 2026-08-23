@@ -655,9 +655,6 @@ pub(crate) fn parse_system(value: &str) -> Result<Vec<SystemFlag>, NodelistError
 				}
 				_ => return Err(NodelistErrorKind::InvalidFlag),
 			};
-			if flag.to_string() != text {
-				return Err(NodelistErrorKind::InvalidFlag);
-			}
 			Ok(flag)
 		})
 		.collect::<Result<Vec<_>, _>>()?;
@@ -783,10 +780,7 @@ fn parse_server(value: &str) -> Result<ServerAddress, NodelistErrorKind> {
 		if format!("[{}]", canonical_ipv6(address)) != value {
 			return Err(NodelistErrorKind::InvalidEndpoint);
 		}
-	} else if let Ok(address) = value.parse::<Ipv4Addr>() {
-		if address.to_string() != value {
-			return Err(NodelistErrorKind::InvalidEndpoint);
-		}
+	} else if value.parse::<Ipv4Addr>().is_ok() {
 	} else if !valid_dns_name(value) {
 		return Err(NodelistErrorKind::InvalidEndpoint);
 	}
@@ -858,9 +852,6 @@ fn parse_public_key(value: &str) -> Result<PublicKey, NodelistErrorKind> {
 		.map_err(|_| NodelistErrorKind::InvalidPublicKey)?
 		.try_into()
 		.map_err(|_| NodelistErrorKind::InvalidPublicKey)?;
-	if STANDARD_NO_PAD.encode(bytes) != value {
-		return Err(NodelistErrorKind::InvalidPublicKey);
-	}
 	Ok(PublicKey::from_bytes(bytes))
 }
 
@@ -1079,12 +1070,7 @@ fn validate_list<T: fmt::Display + PartialEq>(
 	values: &[T],
 	parse: fn(&str) -> Result<Vec<T>, NodelistErrorKind>,
 ) -> Result<(), NodelistErrorKind> {
-	let parsed = parse(&list_text(values))?;
-	if parsed == values {
-		Ok(())
-	} else {
-		Err(NodelistErrorKind::InvalidFlag)
-	}
+	parse(&list_text(values)).map(drop)
 }
 
 macro_rules! flag_list {
@@ -1427,17 +1413,21 @@ mod tests {
 		}
 
 		let numeric = parse_internet("IBN:24555").unwrap();
-		let InternetFlag::Binkp(endpoint) = &numeric[0] else {
-			panic!("IBN parsed as another flag");
-		};
-		assert_eq!(endpoint.server.as_ref().unwrap().as_str(), "24555");
-		assert_eq!(endpoint.port, None);
+		assert_eq!(
+			numeric,
+			[InternetFlag::Binkp(EndpointSpec {
+				server: Some(ServerAddress("24555".to_owned())),
+				port: None,
+			})]
+		);
 		let port_only = parse_internet("IBN::24555").unwrap();
-		let InternetFlag::Binkp(endpoint) = &port_only[0] else {
-			panic!("IBN parsed as another flag");
-		};
-		assert!(endpoint.server.is_none());
-		assert_eq!(endpoint.port, Some(24_555));
+		assert_eq!(
+			port_only,
+			[InternetFlag::Binkp(EndpointSpec {
+				server: None,
+				port: Some(24_555),
+			})]
+		);
 	}
 
 	#[test]
