@@ -47,6 +47,12 @@ fn simple_request(value: &OwnedTlv, kind: ItemKind) -> Result<ValidatedItem, Bun
 	})
 }
 
+pub(crate) fn validate_public_key_request(
+	value: &OwnedTlv,
+) -> Result<ValidatedItem, BundleError> {
+	simple_request(value, ItemKind::PublicKeyRequest)
+}
+
 fn validate_response(value: &OwnedTlv, accepted: bool) -> Result<ValidatedItem, BundleError> {
 	let bytes = &value.value;
 	let children = parse_sequence(bytes);
@@ -272,7 +278,7 @@ pub fn validate_item(
 		types::POLL_MESSAGES => simple_request(value, ItemKind::PollMessages).map(Some),
 		types::POLL_FILES => simple_request(value, ItemKind::PollFiles).map(Some),
 		types::POLL_FILE_REQUESTS => simple_request(value, ItemKind::PollFileRequests).map(Some),
-		types::PUBLIC_KEY_REQUEST => simple_request(value, ItemKind::PublicKeyRequest).map(Some),
+		types::PUBLIC_KEY_REQUEST => validate_public_key_request(value).map(Some),
 		_ => Ok(None),
 	}
 }

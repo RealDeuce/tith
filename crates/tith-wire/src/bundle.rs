@@ -206,8 +206,7 @@ impl Bundle {
 		{
 			return Ok(None);
 		}
-		let item = crate::item::validate_item(&self.payloads[0].data[1], &|_: &Address| None)?
-			.ok_or(BundleError::Unexpected("PublicKeyRequest"))?;
+		let item = crate::item::validate_public_key_request(&self.payloads[0].data[1])?;
 		Ok(Some((
 			item.request_identifier,
 			hash_tlv(&self.payloads[0].encoded)?,
