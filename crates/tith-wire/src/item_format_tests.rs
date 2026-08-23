@@ -112,7 +112,7 @@ mod tests {
 				OwnedTlv::new(types::TO_USER_NAME, b"You".to_vec()).unwrap(),
 				OwnedTlv::new(types::FROM_USER_NAME, b"Me".to_vec()).unwrap(),
 				OwnedTlv::new(types::SUBJECT, Vec::new()).unwrap(),
-				OwnedTlv::new(types::MESSAGE_TEXT, b"Legacy".to_vec()).unwrap(),
+				OwnedTlv::new(types::MESSAGE_TEXT, b"Legacy\n".to_vec()).unwrap(),
 				OwnedTlv::new(types::REQUEST_IDENTIFIER, crate::integer::encode_u64(10)).unwrap(),
 				via_value(&origin, 1, "test"),
 			],
