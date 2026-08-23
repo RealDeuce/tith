@@ -807,7 +807,7 @@ fn parse_signature(value: &OwnedTlv) -> Result<Signature, BundleError> {
 fn parse_identity(
 	origin: &OwnedTlv,
 	public_key: Option<&OwnedTlv>,
-	resolver: &impl KeyResolver,
+	resolver: &dyn KeyResolver,
 ) -> Result<Identity, BundleError> {
 	let address = parse_address(origin)?;
 	let public_key = if address.is_anonymous() {
@@ -830,7 +830,7 @@ fn parse_provenance(
 	origin: &OwnedTlv,
 	origin_key: Option<&OwnedTlv>,
 	signed_origin: Option<(&OwnedTlv, Option<&OwnedTlv>)>,
-	resolver: &impl KeyResolver,
+	resolver: &dyn KeyResolver,
 ) -> Result<ItemProvenance, BundleError> {
 	let origin_address = parse_address(origin)?;
 	let origin_public_key = if origin_address.is_anonymous() {
@@ -1010,7 +1010,7 @@ fn read_reply_to(value: &OwnedTlv) -> Result<(Address, String), BundleError> {
 
 fn validate_message(
 	value: &OwnedTlv,
-	resolver: &impl KeyResolver,
+	resolver: &dyn KeyResolver,
 ) -> Result<ValidatedItem, BundleError> {
 	let children = parse_sequence(&value.value)?;
 	if children.first().map(|value| value.type_code) != Some(types::ORIGIN) {
@@ -1159,7 +1159,7 @@ fn validate_message(
 fn validate_file(
 	value: &OwnedTlv,
 	standalone: bool,
-	resolver: &impl KeyResolver,
+	resolver: &dyn KeyResolver,
 ) -> Result<Option<ValidatedItem>, BundleError> {
 	let children = parse_sequence(&value.value)?;
 	let mut cursor = Cursor::new(&children);
@@ -1409,7 +1409,7 @@ pub struct MessageModel {
 
 impl ItemModel {
 	/// Parses one TTS-0005-carried item while retaining every encoded child.
-	pub fn parse(value: &OwnedTlv, resolver: &impl KeyResolver) -> Result<Self, BundleError> {
+	pub fn parse(value: &OwnedTlv, resolver: &dyn KeyResolver) -> Result<Self, BundleError> {
 		let kind = match value.type_code {
 			types::MESSAGE => {
 				validate_message(value, resolver)?;
@@ -1445,7 +1445,7 @@ impl ItemModel {
 
 impl MessageModel {
 	/// Parses and structurally validates a Message while retaining every child.
-	pub fn parse(value: &OwnedTlv, resolver: &impl KeyResolver) -> Result<Self, BundleError> {
+	pub fn parse(value: &OwnedTlv, resolver: &dyn KeyResolver) -> Result<Self, BundleError> {
 		let item = ItemModel::parse(value, resolver)?;
 		if item.kind() != ItemModelKind::Message {
 			return Err(BundleError::Unexpected("MessageModel item kind"));
@@ -1492,7 +1492,7 @@ pub struct ReadFileRequest {
 /// the Destination key, which a non-anonymous address does not carry inline.
 pub fn read_message(
 	value: &OwnedTlv,
-	resolver: &impl KeyResolver,
+	resolver: &dyn KeyResolver,
 ) -> Result<ReadMessage, BundleError> {
 	if value.type_code != types::MESSAGE {
 		return Err(BundleError::Unexpected("read_message item kind"));
