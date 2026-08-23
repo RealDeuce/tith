@@ -292,6 +292,7 @@ mod tests {
 			}
 		};
 		let request = Bundle::parse(&request_bytes, &resolver).unwrap();
+		assert_eq!(request.public_key_request().unwrap(), None);
 		let mut tracker = ResponseTracker::for_bundle(&request, &resolver).unwrap();
 		assert!(tracker.requires_return_bundle());
 		assert!(matches!(
@@ -486,6 +487,7 @@ mod tests {
 		)
 		.unwrap();
 		let response_only = Bundle::parse(&response_only_bytes, &resolver).unwrap();
+		assert_eq!(response_only.public_key_request().unwrap(), None);
 		let response_only_tracker = ResponseTracker::for_bundle(&response_only, &resolver).unwrap();
 		assert_eq!(response_only_tracker.expected(), 0);
 
@@ -616,6 +618,7 @@ mod tests {
 		)
 		.unwrap();
 		let request = Bundle::parse(&request_bytes, &resolver).unwrap();
+		assert_eq!(request.public_key_request().unwrap(), None);
 		let mut tracker = ResponseTracker::for_bundle(&request, &resolver).unwrap();
 		let first = tracker.outstanding[0].clone();
 		let second = tracker.outstanding[1].clone();

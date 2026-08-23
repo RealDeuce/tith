@@ -202,7 +202,6 @@ impl Bundle {
 	pub fn public_key_request(&self) -> Result<Option<(u64, TlvHash)>, BundleError> {
 		if self.payloads.len() != 1
 			|| self.payloads[0].data.len() != 2
-			|| self.payloads[0].data[0].type_code != types::TLV_HASH
 			|| self.payloads[0].data[1].type_code != types::PUBLIC_KEY_REQUEST
 		{
 			return Ok(None);
@@ -795,6 +794,8 @@ mod tests {
 			]],
 		)
 		.unwrap();
+		let ordinary_reply = Bundle::parse(&no_advertised_key, &resolver).unwrap();
+		assert_eq!(ordinary_reply.public_key_request().unwrap(), None);
 		assert!(matches!(
 			Bundle::parse_public_key_reply(&no_advertised_key, &resolver, Some(server.public_key)),
 			Err(BundleError::Unexpected("PublicKeyRequest reply grammar"))
@@ -811,6 +812,14 @@ mod tests {
 		)
 		.unwrap();
 		let mut top = parse_sequence(&valid).unwrap();
+		let no_payload = Bundle::parse_internal(
+			&concatenate(&top[..3]),
+			&resolver,
+			NonAnonymousOriginKey::Exact(server.public_key),
+			false,
+		)
+		.unwrap();
+		assert_eq!(no_payload.public_key_request().unwrap(), None);
 		assert!(matches!(
 			Bundle::parse_public_key_reply(
 				&concatenate(&top[..3]),
@@ -827,6 +836,14 @@ mod tests {
 			OwnedTlv::new(200, Vec::new()).unwrap(),
 		];
 		top[3] = build_signed_tlv(&extended_payload, None, &server_keys.secret).unwrap();
+		let extended = Bundle::parse_internal(
+			&concatenate(&top),
+			&resolver,
+			NonAnonymousOriginKey::Exact(server.public_key),
+			false,
+		)
+		.unwrap();
+		assert_eq!(extended.public_key_request().unwrap(), None);
 		assert!(matches!(
 			Bundle::parse_public_key_reply(&concatenate(&top), &resolver, Some(server.public_key)),
 			Err(BundleError::Unexpected("PublicKeyRequest reply grammar"))
