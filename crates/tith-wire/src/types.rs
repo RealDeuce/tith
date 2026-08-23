@@ -63,3 +63,30 @@ pub const fn is_request(type_code: u64) -> bool {
 			| PUBLIC_KEY_REQUEST
 	)
 }
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	#[test]
+	fn common_assignments_are_exact_and_the_rest_of_the_range_is_reserved() {
+		assert_eq!(
+			[
+				ORIGIN,
+				SIGNATURE,
+				SIGNED_DATA,
+				SIGNED_TLV,
+				TIMESTAMP,
+				DESTINATION,
+				ADDRESS,
+				PUBLIC_KEY,
+				SIGNED_ORIGIN,
+			],
+			[1, 2, 3, 4, 5, 6, 7, 8, 9]
+		);
+		assert!(is_defined(0));
+		for reserved in 10..=31 {
+			assert!(!is_defined(reserved));
+		}
+	}
+}
