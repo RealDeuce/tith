@@ -57,6 +57,18 @@ impl From<IntegerError> for FramingError {
 	}
 }
 
+fn checked_capacity(length: u64, maximum: usize) -> Result<usize, FramingError> {
+	if length > maximum as u64 {
+		Err(FramingError::LengthOverflow)
+	} else {
+		Ok(usize::try_from(length).expect("length was checked against the platform maximum"))
+	}
+}
+
+fn platform_capacity(length: u64) -> Result<usize, FramingError> {
+	checked_capacity(length, usize::MAX)
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct TlvHeader {
 	pub type_code: u64,
@@ -131,7 +143,7 @@ pub fn parse_sequence(mut bytes: &[u8]) -> Result<Vec<OwnedTlv>, FramingError> {
 		bytes = &bytes[type_len..];
 		let (length, length_len) = decode_u64_prefix(bytes)?;
 		bytes = &bytes[length_len..];
-		let length = usize::try_from(length).map_err(|_| FramingError::LengthOverflow)?;
+		let length = platform_capacity(length)?;
 		if bytes.len() < length {
 			return Err(FramingError::TruncatedValue {
 				expected: length as u64,
@@ -165,7 +177,8 @@ impl<R: Read> TlvReader<R> {
 
 	fn read_integer(&mut self, allow_eof: bool) -> Result<Option<u64>, FramingError> {
 		let mut bytes = [0_u8; 10];
-		for used in 0..bytes.len() {
+		let mut used = 0;
+		while used < bytes.len() {
 			match self.inner.read(&mut bytes[used..=used]) {
 				Ok(0) if used == 0 && allow_eof => return Ok(None),
 				Ok(0) => return Err(IntegerError::Unterminated.into()),
@@ -178,6 +191,7 @@ impl<R: Read> TlvReader<R> {
 					.map(|(value, _)| Some(value))
 					.map_err(Into::into);
 			}
+			used += 1;
 		}
 		Err(IntegerError::Overflow.into())
 	}
@@ -234,8 +248,7 @@ impl<R: Read> TlvValue<'_, R> {
 	}
 
 	pub fn read_owned(mut self) -> Result<OwnedTlv, FramingError> {
-		let capacity =
-			usize::try_from(self.header.length).map_err(|_| FramingError::LengthOverflow)?;
+		let capacity = platform_capacity(self.header.length)?;
 		let mut value = Vec::with_capacity(capacity);
 		self.read_to_end(&mut value)?;
 		Ok(OwnedTlv {
@@ -274,6 +287,40 @@ impl<R: Read> Read for TlvValue<'_, R> {
 #[cfg(test)]
 mod tests {
 	use super::*;
+
+	struct Controlled<'a> {
+		input: &'a [u8],
+		calls: usize,
+		interrupt_at: Option<usize>,
+		fail_at: Option<usize>,
+	}
+
+	impl Read for Controlled<'_> {
+		fn read(&mut self, output: &mut [u8]) -> io::Result<usize> {
+			self.calls += 1;
+			if self.interrupt_at == Some(self.calls) {
+				return Err(io::ErrorKind::Interrupted.into());
+			}
+			if self.fail_at == Some(self.calls) {
+				return Err(io::Error::other("injected read failure"));
+			}
+			if self.input.is_empty() || output.is_empty() {
+				return Ok(0);
+			}
+			output[0] = self.input[0];
+			self.input = &self.input[1..];
+			Ok(1)
+		}
+	}
+
+	fn controlled(input: &[u8]) -> Controlled<'_> {
+		Controlled {
+			input,
+			calls: 0,
+			interrupt_at: None,
+			fail_at: None,
+		}
+	}
 
 	#[test]
 	fn owned_round_trip() {
@@ -376,5 +423,110 @@ mod tests {
 		assert!(matches!(reader.read_next(), Err(FramingError::InvalidType)));
 		assert!(matches!(reader.read_next(), Err(FramingError::InvalidType)));
 		assert_eq!(reader.into_inner(), &[0, 2, 0][..]);
+	}
+
+	#[test]
+	fn framing_errors_preserve_their_sources_and_diagnostics() {
+		let errors = [
+			FramingError::Io(io::Error::other("read")),
+			FramingError::Integer(IntegerError::Overflow),
+			FramingError::InvalidType,
+			FramingError::TruncatedValue {
+				expected: 2,
+				received: 1,
+			},
+			FramingError::UnconsumedValue(2),
+			FramingError::LengthOverflow,
+		];
+		for (index, error) in errors.into_iter().enumerate() {
+			assert!(!error.to_string().is_empty());
+			assert_eq!(std::error::Error::source(&error).is_some(), index < 2);
+		}
+		assert!(matches!(
+			FramingError::from(io::Error::other("read")),
+			FramingError::Io(_)
+		));
+		assert!(matches!(
+			FramingError::from(IntegerError::Overflow),
+			FramingError::Integer(IntegerError::Overflow)
+		));
+	}
+
+	#[test]
+	fn owned_and_streaming_accessors_cover_complete_values() {
+		let child = OwnedTlv::new(2, b"child".to_vec()).unwrap();
+		let parent = OwnedTlv::new(1, child.encode()).unwrap();
+		assert_eq!(parent.children().unwrap(), [child]);
+
+		let header = TlvHeader::new(378, 16_384).unwrap();
+		assert_eq!(header.encoded_len(), 5);
+
+		let bytes = [1, 1, 42];
+		let mut reader = TlvReader::new(bytes.as_slice());
+		let mut value = reader.read_next().unwrap().unwrap();
+		assert_eq!(value.remaining(), 1);
+		assert_eq!(value.read(&mut []).unwrap(), 0);
+		assert_eq!(value.remaining(), 1);
+		assert_eq!(value.read_owned().unwrap().value, [42]);
+	}
+
+	#[test]
+	fn streaming_integer_and_value_io_failures_are_explicit() {
+		for bytes in [&[0x80][..], &[1][..], &[0x80; 10][..]] {
+			assert!(TlvReader::new(bytes).read_next().is_err());
+		}
+
+		let mut interrupted = controlled(&[1, 0]);
+		interrupted.interrupt_at = Some(1);
+		let mut reader = TlvReader::new(interrupted);
+		reader.read_next().unwrap().unwrap().skip().unwrap();
+
+		let mut failed = controlled(&[1, 0]);
+		failed.fail_at = Some(1);
+		assert!(matches!(
+			TlvReader::new(failed).read_next(),
+			Err(FramingError::Io(_))
+		));
+
+		let mut interrupted = controlled(&[1, 1, 42]);
+		interrupted.interrupt_at = Some(3);
+		let mut reader = TlvReader::new(interrupted);
+		assert_eq!(
+			reader
+				.read_next()
+				.unwrap()
+				.unwrap()
+				.read_owned()
+				.unwrap()
+				.value,
+			[42]
+		);
+
+		let mut failed = controlled(&[1, 1, 42]);
+		failed.fail_at = Some(3);
+		let mut reader = TlvReader::new(failed);
+		assert!(reader.read_next().unwrap().unwrap().read_owned().is_err());
+
+		let mut reader = TlvReader::new(&[1, 2, 42][..]);
+		let error = reader
+			.read_next()
+			.unwrap()
+			.unwrap()
+			.read_owned()
+			.unwrap_err();
+		assert!(matches!(
+			error,
+			FramingError::Io(ref error) if error.kind() == io::ErrorKind::UnexpectedEof
+		));
+	}
+
+	#[test]
+	fn allocation_lengths_are_checked_against_the_platform_limit() {
+		assert_eq!(checked_capacity(3, 3).unwrap(), 3);
+		assert!(matches!(
+			checked_capacity(4, 3),
+			Err(FramingError::LengthOverflow)
+		));
+		assert_eq!(platform_capacity(4).unwrap(), 4);
 	}
 }

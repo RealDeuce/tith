@@ -52,7 +52,7 @@ fn signature_value(value: &OwnedTlv) -> Result<Signature, BundleError> {
 pub(crate) fn identity(
 	address_tlv: &OwnedTlv,
 	public_key_tlv: Option<&OwnedTlv>,
-	resolver: &impl KeyResolver,
+	resolver: &dyn KeyResolver,
 ) -> Result<Identity, BundleError> {
 	let address = address_value(address_tlv)?;
 	let public_key = if address.is_anonymous() {
@@ -60,11 +60,6 @@ pub(crate) fn identity(
 			.ok_or(BundleError::Missing("PublicKey for anonymous address"))
 			.and_then(public_key_value)?
 	} else {
-		if public_key_tlv.is_some() {
-			return Err(BundleError::Unexpected(
-				"PublicKey for non-anonymous address",
-			));
-		}
 		resolver
 			.public_key(&address)
 			.ok_or_else(|| BundleError::UnknownKey(address.clone()))?
@@ -140,7 +135,7 @@ fn signed_tlv_parts(
 fn verify_signed_tlv_with_policy(
 	value: &OwnedTlv,
 	inherited: Option<&Identity>,
-	resolver: &impl KeyResolver,
+	resolver: &dyn KeyResolver,
 	unknown_children: UnknownChildren,
 ) -> Result<VerifiedSignedTlv, BundleError> {
 	let (origin_tlv, public_key_tlv, signed_data, signature_tlv) =
@@ -166,7 +161,7 @@ fn verify_signed_tlv_with_policy(
 pub fn verify_signed_tlv(
 	value: &OwnedTlv,
 	inherited: Option<&Identity>,
-	resolver: &impl KeyResolver,
+	resolver: &dyn KeyResolver,
 ) -> Result<VerifiedSignedTlv, BundleError> {
 	verify_signed_tlv_with_policy(value, inherited, resolver, UnknownChildren::Allow)
 }
@@ -194,23 +189,29 @@ pub fn build_signed_tlv(
 	let signature = sign_tlv(&data_bytes, secret)?;
 	let mut children = Vec::new();
 	if let Some(origin) = origin {
-		children.push(OwnedTlv::new(
-			types::ORIGIN,
-			origin.address.to_string().into_bytes(),
-		)?);
+		children.push(OwnedTlv {
+			type_code: types::ORIGIN,
+			value: origin.address.to_string().into_bytes(),
+		});
 		if origin.address.is_anonymous() {
-			children.push(OwnedTlv::new(
-				types::PUBLIC_KEY,
-				origin.public_key.as_bytes().to_vec(),
-			)?);
+			children.push(OwnedTlv {
+				type_code: types::PUBLIC_KEY,
+				value: origin.public_key.as_bytes().to_vec(),
+			});
 		}
 	}
-	children.push(OwnedTlv::new(types::SIGNED_DATA, data_bytes)?);
-	children.push(OwnedTlv::new(
-		types::SIGNATURE,
-		signature.as_bytes().to_vec(),
-	)?);
-	OwnedTlv::new(types::SIGNED_TLV, concatenate(&children)).map_err(Into::into)
+	children.push(OwnedTlv {
+		type_code: types::SIGNED_DATA,
+		value: data_bytes,
+	});
+	children.push(OwnedTlv {
+		type_code: types::SIGNATURE,
+		value: signature.as_bytes().to_vec(),
+	});
+	Ok(OwnedTlv {
+		type_code: types::SIGNED_TLV,
+		value: concatenate(&children),
+	})
 }
 
 #[cfg(test)]
@@ -346,6 +347,69 @@ mod tests {
 		assert!(matches!(
 			unauthenticated_signed_data(&OwnedTlv::new(200, Vec::new()).unwrap()),
 			Err(BundleError::Unexpected("non-SignedTLV"))
+		));
+	}
+
+	#[test]
+	fn malformed_common_values_fail_at_their_exact_boundary() {
+		let keys = SigningKeyPair::from_seed(&[34; 32]).unwrap();
+		let no_key = |_: &Address| None;
+
+		let invalid_utf8 = OwnedTlv::new(types::ORIGIN, vec![0xff]).unwrap();
+		assert!(matches!(
+			identity(&invalid_utf8, None, &no_key),
+			Err(BundleError::InvalidUtf8)
+		));
+		let invalid_address = OwnedTlv::new(types::ORIGIN, b"not-an-address".to_vec()).unwrap();
+		assert!(matches!(
+			identity(&invalid_address, None, &no_key),
+			Err(BundleError::Address(_))
+		));
+
+		let anonymous = OwnedTlv::new(types::ORIGIN, b"p2p#-1".to_vec()).unwrap();
+		assert!(matches!(
+			identity(&anonymous, None, &no_key),
+			Err(BundleError::Missing("PublicKey for anonymous address"))
+		));
+		let short_key = OwnedTlv::new(types::PUBLIC_KEY, vec![0; 31]).unwrap();
+		assert!(matches!(
+			identity(&anonymous, Some(&short_key), &no_key),
+			Err(BundleError::WrongLength("PublicKey"))
+		));
+
+		let ordinary = OwnedTlv::new(types::ORIGIN, b"fidonet#1/2".to_vec()).unwrap();
+		assert!(matches!(
+			identity(&ordinary, None, &no_key),
+			Err(BundleError::UnknownKey(_))
+		));
+
+		let malformed_children = OwnedTlv::new(types::SIGNED_TLV, vec![0, 0]).unwrap();
+		assert!(matches!(
+			verify_signed_tlv(&malformed_children, None, &no_key),
+			Err(BundleError::Framing(_))
+		));
+
+		let malformed_data = vec![0, 0];
+		let signature = sign_tlv(&malformed_data, &keys.secret).unwrap();
+		let signed = OwnedTlv::new(
+			types::SIGNED_TLV,
+			concatenate(&[
+				OwnedTlv::new(types::SIGNED_DATA, malformed_data).unwrap(),
+				OwnedTlv::new(types::SIGNATURE, signature.as_bytes().to_vec()).unwrap(),
+			]),
+		)
+		.unwrap();
+		let inherited = Identity {
+			address: "fidonet#1/2".parse().unwrap(),
+			public_key: keys.public,
+		};
+		assert!(matches!(
+			verify_signed_tlv(&signed, Some(&inherited), &no_key),
+			Err(BundleError::Framing(_))
+		));
+		assert!(matches!(
+			unauthenticated_signed_data(&signed),
+			Err(BundleError::Framing(_))
 		));
 	}
 }
