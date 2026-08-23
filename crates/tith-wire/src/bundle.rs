@@ -536,6 +536,7 @@ mod tests {
 				.then_some(client.public_key)
 				.or_else(|| (address == &server_address).then_some(new_server_keys.public))
 		};
+		assert_eq!(resolver(&server_address), Some(new_server_keys.public));
 		let parsed_probe = Bundle::parse(&probe, &resolver).unwrap();
 		assert_eq!(
 			parsed_probe.requested_destination_key,
