@@ -2,7 +2,7 @@ use std::collections::HashSet;
 use std::fmt;
 
 use tith_crypto::{
-	PublicKey, SIGNATURE_BYTES, SecretKey, Signature, TlvHash, sign_tlv, verify_tlv,
+	CryptoError, PublicKey, SIGNATURE_BYTES, SecretKey, Signature, TlvHash, sign_tlv, verify_tlv,
 };
 
 use crate::address::Address;
@@ -15,6 +15,8 @@ pub use crate::item_format::{
 use crate::item_format::{filename_has_path_component, filename_is_portable};
 use crate::tlv::{OwnedTlv, parse_sequence};
 use crate::types;
+
+type SignatureVerifier = fn(&[u8], &Signature, &PublicKey) -> Result<bool, CryptoError>;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ItemKind {
@@ -208,13 +210,23 @@ pub fn build_retained_message(
 	signature: Signature,
 	suffix: &MessageSuffix<'_>,
 ) -> Result<OwnedTlv, BundleError> {
+	build_retained_message_with(data, provenance, signature, suffix, verify_tlv)
+}
+
+fn build_retained_message_with(
+	data: &MessageData,
+	provenance: &ItemProvenance,
+	signature: Signature,
+	suffix: &MessageSuffix<'_>,
+	verify: SignatureVerifier,
+) -> Result<OwnedTlv, BundleError> {
 	let effective_signer = provenance
 		.signer
 		.as_ref()
 		.ok_or(BundleError::Missing("Message signing identity"))?;
 	validate_originated_message_data(data)?;
 	let mut signed = message_signed_children(data, provenance)?;
-	let authenticated = verify_tlv(
+	let authenticated = verify(
 		&concatenate(&signed),
 		&signature,
 		&effective_signer.public_key,
@@ -1024,6 +1036,14 @@ fn validate_message(
 	value: &OwnedTlv,
 	resolver: &dyn KeyResolver,
 ) -> Result<ValidatedItem, BundleError> {
+	validate_message_with(value, resolver, verify_tlv)
+}
+
+fn validate_message_with(
+	value: &OwnedTlv,
+	resolver: &dyn KeyResolver,
+	verify: SignatureVerifier,
+) -> Result<ValidatedItem, BundleError> {
 	let children = parse_sequence(&value.value)?;
 	if children.first().map(|value| value.type_code) != Some(types::ORIGIN) {
 		return Err(BundleError::Missing("initial Message Origin"));
@@ -1103,7 +1123,7 @@ fn validate_message(
 				.signer
 				.as_ref()
 				.expect("signed provenance has a signer");
-			let authenticated = verify_tlv(
+			let authenticated = verify(
 				&encoded_prefix(&children, signature_index),
 				&signature,
 				&signer.public_key,
@@ -1145,7 +1165,8 @@ fn validate_message(
 		seen_by_addresses(seen_by)?;
 	}
 	for (_, line) in cursor.repeated(types::ADDITIONAL_KLUDGE_LINE) {
-		if text(line)?.contains('\u{0001}') {
+		let line = text(line)?;
+		if line.contains('\u{0001}') {
 			return Err(BundleError::Unexpected("Control-A in AdditionalKludgeLine"));
 		}
 	}
@@ -1173,6 +1194,15 @@ fn validate_file(
 	value: &OwnedTlv,
 	standalone: bool,
 	resolver: &dyn KeyResolver,
+) -> Result<Option<ValidatedItem>, BundleError> {
+	validate_file_with(value, standalone, resolver, verify_tlv)
+}
+
+fn validate_file_with(
+	value: &OwnedTlv,
+	standalone: bool,
+	resolver: &dyn KeyResolver,
+	verify: SignatureVerifier,
 ) -> Result<Option<ValidatedItem>, BundleError> {
 	let children = parse_sequence(&value.value)?;
 	let mut cursor = Cursor::new(&children);
@@ -1226,7 +1256,8 @@ fn validate_file(
 		return Err(BundleError::Unexpected("newline in ShortDescription"));
 	}
 	for (_, description) in cursor.repeated(types::LONG_DESCRIPTION_LINE) {
-		if text(description)?.contains(['\r', '\n']) {
+		let description = text(description)?;
+		if description.contains(['\r', '\n']) {
 			return Err(BundleError::Unexpected("newline in LongDescriptionLine"));
 		}
 	}
@@ -1247,7 +1278,7 @@ fn validate_file(
 				.signer
 				.as_ref()
 				.expect("signed provenance has a signer");
-			let authenticated = verify_tlv(
+			let authenticated = verify(
 				&encoded_prefix(&children, signature_index),
 				&signature,
 				&signer.public_key,

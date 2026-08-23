@@ -20,6 +20,14 @@ mod tests {
 		}
 	}
 
+	fn verification_error(
+		_: &[u8],
+		_: &Signature,
+		_: &PublicKey,
+	) -> Result<bool, CryptoError> {
+		Err(CryptoError::Operation)
+	}
+
 	#[test]
 	fn validates_poll_request() {
 		let origin_keys = SigningKeyPair::from_seed(&[10; 32]).unwrap();
@@ -2018,6 +2026,52 @@ mod tests {
 			]
 		};
 		let resolver = |address: &Address| (address != &origin).then_some(keys.public);
+		let full_resolver = |_: &Address| Some(keys.public);
+		let signed_message = build_originated_message(
+			&data(),
+			&provenance,
+			&keys.secret,
+			1,
+			1,
+			"test",
+			&[],
+		)
+		.unwrap();
+		let signature = read_message(&signed_message, &resolver)
+			.unwrap()
+			.signing
+			.signature
+			.unwrap();
+		assert!(build_retained_message_with(
+			&data(),
+			&provenance,
+			signature,
+			&suffix,
+			verification_error,
+		)
+		.is_err());
+		assert!(validate_message_with(&signed_message, &full_resolver, verification_error).is_err());
+		let signed_file = build_originated_file(
+			StandaloneFileData {
+				filename: Some("file.txt".to_owned()),
+				timestamp: None,
+				contents: Vec::new(),
+				area: None,
+				short_description: None,
+				long_description_lines: Vec::new(),
+				tear_line: None,
+				magic_word: None,
+				replaces: None,
+			},
+			&provenance,
+			&keys.secret,
+			1,
+			1,
+			"test",
+			&[],
+		)
+		.unwrap();
+		assert!(validate_file_with(&signed_file, true, &full_resolver, verification_error).is_err());
 
 		let mut invalid_signed_origin = vec![
 			origin_value.clone(),
@@ -2084,6 +2138,13 @@ mod tests {
 			.signing
 			.signature
 			.is_none());
+		let mut invalid_kludge = message_prefix();
+		invalid_kludge.extend([
+			OwnedTlv::new(types::REQUEST_IDENTIFIER, vec![1]).unwrap(),
+			via_value(provenance.signer.as_ref().unwrap(), 1, "test"),
+			OwnedTlv::new(types::ADDITIONAL_KLUDGE_LINE, vec![0xff]).unwrap(),
+		]);
+		assert!(validate_message(&container(types::MESSAGE, &invalid_kludge), &resolver).is_err());
 
 		let malformed_file = container(
 			types::FILE,
@@ -2106,6 +2167,16 @@ mod tests {
 		);
 		assert!(validate_file(&malformed_file_identifier, true, &resolver).is_err());
 		assert!(read_standalone_file(&malformed_file_identifier).is_err());
+		let invalid_long_description = container(
+			types::FILE,
+			&[
+				OwnedTlv::new(types::CONTENTS, Vec::new()).unwrap(),
+				origin_value.clone(),
+				OwnedTlv::new(types::LONG_DESCRIPTION_LINE, vec![0xff]).unwrap(),
+				OwnedTlv::new(types::REQUEST_IDENTIFIER, vec![1]).unwrap(),
+			],
+		);
+		assert!(validate_file(&invalid_long_description, true, &resolver).is_err());
 
 		let malformed_request = container(
 			types::FILE_REQUEST,
