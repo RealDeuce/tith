@@ -435,6 +435,217 @@ mod tests {
 		validate_payload(&reply.payloads[0], mailer).unwrap()[0].kind
 	}
 
+	fn encoded_values(values: &[OwnedTlv]) -> Vec<u8> {
+		let mut encoded = Vec::new();
+		for value in values {
+			value.write_to(&mut encoded).unwrap();
+		}
+		encoded
+	}
+
+	fn direct_client_exchange(
+		make_reply: impl FnOnce(&Identity, &SecretKey, &Identity, u64, TlvHash) -> Vec<u8>
+		+ Send
+		+ 'static,
+	) -> Result<(), Box<dyn Error>> {
+		let (mailer, peer_keys, peer, local, database) = setup();
+		let request_value = netmail(&local, &mailer.local_secret, &peer, 1);
+		let encoded = build_bundle(
+			&local,
+			&mailer.local_secret,
+			&peer,
+			1,
+			vec![vec![request_value]],
+		)
+		.unwrap();
+		let request = Bundle::parse(&encoded, mailer.as_ref()).unwrap();
+		let tracker =
+			tith_exchange::ResponseTracker::for_bundle(&request, mailer.as_ref()).unwrap();
+		let outstanding = tracker.outstanding()[0].clone();
+		let reply = make_reply(
+			&peer,
+			&peer_keys.secret,
+			&local,
+			outstanding.request_identifier,
+			outstanding.signed_tlv_hash,
+		);
+
+		let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+		let address = listener.local_addr().unwrap();
+		let request_len = encoded.len();
+		let server = std::thread::spawn(move || {
+			let (mut stream, _) = listener.accept().unwrap();
+			let mut request = vec![0; request_len];
+			stream.read_exact(&mut request).unwrap();
+			stream.write_all(&reply).unwrap();
+			stream.shutdown(Shutdown::Write).unwrap();
+		});
+
+		let outbound = Outbound::new(
+			Arc::clone(&mailer.store),
+			mailer.application.clone(),
+			Arc::clone(&mailer.configuration),
+			Arc::clone(&mailer.nodelist),
+			Vec::new(),
+			Duration::from_secs(1),
+		)
+		.unwrap();
+		let local_identity = LocalIdentity {
+			reference: mailer.local_ref.clone(),
+			identity: local.clone(),
+			secret: Arc::clone(&mailer.local_secret),
+		};
+		let mut session = tith_exchange::ClientSession::new(tracker);
+		let mut stream = TcpStream::connect(address).unwrap();
+		let result = outbound
+			.converse(&mut stream, &encoded, &mut session, &local_identity, &peer)
+			.map(|_| ());
+		server.join().unwrap();
+		drop(outbound);
+		drop(mailer);
+		fs::remove_file(database).unwrap();
+		result
+	}
+
+	#[test]
+	fn client_reply_framing_rejects_early_end_defined_values_and_wrong_hashes() {
+		assert!(
+			direct_client_exchange(|peer, secret, local, _, _| {
+				let reply = build_bundle(peer, secret, local, 2, Vec::new()).unwrap();
+				encoded_values(&parse_sequence(&reply).unwrap()[..2])
+			})
+			.is_err()
+		);
+		assert!(
+			direct_client_exchange(|peer, secret, local, identifier, response_to| {
+				let reply = build_bundle(
+					peer,
+					secret,
+					local,
+					2,
+					vec![vec![accepted(identifier, response_to).unwrap()]],
+				)
+				.unwrap();
+				let mut values = parse_sequence(&reply).unwrap();
+				values.insert(2, OwnedTlv::new(types::TIMESTAMP, vec![1]).unwrap());
+				encoded_values(&values)
+			})
+			.is_err()
+		);
+		assert!(
+			direct_client_exchange(|peer, secret, local, identifier, response_to| {
+				let reply = build_bundle(
+					peer,
+					secret,
+					local,
+					2,
+					vec![vec![accepted(identifier, response_to).unwrap()]],
+				)
+				.unwrap();
+				let mut values = parse_sequence(&reply).unwrap();
+				values.insert(2, OwnedTlv::new(31, b"extension".to_vec()).unwrap());
+				encoded_values(&values)
+			})
+			.is_ok()
+		);
+		assert!(
+			direct_client_exchange(|peer, secret, local, identifier, response_to| {
+				let reply = build_bundle(
+					peer,
+					secret,
+					local,
+					2,
+					vec![vec![accepted(identifier, response_to).unwrap()]],
+				)
+				.unwrap();
+				let mut values = parse_sequence(&reply).unwrap();
+				values[2] = build_signed_tlv(
+					&[
+						OwnedTlv::new(types::TLV_HASH, [9; 32].to_vec()).unwrap(),
+						accepted(identifier, response_to).unwrap(),
+					],
+					None,
+					secret,
+				)
+				.unwrap();
+				encoded_values(&values)
+			})
+			.is_err()
+		);
+	}
+
+	#[test]
+	fn client_rejects_malformed_values_returned_by_a_poll() {
+		let (mailer, peer_keys, peer, local, database) = setup();
+		let poll = container(
+			types::POLL_MESSAGES,
+			&[OwnedTlv::new(types::REQUEST_IDENTIFIER, encode_u64(1)).unwrap()],
+		);
+		let encoded =
+			build_bundle(&local, &mailer.local_secret, &peer, 1, vec![vec![poll]]).unwrap();
+		let request = Bundle::parse(&encoded, mailer.as_ref()).unwrap();
+		let tracker =
+			tith_exchange::ResponseTracker::for_bundle(&request, mailer.as_ref()).unwrap();
+		let outstanding = tracker.outstanding()[0].clone();
+		let malformed = container(
+			types::POLL_MESSAGES,
+			&[
+				OwnedTlv::new(types::REQUEST_IDENTIFIER, encode_u64(9)).unwrap(),
+				OwnedTlv::new(types::TIMESTAMP, vec![1]).unwrap(),
+			],
+		);
+		let reply = build_bundle(
+			&peer,
+			&peer_keys.secret,
+			&local,
+			2,
+			vec![vec![
+				malformed,
+				accepted(outstanding.request_identifier, outstanding.signed_tlv_hash).unwrap(),
+			]],
+		)
+		.unwrap();
+
+		let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+		let address = listener.local_addr().unwrap();
+		let request_len = encoded.len();
+		let server = std::thread::spawn(move || {
+			let (mut stream, _) = listener.accept().unwrap();
+			let mut request = vec![0; request_len];
+			stream.read_exact(&mut request).unwrap();
+			stream.write_all(&reply).unwrap();
+			stream.flush().unwrap();
+			let mut final_reply = Vec::new();
+			stream.read_to_end(&mut final_reply).unwrap();
+			assert!(!final_reply.is_empty());
+		});
+
+		let outbound = Outbound::new(
+			Arc::clone(&mailer.store),
+			mailer.application.clone(),
+			Arc::clone(&mailer.configuration),
+			Arc::clone(&mailer.nodelist),
+			Vec::new(),
+			Duration::from_secs(1),
+		)
+		.unwrap();
+		let local_identity = LocalIdentity {
+			reference: mailer.local_ref.clone(),
+			identity: local,
+			secret: Arc::clone(&mailer.local_secret),
+		};
+		let mut session = tith_exchange::ClientSession::new(tracker);
+		let mut stream = TcpStream::connect(address).unwrap();
+		let exchange = outbound
+			.converse(&mut stream, &encoded, &mut session, &local_identity, &peer)
+			.unwrap();
+		assert_eq!(exchange.returned, 1);
+		server.join().unwrap();
+		drop(outbound);
+		drop(mailer);
+		fs::remove_file(database).unwrap();
+	}
+
 	#[test]
 	fn retired_secret_certifies_the_current_key_for_a_dedicated_probe() {
 		let (mut mailer, peer_keys, peer, local, database) = setup();
@@ -503,6 +714,60 @@ mod tests {
 			rejection.description,
 			"requested predecessor private key is unavailable"
 		);
+		drop(mailer);
+		fs::remove_file(database).unwrap();
+	}
+
+	#[test]
+	fn server_rejects_extra_dedicated_probe_data_and_defined_top_level_values() {
+		let (mailer, peer_keys, peer, local, database) = setup();
+		let mut probe = tith_wire::bundle::build_public_key_probe(
+			&peer,
+			&peer_keys.secret,
+			&local.address,
+			Some(local.public_key),
+			1,
+			1,
+		)
+		.unwrap();
+		probe.extend_from_slice(&OwnedTlv::new(31, b"extra".to_vec()).unwrap().encode());
+		let (_, completed) = exchange(&probe, &mailer);
+		assert!(!completed);
+
+		let request = build_bundle(
+			&peer,
+			&peer_keys.secret,
+			&local,
+			1,
+			vec![vec![netmail(&peer, &peer_keys.secret, &local, 2)]],
+		)
+		.unwrap();
+		let mut defined = request.clone();
+		defined.extend_from_slice(&OwnedTlv::new(types::TIMESTAMP, vec![1]).unwrap().encode());
+		let (_, completed) = exchange(&defined, &mailer);
+		assert!(!completed);
+
+		let mut extended = request;
+		extended.extend_from_slice(&OwnedTlv::new(31, b"extension".to_vec()).unwrap().encode());
+		let (_, completed) = exchange(&extended, &mailer);
+		assert!(completed);
+		drop(mailer);
+		fs::remove_file(database).unwrap();
+	}
+
+	#[test]
+	fn server_rejects_a_response_in_an_initial_bundle() {
+		let (mailer, peer_keys, peer, local, database) = setup();
+		let request = build_bundle(
+			&peer,
+			&peer_keys.secret,
+			&local,
+			1,
+			vec![vec![accepted(1, TlvHash::from_bytes([1; 32])).unwrap()]],
+		)
+		.unwrap();
+		let (_, completed) = exchange(&request, &mailer);
+		assert!(!completed);
 		drop(mailer);
 		fs::remove_file(database).unwrap();
 	}

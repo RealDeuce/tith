@@ -547,6 +547,12 @@ mod tests {
 		.unwrap();
 		let reply =
 			Bundle::parse_public_key_reply(&reply_bytes, &resolver, Some(b.public_key)).unwrap();
+		let mut probe_session = ClientSession::new(probe_tracker.clone());
+		probe_session.initial_sent().unwrap();
+		probe_session.reply_header_received(&reply).unwrap();
+		let probe_responses = validate_payload(&reply.payloads[0], &resolver).unwrap();
+		probe_session.responses_received(&probe_responses).unwrap();
+		assert_eq!(probe_session.state(), SessionState::Closing);
 		probe_tracker.observe_reply(&reply, &resolver).unwrap();
 		assert!(probe_tracker.is_complete());
 
@@ -648,8 +654,26 @@ mod tests {
 		let mut tracker = ResponseTracker::for_bundle(&request, &resolver).unwrap();
 		let first = tracker.outstanding[0].clone();
 		let second = tracker.outstanding[1].clone();
+		let first_response = accepted(second.request_identifier, second.signed_tlv_hash).unwrap();
+		let first_bytes = build_bundle(
+			&b,
+			&b_keys.secret,
+			&a,
+			5,
+			vec![vec![first_response.clone()]],
+		)
+		.unwrap();
+		let first_reply = Bundle::parse(&first_bytes, &resolver).unwrap();
+		let mut partial_session = ClientSession::new(tracker.clone());
+		partial_session.initial_sent().unwrap();
+		partial_session.reply_header_received(&first_reply).unwrap();
+		let first_responses = validate_payload(&first_reply.payloads[0], &resolver).unwrap();
+		partial_session
+			.responses_received(&first_responses)
+			.unwrap();
+		assert_eq!(partial_session.state(), SessionState::AwaitingResponses);
 		for response in [
-			accepted(second.request_identifier, second.signed_tlv_hash).unwrap(),
+			first_response,
 			accepted(first.request_identifier, first.signed_tlv_hash).unwrap(),
 		] {
 			let bytes = build_bundle(&b, &b_keys.secret, &a, 5, vec![vec![response]]).unwrap();

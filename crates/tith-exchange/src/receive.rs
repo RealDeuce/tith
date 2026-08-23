@@ -114,14 +114,17 @@ pub fn receive_payload(
 	let mut responses = Vec::new();
 	for item in request_values {
 		if types::is_request(item.type_code) {
-			requests.push(match validate_item(item, resolver) {
-				Ok(Some(item)) => ReceivedRequest::Valid(Box::new(item)),
-				Ok(None) => unreachable!("request types always validate as items"),
-				Err(_) => ReceivedRequest::DataError {
+			match validate_item(item, resolver) {
+				Ok(validated) => requests.extend(
+					validated
+						.into_iter()
+						.map(|item| ReceivedRequest::Valid(Box::new(item))),
+				),
+				Err(_) => requests.push(ReceivedRequest::DataError {
 					request_identifier: request_identifier(item)
 						.expect("request identifiers were preflighted"),
-				},
-			});
+				}),
+			}
 		} else if matches!(item.type_code, types::ACCEPTED | types::REJECTED) {
 			responses.extend(validate_item(item, resolver)?);
 		} else if types::is_defined(item.type_code) {

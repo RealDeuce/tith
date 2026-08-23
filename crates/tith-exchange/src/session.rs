@@ -132,7 +132,7 @@ impl ClientSession {
 	}
 
 	pub fn closed(&mut self) -> Result<(), ExchangeError> {
-		if self.state == SessionState::Closing && self.tracker.is_complete() {
+		if self.state == SessionState::Closing {
 			self.state = SessionState::Complete;
 			Ok(())
 		} else {

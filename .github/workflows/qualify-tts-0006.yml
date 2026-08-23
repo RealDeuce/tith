@@ -18,6 +18,7 @@ on:
       - "crates/tithd/src/client_exchange.rs"
       - "crates/tithd/src/deliver.rs"
       - "crates/tithd/src/framing.rs"
+      - "crates/tithd/src/framing_tests.rs"
       - "crates/tithd/src/mail.rs"
       - "crates/tithd/src/public_key_response.rs"
       - "crates/tithd/src/server_exchange.rs"

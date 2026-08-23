@@ -393,9 +393,6 @@ fn poll_snapshot(
 	request: &IncomingBundle,
 	mailer: &Mailer,
 ) -> Result<Vec<DeliveryClaim>, Box<dyn Error>> {
-	if kinds.is_empty() {
-		return Ok(Vec::new());
-	}
 	let origin = &request.bundle.origin;
 	// An anonymous Origin is only identified together with its PublicKey, so the
 	// key is part of the match rather than the address alone.
@@ -519,5 +516,19 @@ mod tests {
 			Some(&[JobKind::FileRequest][..])
 		);
 		assert_eq!(poll_kinds(ItemKind::NetMail), None);
+	}
+
+	#[test]
+	fn a_spooled_value_must_be_exactly_one_tlv() {
+		let one = OwnedTlv::new(types::CONTENTS, b"one".to_vec()).unwrap();
+		assert_eq!(single_value(&one.encode()).unwrap(), one);
+		assert!(single_value(&[]).is_err());
+		let mut two = one.encode();
+		two.extend_from_slice(
+			&OwnedTlv::new(types::FILENAME, b"two".to_vec())
+				.unwrap()
+				.encode(),
+		);
+		assert!(single_value(&two).is_err());
 	}
 }

@@ -5,6 +5,8 @@ mod client_exchange;
 mod deliver;
 mod filesystem;
 mod framing;
+#[cfg(test)]
+mod framing_tests;
 mod ipc;
 mod mail;
 mod owner_only;
