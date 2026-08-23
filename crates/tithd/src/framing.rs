@@ -38,7 +38,7 @@ pub struct IncomingBundle {
 pub fn read_header(
 	reader: &mut TlvReader<&mut dyn Read>,
 	first: Option<OwnedTlv>,
-	resolver: &impl KeyResolver,
+	resolver: &dyn KeyResolver,
 ) -> Result<Option<IncomingBundle>, Box<dyn Error>> {
 	let first = if let Some(value) = first {
 		value

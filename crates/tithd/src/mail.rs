@@ -879,6 +879,22 @@ mod tests {
 		);
 		let (_, completed) = exchange(&malformed_first, &mailer);
 		assert!(!completed);
+		let mut wrong_first =
+			build_bundle(&peer, &peer_keys.secret, &local, 1, Vec::new()).unwrap();
+		wrong_first.extend_from_slice(
+			&build_signed_tlv(
+				&[
+					OwnedTlv::new(types::TIMESTAMP, vec![1]).unwrap(),
+					tith_wire::item::public_key_request(1).unwrap(),
+				],
+				None,
+				&peer_keys.secret,
+			)
+			.unwrap()
+			.encode(),
+		);
+		let (_, completed) = exchange(&wrong_first, &mailer);
+		assert!(!completed);
 		drop(mailer);
 		fs::remove_file(database).unwrap();
 	}
@@ -2360,6 +2376,27 @@ mod tests {
 		assert!(
 			validate_final_reply(
 				&mut wrong_reader,
+				first,
+				&request,
+				node.mailer.as_ref(),
+				&mut holds,
+			)
+			.is_err()
+		);
+		let wrong_destination =
+			build_bundle(&peer, &peer_keys.secret, &peer, 2, Vec::new()).unwrap();
+		let mut wrong_destination_input = Cursor::new(wrong_destination);
+		let mut wrong_destination_reader =
+			TlvReader::new(&mut wrong_destination_input as &mut dyn Read);
+		let first = wrong_destination_reader
+			.read_next()
+			.unwrap()
+			.unwrap()
+			.read_owned()
+			.unwrap();
+		assert!(
+			validate_final_reply(
+				&mut wrong_destination_reader,
 				first,
 				&request,
 				node.mailer.as_ref(),

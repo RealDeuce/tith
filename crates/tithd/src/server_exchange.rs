@@ -349,10 +349,8 @@ fn payload_responses(
 				}
 			}
 			ReceivedRequest::DataError { request_identifier } => {
-				responses.push(data_error_response(
-					request_identifier,
-					payload.response_to,
-				)?);
+				let response_to = payload.response_to;
+				responses.push(data_error_response(request_identifier, response_to)?);
 			}
 		}
 	}
