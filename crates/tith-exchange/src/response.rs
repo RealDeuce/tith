@@ -121,62 +121,86 @@ impl ResponseTracker {
 		&self.completed
 	}
 
+	#[must_use]
+	pub fn outstanding(&self) -> &[OutstandingRequest] {
+		&self.outstanding
+	}
+
 	pub fn observe_reply(
 		&mut self,
 		reply: &Bundle,
 		resolver: &dyn KeyResolver,
 	) -> Result<(), ExchangeError> {
+		self.validate_reply_identity(reply)?;
+		for payload in &reply.payloads {
+			for item in validate_payload(payload, resolver)? {
+				if matches!(item.kind, ItemKind::Accepted | ItemKind::Rejected) {
+					self.observe_response(&item)?;
+				}
+			}
+		}
+		Ok(())
+	}
+
+	pub fn validate_reply_identity(&self, reply: &Bundle) -> Result<(), ExchangeError> {
 		if reply.origin != self.destination {
 			return Err(ExchangeError::WrongReplyOrigin);
 		}
 		if reply.destination != self.origin {
 			return Err(ExchangeError::WrongReplyDestination);
 		}
-		for payload in &reply.payloads {
-			for item in validate_payload(payload, resolver)? {
-				let response = match item.kind {
-					ItemKind::Accepted => ResponseKind::Accepted,
-					ItemKind::Rejected => ResponseKind::Rejected,
-					_ => continue,
-				};
-				let rejection = item.rejection.clone();
-				let response_hash = item.response_to.ok_or(ExchangeError::UnexpectedResponse)?;
-				let Some(position) = self.outstanding.iter().position(|request| {
-					request.signed_tlv_hash == response_hash
-						&& request.request_identifier == item.request_identifier
-				}) else {
-					return Err(ExchangeError::UnexpectedResponse);
-				};
-				if item.response_public_key.is_some()
-					&& self.outstanding[position].kind != RequestKind::PublicKeyRequest
-				{
-					return Err(ExchangeError::UnexpectedResponse);
-				}
-				if self.completed.iter().any(|completed| {
-					completed.request.signed_tlv_hash == response_hash
-						&& completed.request.request_identifier == item.request_identifier
-				}) {
-					return Err(ExchangeError::DuplicateResponse);
-				}
-				let completed = CompletedResponse {
-					request: self.outstanding[position].clone(),
-					response,
-					rejection,
-				};
-				let insertion = self.completed.partition_point(|existing| {
-					let existing_position = self
-						.outstanding
-						.iter()
-						.position(|request| {
-							request.signed_tlv_hash == existing.request.signed_tlv_hash
-								&& request.request_identifier == existing.request.request_identifier
-						})
-						.expect("completed responses name outstanding requests");
-					existing_position < position
-				});
-				self.completed.insert(insertion, completed);
-			}
+		Ok(())
+	}
+
+	pub fn observe_responses(&mut self, responses: &[ValidatedItem]) -> Result<(), ExchangeError> {
+		for response in responses {
+			self.observe_response(response)?;
 		}
+		Ok(())
+	}
+
+	fn observe_response(&mut self, item: &ValidatedItem) -> Result<(), ExchangeError> {
+		let response = match item.kind {
+			ItemKind::Accepted => ResponseKind::Accepted,
+			ItemKind::Rejected => ResponseKind::Rejected,
+			_ => return Err(ExchangeError::InvalidResponse),
+		};
+		let rejection = item.rejection.clone();
+		let response_hash = item.response_to.ok_or(ExchangeError::UnexpectedResponse)?;
+		let Some(position) = self.outstanding.iter().position(|request| {
+			request.signed_tlv_hash == response_hash
+				&& request.request_identifier == item.request_identifier
+		}) else {
+			return Err(ExchangeError::UnexpectedResponse);
+		};
+		if item.response_public_key.is_some()
+			&& self.outstanding[position].kind != RequestKind::PublicKeyRequest
+		{
+			return Err(ExchangeError::UnexpectedResponse);
+		}
+		if self.completed.iter().any(|completed| {
+			completed.request.signed_tlv_hash == response_hash
+				&& completed.request.request_identifier == item.request_identifier
+		}) {
+			return Err(ExchangeError::DuplicateResponse);
+		}
+		let completed = CompletedResponse {
+			request: self.outstanding[position].clone(),
+			response,
+			rejection,
+		};
+		let insertion = self.completed.partition_point(|existing| {
+			let existing_position = self
+				.outstanding
+				.iter()
+				.position(|request| {
+					request.signed_tlv_hash == existing.request.signed_tlv_hash
+						&& request.request_identifier == existing.request.request_identifier
+				})
+				.expect("completed responses name outstanding requests");
+			existing_position < position
+		});
+		self.completed.insert(insertion, completed);
 		Ok(())
 	}
 

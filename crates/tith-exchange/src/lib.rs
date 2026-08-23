@@ -5,10 +5,12 @@
 use std::fmt;
 use std::io::{self, Read, Write};
 
-use tith_wire::bundle::{Bundle, BundleError, KeyResolver};
+use tith_wire::bundle::{Bundle, BundleError};
 use tith_wire::item::PayloadError;
 
+mod receive;
 mod response;
+pub use receive::*;
 pub use response::*;
 
 pub trait ExchangeIo: Read + Write {
@@ -24,7 +26,13 @@ pub enum ExchangeError {
 	WrongReplyOrigin,
 	WrongReplyDestination,
 	UnexpectedResponse,
+	UnexpectedRequest,
 	DuplicateResponse,
+	DuplicateRequestIdentifier,
+	InvalidRequestIdentifier,
+	InvalidResponse,
+	UnauthenticatedResponse,
+	UnexpectedPayloadValue,
 	IncompleteResponse { expected: usize, received: usize },
 	Io(io::Error),
 }
@@ -41,7 +49,21 @@ impl fmt::Display for ExchangeError {
 			Self::UnexpectedResponse => {
 				f.write_str("response does not identify an outstanding request")
 			}
+			Self::UnexpectedRequest => {
+				f.write_str("peer sent a request after the local write side was closed")
+			}
 			Self::DuplicateResponse => f.write_str("request received more than one response"),
+			Self::DuplicateRequestIdentifier => {
+				f.write_str("payload contains duplicate RequestIdentifiers")
+			}
+			Self::InvalidRequestIdentifier => f.write_str("request has no valid RequestIdentifier"),
+			Self::InvalidResponse => f.write_str("payload contains an invalid response"),
+			Self::UnauthenticatedResponse => {
+				f.write_str("unauthenticated SignedData contains a response")
+			}
+			Self::UnexpectedPayloadValue => {
+				f.write_str("payload contains an unexpected defined value")
+			}
 			Self::IncompleteResponse { expected, received } => {
 				write!(f, "response ended after {received} of {expected} requests")
 			}
@@ -92,6 +114,7 @@ pub fn send_bundle(
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SessionState {
 	Ready,
+	AwaitingReplyHeader,
 	AwaitingResponses,
 	MustSendReply,
 	Closing,
@@ -135,20 +158,49 @@ impl ClientSession {
 		self.tracker.completed()
 	}
 
-	pub fn initial_sent(&mut self) {
-		self.state = SessionState::AwaitingResponses;
+	/// The requests sent in this round, in transmission order.
+	#[must_use]
+	pub fn requests(&self) -> &[OutstandingRequest] {
+		self.tracker.outstanding()
 	}
 
-	pub fn reply_received(
+	pub fn initial_sent(&mut self) -> Result<(), ExchangeError> {
+		if self.state != SessionState::Ready {
+			self.state = SessionState::Failed;
+			return Err(ExchangeError::UnexpectedResponse);
+		}
+		self.state = SessionState::AwaitingReplyHeader;
+		Ok(())
+	}
+
+	/// Validates the transport identities before any Reply payload is acted on.
+	pub fn reply_header_received(&mut self, reply: &Bundle) -> Result<(), ExchangeError> {
+		if self.state != SessionState::AwaitingReplyHeader {
+			self.state = SessionState::Failed;
+			return Err(ExchangeError::UnexpectedResponse);
+		}
+		if let Err(error) = self.tracker.validate_reply_identity(reply) {
+			self.state = SessionState::Failed;
+			return Err(error);
+		}
+		if self.tracker.is_complete() {
+			self.state = SessionState::Closing;
+		} else {
+			self.state = SessionState::AwaitingResponses;
+		}
+		Ok(())
+	}
+
+	/// Records the already authenticated responses in one received `SignedTLV`.
+	pub fn responses_received(
 		&mut self,
-		reply: &Bundle,
-		resolver: &dyn KeyResolver,
+		responses: &[tith_wire::item::ValidatedItem],
 	) -> Result<(), ExchangeError> {
 		if self.state != SessionState::AwaitingResponses {
 			self.state = SessionState::Failed;
 			return Err(ExchangeError::UnexpectedResponse);
 		}
-		if let Err(error) = self.tracker.observe_reply(reply, resolver) {
+		if let Err(error) = self.tracker.observe_responses(responses) {
 			self.state = SessionState::Failed;
 			return Err(error);
 		}
@@ -162,10 +214,13 @@ impl ClientSession {
 		Ok(())
 	}
 
-	pub fn final_reply_sent(&mut self) {
-		if self.state == SessionState::MustSendReply {
-			self.state = SessionState::Closing;
+	pub fn final_reply_sent(&mut self) -> Result<(), ExchangeError> {
+		if self.state != SessionState::MustSendReply {
+			self.state = SessionState::Failed;
+			return Err(ExchangeError::UnexpectedResponse);
 		}
+		self.state = SessionState::Closing;
+		Ok(())
 	}
 
 	pub fn closed(&mut self) -> Result<(), ExchangeError> {
@@ -174,7 +229,11 @@ impl ClientSession {
 			Ok(())
 		} else {
 			self.state = SessionState::Failed;
-			self.tracker.require_complete()
+			if self.tracker.is_complete() {
+				Err(ExchangeError::UnexpectedResponse)
+			} else {
+				self.tracker.require_complete()
+			}
 		}
 	}
 }
@@ -192,6 +251,7 @@ mod tests {
 	use tith_wire::integer::encode_u64;
 	use tith_wire::item::{
 		RejectionReason, accepted, accepted_public_key, public_key_request, rejected,
+		validate_payload,
 	};
 	use tith_wire::tlv::{OwnedTlv, parse_sequence};
 	use tith_wire::types;
@@ -201,6 +261,49 @@ mod tests {
 	struct MemoryIo {
 		cursor: Cursor<Vec<u8>>,
 		shutdown: bool,
+	}
+
+	#[derive(Clone, Copy)]
+	enum IoFault {
+		Write,
+		Flush,
+		Shutdown,
+	}
+
+	struct FaultIo(IoFault);
+
+	impl Read for FaultIo {
+		fn read(&mut self, _: &mut [u8]) -> io::Result<usize> {
+			Ok(0)
+		}
+	}
+
+	impl Write for FaultIo {
+		fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
+			if matches!(self.0, IoFault::Write) {
+				Err(io::Error::other("write failed"))
+			} else {
+				Ok(buffer.len())
+			}
+		}
+
+		fn flush(&mut self) -> io::Result<()> {
+			if matches!(self.0, IoFault::Flush) {
+				Err(io::Error::other("flush failed"))
+			} else {
+				Ok(())
+			}
+		}
+	}
+
+	impl ExchangeIo for FaultIo {
+		fn shutdown_write(&mut self) -> io::Result<()> {
+			if matches!(self.0, IoFault::Shutdown) {
+				Err(io::Error::other("shutdown failed"))
+			} else {
+				Ok(())
+			}
+		}
 	}
 
 	impl Read for MemoryIo {
@@ -252,6 +355,139 @@ mod tests {
 		send_bundle(&mut io, b"bundle", false).unwrap();
 		assert!(io.shutdown);
 		assert_eq!(io.cursor.into_inner(), b"bundle");
+
+		let mut open = MemoryIo {
+			cursor: Cursor::new(Vec::new()),
+			shutdown: false,
+		};
+		send_bundle(&mut open, b"bundle", true).unwrap();
+		assert!(!open.shutdown);
+
+		for fault in [IoFault::Write, IoFault::Flush, IoFault::Shutdown] {
+			assert!(matches!(
+				send_bundle(&mut FaultIo(fault), b"bundle", false),
+				Err(ExchangeError::Io(_))
+			));
+		}
+	}
+
+	#[test]
+	fn client_session_enforces_header_response_reply_and_close_order() {
+		let a_keys = SigningKeyPair::from_seed(&[18; 32]).unwrap();
+		let b_keys = SigningKeyPair::from_seed(&[19; 32]).unwrap();
+		let a = Identity {
+			address: "fidonet#1/18".parse().unwrap(),
+			public_key: a_keys.public,
+		};
+		let b = Identity {
+			address: "fidonet#1/19".parse().unwrap(),
+			public_key: b_keys.public,
+		};
+		let resolver = |address: &Address| {
+			(address == &a.address)
+				.then_some(a.public_key)
+				.or_else(|| (address == &b.address).then_some(b.public_key))
+		};
+		let poll = container(
+			types::POLL_MESSAGES,
+			&[OwnedTlv::new(types::REQUEST_IDENTIFIER, encode_u64(7)).unwrap()],
+		);
+		let request = Bundle::parse(
+			&build_bundle(&a, &a_keys.secret, &b, 1, vec![vec![poll]]).unwrap(),
+			&resolver,
+		)
+		.unwrap();
+		let tracker = ResponseTracker::for_bundle(&request, &resolver).unwrap();
+		let outstanding = tracker.outstanding()[0].clone();
+		let reply = Bundle::parse(
+			&build_bundle(
+				&b,
+				&b_keys.secret,
+				&a,
+				2,
+				vec![vec![
+					accepted(outstanding.request_identifier, outstanding.signed_tlv_hash).unwrap(),
+				]],
+			)
+			.unwrap(),
+			&resolver,
+		)
+		.unwrap();
+		let responses = validate_payload(&reply.payloads[0], &resolver).unwrap();
+
+		let mut before_send = ClientSession::new(tracker.clone());
+		assert!(matches!(
+			before_send.reply_header_received(&reply),
+			Err(ExchangeError::UnexpectedResponse)
+		));
+		assert_eq!(before_send.state(), SessionState::Failed);
+		assert!(before_send.initial_sent().is_err());
+
+		let mut before_header = ClientSession::new(tracker.clone());
+		before_header.initial_sent().unwrap();
+		assert_eq!(before_header.state(), SessionState::AwaitingReplyHeader);
+		assert!(matches!(
+			before_header.responses_received(&responses),
+			Err(ExchangeError::UnexpectedResponse)
+		));
+
+		let mut wrong_identity = ClientSession::new(tracker.clone());
+		wrong_identity.initial_sent().unwrap();
+		let mut wrong_reply = reply.clone();
+		wrong_reply.origin = a.clone();
+		assert!(matches!(
+			wrong_identity.reply_header_received(&wrong_reply),
+			Err(ExchangeError::WrongReplyOrigin)
+		));
+		assert_eq!(wrong_identity.state(), SessionState::Failed);
+
+		let mut incomplete = ClientSession::new(tracker.clone());
+		incomplete.initial_sent().unwrap();
+		incomplete.reply_header_received(&reply).unwrap();
+		assert_eq!(incomplete.state(), SessionState::AwaitingResponses);
+		assert!(matches!(
+			incomplete.closed(),
+			Err(ExchangeError::IncompleteResponse {
+				expected: 1,
+				received: 0
+			})
+		));
+
+		let mut session = ClientSession::new(tracker);
+		assert!(session.requires_return_bundle());
+		assert_eq!(session.requests().len(), 1);
+		assert!(session.responses().is_empty());
+		session.initial_sent().unwrap();
+		session.reply_header_received(&reply).unwrap();
+		session.responses_received(&responses).unwrap();
+		assert_eq!(session.state(), SessionState::MustSendReply);
+		session.final_reply_sent().unwrap();
+		assert_eq!(session.state(), SessionState::Closing);
+		session.closed().unwrap();
+		assert_eq!(session.state(), SessionState::Complete);
+		assert!(matches!(
+			session.closed(),
+			Err(ExchangeError::UnexpectedResponse)
+		));
+		assert_eq!(session.state(), SessionState::Failed);
+
+		let empty_request = Bundle::parse(
+			&build_bundle(&a, &a_keys.secret, &b, 3, vec![Vec::new()]).unwrap(),
+			&resolver,
+		)
+		.unwrap();
+		let empty_reply = Bundle::parse(
+			&build_bundle(&b, &b_keys.secret, &a, 4, Vec::new()).unwrap(),
+			&resolver,
+		)
+		.unwrap();
+		let mut empty =
+			ClientSession::new(ResponseTracker::for_bundle(&empty_request, &resolver).unwrap());
+		assert!(!empty.requires_return_bundle());
+		empty.initial_sent().unwrap();
+		empty.reply_header_received(&empty_reply).unwrap();
+		assert_eq!(empty.state(), SessionState::Closing);
+		assert!(empty.final_reply_sent().is_err());
 	}
 
 	#[test]
@@ -293,6 +529,13 @@ mod tests {
 		};
 		let request = Bundle::parse(&request_bytes, &resolver).unwrap();
 		assert_eq!(request.public_key_request().unwrap(), None);
+		let request_item = validate_payload(&request.payloads[0], &resolver).unwrap();
+		let mut invalid_response_tracker =
+			ResponseTracker::for_bundle(&request, &resolver).unwrap();
+		assert!(matches!(
+			invalid_response_tracker.observe_responses(&request_item[..1]),
+			Err(ExchangeError::InvalidResponse)
+		));
 		let mut tracker = ResponseTracker::for_bundle(&request, &resolver).unwrap();
 		assert!(tracker.requires_return_bundle());
 		assert!(matches!(

@@ -1,0 +1,69 @@
+name: Qualify TTS-0006
+
+on:
+  push:
+    paths:
+      - "standards/TTS-0005.txt"
+      - "standards/TTS-0006.txt"
+      - "standards/TTS-0008.txt"
+      - "standards/TTS-0009.txt"
+      - "Cargo.lock"
+      - "rust-toolchain.toml"
+      - ".github/workflows/rust.yml"
+      - "crates/tith-exchange/src/lib.rs"
+      - "crates/tith-exchange/src/receive.rs"
+      - "crates/tith-exchange/src/response.rs"
+      - "crates/tithd/src/client_exchange.rs"
+      - "crates/tithd/src/deliver.rs"
+      - "crates/tithd/src/framing.rs"
+      - "crates/tithd/src/mail.rs"
+      - "crates/tithd/src/public_key_response.rs"
+      - "crates/tithd/src/server_exchange.rs"
+      - "qualification/check_source_line_coverage.py"
+      - "qualification/TTS-0006.013.md"
+      - ".github/workflows/qualify-tts-0006.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  coverage:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - name: Install pinned coverage toolchain
+        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772
+        with:
+          toolchain: nightly-2026-08-20
+          components: llvm-tools-preview
+
+      - name: Install pinned coverage driver
+        run: cargo install cargo-llvm-cov --version 0.9.0 --locked
+
+      - name: Exercise the complete reference implementation
+        run: cargo test --workspace
+
+      - name: Exercise the TTS-0006 conformance surface
+        run: |
+          cargo +nightly-2026-08-20 llvm-cov clean --workspace
+          cargo +nightly-2026-08-20 llvm-cov --branch --workspace \
+            --json --output-path tts-0006-coverage.json
+
+      - name: Report source coverage
+        run: cargo +nightly-2026-08-20 llvm-cov report --branch --text --show-missing-lines
+
+      - name: Require complete conformance coverage
+        run: |
+          sha256sum tts-0006-coverage.json
+          python3 qualification/check_source_line_coverage.py \
+            tts-0006-coverage.json \
+            crates/tith-exchange/src/lib.rs \
+            crates/tith-exchange/src/receive.rs \
+            crates/tith-exchange/src/response.rs \
+            crates/tithd/src/client_exchange.rs \
+            crates/tithd/src/framing.rs \
+            crates/tithd/src/public_key_response.rs \
+            crates/tithd/src/server_exchange.rs

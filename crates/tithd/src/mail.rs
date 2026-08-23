@@ -1,32 +1,23 @@
-use std::collections::HashSet;
 use std::error::Error;
-use std::io::{Read, Write};
-use std::net::{Shutdown, SocketAddr, TcpListener, TcpStream};
+use std::net::{SocketAddr, TcpListener};
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
 use crate::now;
 use tith_config::{ConfigurationSet, IdentityRef};
-use tith_crypto::{SECRET_KEY_BYTES, SecretKey, TlvHash, hash_tlv, sign_tlv, verify_tlv};
-use tith_exchange::ServerReply;
+use tith_crypto::{SECRET_KEY_BYTES, SecretKey, sign_tlv, verify_tlv};
 use tith_nodelist::Nodelist;
-use tith_store::{DeliveryClaim, DeliveryOutcome, InboundStore, JobKind, OutboundStore};
+use tith_store::InboundStore;
 use tith_wire::address::Address;
-use tith_wire::bundle::{
-	Bundle, BundleError, Identity, KeyResolver, unauthenticated_signed_data, verify_signed_tlv,
-};
+use tith_wire::bundle::{Identity, KeyResolver};
 
 use crate::accept::Acceptance;
 use crate::deliver::{LocalIdentity, Outbound};
-use crate::framing::{IncomingBundle, read_header};
 use crate::schedule::{Activation, Scheduler};
-use tith_wire::item::{
-	ItemKind, RejectionReason, ValidatedItem, accepted, rejected, request_identifier,
-	set_request_identifier, validate_item,
-};
-use tith_wire::tlv::{OwnedTlv, TlvReader, parse_sequence};
-use tith_wire::types;
+use crate::server_exchange::transaction;
+#[cfg(test)]
+use crate::server_exchange::{PollHold, validate_final_reply};
 
 pub fn write_secret(path: &Path, secret: &SecretKey) -> Result<(), Box<dyn Error>> {
 	crate::owner_only::write_file(path, secret.as_bytes())?;
@@ -118,19 +109,19 @@ pub fn serve(
 	Ok(())
 }
 
-struct Mailer {
-	store: Arc<InboundStore>,
-	application: String,
-	configuration: Arc<ConfigurationSet>,
-	nodelist: Arc<Nodelist>,
-	local_ref: IdentityRef,
-	local: Identity,
-	local_secret: Arc<SecretKey>,
-	retired_secrets: Vec<Arc<SecretKey>>,
+pub(super) struct Mailer {
+	pub(super) store: Arc<InboundStore>,
+	pub(super) application: String,
+	pub(super) configuration: Arc<ConfigurationSet>,
+	pub(super) nodelist: Arc<Nodelist>,
+	pub(super) local_ref: IdentityRef,
+	pub(super) local: Identity,
+	pub(super) local_secret: Arc<SecretKey>,
+	pub(super) retired_secrets: Vec<Arc<SecretKey>>,
 }
 
 impl Mailer {
-	fn acceptance(&self) -> Acceptance<'_> {
+	pub(super) fn acceptance(&self) -> Acceptance<'_> {
 		Acceptance {
 			store: &self.store,
 			application: &self.application,
@@ -276,471 +267,27 @@ fn run_activation(
 	}
 }
 
-/// A delivery copy returned in a poll snapshot, awaiting its response.
-///
-/// The copy stays claimed until the peer's final Reply Bundle says what became
-/// of it, so a connection which dies mid-transfer does not lose the item.
-struct PollHold {
-	signed_tlv_hash: TlvHash,
-	request_identifier: u64,
-	relayed: bool,
-	claim: DeliveryClaim,
-}
-
-fn transaction(stream: TcpStream, mailer: &Mailer) -> Result<(), Box<dyn Error>> {
-	let mut writer = stream.try_clone()?;
-	let mut reader = TlvReader::new(stream);
-	let request = read_header(&mut reader, None, mailer)?.ok_or("empty mail connection")?;
-	let first = reader
-		.read_next()?
-		.map(tith_wire::tlv::TlvValue::read_owned)
-		.transpose()?;
-	if let Some(value) = first.as_ref()
-		&& value.type_code == types::SIGNED_TLV
-		&& unauthenticated_signed_data(value).is_ok_and(|data| {
-			data.len() == 2
-				&& data[0].type_code == types::TLV_HASH
-				&& data[1].type_code == types::PUBLIC_KEY_REQUEST
-		}) {
-		let mut encoded = request.prefix.clone();
-		encoded.extend_from_slice(&value.encode());
-		let probe = Bundle::parse(&encoded, mailer)?;
-		if let Some((request_identifier, response_to)) = probe.public_key_request()? {
-			if reader.read_next()?.is_some() {
-				return Err("PublicKeyRequest must be the sole request in its Bundle".into());
-			}
-			return answer_public_key_request(
-				&mut writer,
-				&request,
-				request_identifier,
-				response_to,
-				mailer,
-			);
-		}
-	}
-	let reply =
-		ServerReply::for_request(&request.bundle, &mailer.local, &mailer.local_secret, now())?;
-	writer.write_all(reply.prefix())?;
-	writer.flush()?;
-
-	let mut holds = Vec::new();
-	let result = respond(
-		&mut reader,
-		&mut writer,
-		&request,
-		&reply,
-		mailer,
-		&mut holds,
-		first,
-	);
-	// Whatever happened, every copy this connection claimed needs an outcome.
-	// TSP-0002 section 6: a request with no complete response remains eligible
-	// and does not invoke permanent failure policy.
-	release_holds(&holds, mailer)?;
-	result?;
-	writer.shutdown(Shutdown::Write)?;
-	Ok(())
-}
-
-fn answer_public_key_request(
-	writer: &mut TcpStream,
-	request: &IncomingBundle,
-	request_identifier: u64,
-	response_to: TlvHash,
-	mailer: &Mailer,
-) -> Result<(), Box<dyn Error>> {
-	if request.bundle.destination.address != mailer.local.address {
-		return Err("PublicKeyRequest names a different local address".into());
-	}
-	let encoded = crate::public_key_response::build(
-		&mailer.local,
-		&mailer.local_secret,
-		&mailer.retired_secrets,
-		crate::public_key_response::Parameters {
-			destination: &request.bundle.origin,
-			requested: request.bundle.destination.public_key,
-			timestamp: now(),
-			identifier: request_identifier,
-			response_to,
-		},
-	)?;
-	writer.write_all(&encoded)?;
-	writer.flush()?;
-	writer.shutdown(Shutdown::Write)?;
-	Ok(())
-}
-
-fn respond(
-	reader: &mut TlvReader<TcpStream>,
-	writer: &mut TcpStream,
-	request: &IncomingBundle,
-	reply: &ServerReply,
-	mailer: &Mailer,
-	holds: &mut Vec<PollHold>,
-	mut first: Option<OwnedTlv>,
-) -> Result<(), Box<dyn Error>> {
-	loop {
-		let value = if let Some(value) = first.take() {
-			value
-		} else {
-			let Some(value) = reader.read_next()? else {
-				break;
-			};
-			value.read_owned()?
-		};
-		match value.type_code {
-			types::SIGNED_TLV => {
-				let first_hold = holds.len();
-				let responses = payload_responses(&value, request, mailer, holds)?;
-				if !responses.is_empty() {
-					let encoded = reply.payload(responses, &mailer.local_secret)?;
-					writer.write_all(&encoded)?;
-					writer.flush()?;
-					// The peer answers a returned value by naming the SignedTLV it
-					// arrived in, which is the one just written.
-					let signed_tlv_hash = hash_tlv(&encoded)?;
-					for hold in &mut holds[first_hold..] {
-						hold.signed_tlv_hash = signed_tlv_hash;
-					}
-				}
-			}
-			types::ORIGIN => {
-				validate_final_reply(reader, value, request, mailer, holds)?;
-				break;
-			}
-			type_code if types::is_defined(type_code) => {
-				return Err("unexpected defined top-level value".into());
-			}
-			_ => {}
-		}
-	}
-	Ok(())
-}
-
-/// Retains every copy still held when the connection ends.
-fn release_holds(holds: &[PollHold], mailer: &Mailer) -> Result<(), Box<dyn Error>> {
-	if holds.is_empty() {
-		return Ok(());
-	}
-	let outbound = mailer.store.outbound()?;
-	for hold in holds {
-		outbound.finish_delivery(
-			&hold.claim.job_id,
-			hold.claim.delivery_index,
-			&hold.claim.worker_token,
-			now(),
-			DeliveryOutcome::Deferred {
-				retry_at: now(),
-				result: "poll ended without a response for this value".to_owned(),
-			},
-		)?;
-	}
-	Ok(())
-}
-
-fn payload_responses(
-	value: &OwnedTlv,
-	request: &IncomingBundle,
-	mailer: &Mailer,
-	holds: &mut Vec<PollHold>,
-) -> Result<Vec<OwnedTlv>, Box<dyn Error>> {
-	let response_to = hash_tlv(&value.encode())?;
-	let payload = match verify_signed_tlv(value, Some(&request.bundle.origin), mailer) {
-		Ok(payload) => payload,
-		Err(BundleError::InvalidSignature) => {
-			return unauthenticated_responses(value, response_to);
-		}
-		Err(error) => return Err(error.into()),
-	};
-	let request_values = if payload
-		.data
-		.first()
-		.is_some_and(|first| first.type_code == types::TLV_HASH)
-	{
-		&payload.data[1..]
-	} else {
-		payload.data.as_slice()
-	};
-	require_distinct_request_identifiers(request_values)?;
-	let correct_header = payload.data.first().is_some_and(|first| {
-		first.type_code == types::TLV_HASH
-			&& first.value.as_slice() == request.header_hash.as_bytes()
-	});
-	let mut responses = Vec::new();
-	let mut returned_identifier = 0u64;
-	for value in request_values {
-		if matches!(value.type_code, types::ACCEPTED | types::REJECTED) {
-			return Err("an initial Bundle contains a response value".into());
-		}
-		if !types::is_request(value.type_code) {
-			if types::is_defined(value.type_code) {
-				return Err("unexpected defined payload value".into());
-			}
-			continue;
-		}
-		if !correct_header {
-			responses.push(malformed_rejection(value, response_to)?);
-			continue;
-		}
-		match validate_item(value, mailer) {
-			Ok(Some(item)) => {
-				if let Some(kinds) = poll_kinds(item.kind) {
-					let claims = poll_snapshot(kinds, request, mailer)?;
-					// TTS-0005 section 3: every value in the snapshot is returned in
-					// the same `SignedTLV` as the Accepted, which is the one these
-					// responses are about to be built into.
-					for claim in claims {
-						returned_identifier = returned_identifier
-							.checked_add(1)
-							.ok_or("too many values returned in one SignedTLV")?;
-						// Register the claim before parsing or encoding its item. Any
-						// later error reaches `transaction`'s common release path; the
-						// real response hash is filled in after this SignedTLV is sent.
-						holds.push(PollHold {
-							signed_tlv_hash: TlvHash::from_bytes([0; 32]),
-							request_identifier: returned_identifier,
-							relayed: false,
-							claim,
-						});
-						let returned =
-							single_value(&holds.last().expect("hold was pushed").claim.item)?;
-						let relayed = crate::deliver::is_relay_delivery(
-							&returned,
-							&request.bundle.origin,
-							mailer,
-						)?;
-						holds.last_mut().expect("hold was pushed").relayed = relayed;
-						responses.push(set_request_identifier(&returned, returned_identifier)?);
-					}
-					responses.push(accepted(item.request_identifier, response_to)?);
-				} else {
-					responses.push(mailer.acceptance().dispatch(
-						&item,
-						response_to,
-						&request.bundle.origin,
-					)?);
-				}
-			}
-			Ok(None) => unreachable!("request types always produce an item"),
-			Err(_) => responses.push(malformed_rejection(value, response_to)?),
-		}
-	}
-	Ok(responses)
-}
-
-/// The spool kinds a Poll value asks for.
-///
-/// TSP-0002 section 8: `PollFiles` returns both held distribution Files and
-/// held peer-addressed Files, because TTS-0005 section 3 type 70 asks for held
-/// standalone Files without distinguishing them.
-fn poll_kinds(kind: ItemKind) -> Option<&'static [JobKind]> {
-	match kind {
-		ItemKind::PollMessages => Some(&[JobKind::NetMail, JobKind::EchoMail]),
-		ItemKind::PollFiles => Some(&[JobKind::File, JobKind::PeerFile]),
-		ItemKind::PollFileRequests => Some(&[JobKind::FileRequest]),
-		_ => None,
-	}
-}
-
-/// Atomically claims everything held for the authenticated Bundle Origin.
-fn poll_snapshot(
-	kinds: &[JobKind],
-	request: &IncomingBundle,
-	mailer: &Mailer,
-) -> Result<Vec<DeliveryClaim>, Box<dyn Error>> {
-	if kinds.is_empty() {
-		return Ok(Vec::new());
-	}
-	let origin = &request.bundle.origin;
-	// An anonymous Origin is only identified together with its PublicKey, so the
-	// key is part of the match rather than the address alone.
-	let key = origin.address.is_anonymous().then_some(&origin.public_key);
-	Ok(mailer.store.outbound()?.claim_poll_snapshot(
-		&origin.address.to_string(),
-		key,
-		kinds,
-		now(),
-	)?)
-}
-
-fn single_value(encoded: &[u8]) -> Result<OwnedTlv, Box<dyn Error>> {
-	let mut values = parse_sequence(encoded)?;
-	if values.len() != 1 {
-		return Err("spooled item is not a single TLV value".into());
-	}
-	Ok(values.remove(0))
-}
-
-fn unauthenticated_responses(
-	value: &OwnedTlv,
-	response_to: TlvHash,
-) -> Result<Vec<OwnedTlv>, Box<dyn Error>> {
-	let data = unauthenticated_signed_data(value)?;
-	if data
-		.iter()
-		.any(|value| matches!(value.type_code, types::ACCEPTED | types::REJECTED))
-	{
-		return Err("unauthenticated SignedData contains a response".into());
-	}
-	require_distinct_request_identifiers(&data)?;
-	let mut responses = Vec::new();
-	for value in data
-		.iter()
-		.filter(|value| types::is_request(value.type_code))
-	{
-		let identifier = request_identifier(value)
-			.ok_or("unauthenticated request has no valid RequestIdentifier")?;
-		responses.push(rejected(
-			identifier,
-			response_to,
-			None,
-			RejectionReason::Permanent,
-			"payload SignedTLV authentication failed",
-		)?);
-	}
-	Ok(responses)
-}
-
-/// Rejects a payload whose request direction cannot be correlated uniquely.
-fn require_distinct_request_identifiers(values: &[OwnedTlv]) -> Result<(), Box<dyn Error>> {
-	let mut identifiers = HashSet::new();
-	for value in values
-		.iter()
-		.filter(|value| types::is_request(value.type_code))
-	{
-		if let Some(identifier) = request_identifier(value)
-			&& !identifiers.insert(identifier)
-		{
-			return Err("payload SignedTLV contains duplicate RequestIdentifiers".into());
-		}
-	}
-	Ok(())
-}
-
-fn malformed_rejection(value: &OwnedTlv, response_to: TlvHash) -> Result<OwnedTlv, Box<dyn Error>> {
-	let identifier = request_identifier(value)
-		.ok_or("authenticated malformed request has no valid RequestIdentifier")?;
-	// Retrying the same authenticated malformed value cannot make it valid;
-	// the sender must construct a corrected TLV value.
-	Ok(rejected(
-		identifier,
-		response_to,
-		None,
-		RejectionReason::Permanent,
-		"authenticated request has a data error",
-	)?)
-}
-
-fn validate_final_reply<R: Read>(
-	reader: &mut TlvReader<R>,
-	first: OwnedTlv,
-	request: &IncomingBundle,
-	mailer: &Mailer,
-	holds: &mut Vec<PollHold>,
-) -> Result<(), Box<dyn Error>> {
-	let reply = read_header(reader, Some(first), mailer)?.ok_or("missing final Reply Bundle")?;
-	if reply.bundle.origin != request.bundle.origin || reply.bundle.destination != mailer.local {
-		return Err("final Reply Bundle has the wrong identities".into());
-	}
-	if holds.is_empty() {
-		return Ok(());
-	}
-	let outbound = mailer.store.outbound()?;
-	while let Some(value) = reader.read_next()? {
-		let value = value.read_owned()?;
-		if value.type_code == types::SIGNED_TLV {
-			let payload = verify_signed_tlv(&value, Some(&reply.bundle.origin), mailer)?;
-			let correct_header = payload.data.first().is_some_and(|first| {
-				first.type_code == types::TLV_HASH
-					&& first.value.as_slice() == reply.header_hash.as_bytes()
-			});
-			if !correct_header {
-				return Err("final Reply Bundle payload has the wrong header hash".into());
-			}
-			for value in payload.data.iter().skip(1) {
-				// A Poll returns values which the peer must answer here; nothing
-				// else belongs in a final Reply Bundle.
-				if !matches!(value.type_code, types::ACCEPTED | types::REJECTED) {
-					if types::is_defined(value.type_code) {
-						return Err("unexpected value in final Reply Bundle".into());
-					}
-					continue;
-				}
-				let Some(item) = validate_item(value, mailer)? else {
-					return Err("unreadable response in final Reply Bundle".into());
-				};
-				resolve_hold(&item, holds, &outbound)?;
-			}
-			// TTS-0005 section 6 makes the Reply Bundle complete once the
-			// authenticated SignedTLV containing the last expected response has
-			// arrived. The Server must not wait for the Client's FIN.
-			if holds.is_empty() {
-				return Ok(());
-			}
-		} else if types::is_defined(value.type_code) {
-			return Err("unexpected top-level value after final Reply Header".into());
-		}
-	}
-	Err(format!(
-		"final Reply Bundle ended with {} response(s) missing",
-		holds.len()
-	)
-	.into())
-}
-
-/// Applies one peer response to the copy it answers.
-///
-/// TTS-0005 section 6 permits responses in any order, so the hash and identifier
-/// select the outstanding hold directly.
-fn resolve_hold(
-	item: &ValidatedItem,
-	holds: &mut Vec<PollHold>,
-	outbound: &OutboundStore,
-) -> Result<(), Box<dyn Error>> {
-	let response_to = item
-		.response_to
-		.ok_or("final Reply Bundle response has no ResponseTo")?;
-	let position = holds
-		.iter()
-		.position(|hold| {
-			hold.signed_tlv_hash == response_to
-				&& hold.request_identifier == item.request_identifier
-		})
-		.ok_or("final Reply Bundle has a duplicate or unexpected response")?;
-	let hold = &holds[position];
-	let outcome = match item.kind {
-		ItemKind::Accepted => DeliveryOutcome::Delivered("accepted by poll".to_owned()),
-		_ => crate::deliver::rejection_outcome(item.rejection.as_ref(), now(), hold.relayed),
-	};
-	outbound.finish_delivery(
-		&hold.claim.job_id,
-		hold.claim.delivery_index,
-		&hold.claim.worker_token,
-		now(),
-		outcome,
-	)?;
-	holds.remove(position);
-	Ok(())
-}
-
 #[cfg(test)]
 mod tests {
 	use base64::Engine as _;
 	use base64::engine::general_purpose::STANDARD_NO_PAD;
 	use std::fs;
 	use std::io::{Cursor, Read, Write};
+	use std::net::{Shutdown, TcpStream};
 	use std::sync::Arc;
 	use std::time::{SystemTime, UNIX_EPOCH};
-	use tith_crypto::{SigningKeyPair, sign_tlv};
+	use tith_crypto::{SigningKeyPair, TlvHash, hash_tlv, sign_tlv};
 	use tith_ipc::{Document, EnvelopeKind};
 
-	use tith_store::{ClaimResult, ItemAuthentication};
+	use tith_store::{ClaimResult, ItemAuthentication, JobKind};
 	use tith_wire::bundle::Bundle;
-	use tith_wire::bundle::{build_bundle, build_signed_tlv};
+	use tith_wire::bundle::{BundleError, build_bundle, build_signed_tlv, verify_signed_tlv};
 	use tith_wire::integer::{decode_u64_prefix, encode_u64};
-	use tith_wire::item::ItemKind;
-	use tith_wire::item::validate_payload;
-	use tith_wire::tlv::parse_sequence;
+	use tith_wire::item::{ItemKind, RejectionReason, accepted, validate_payload};
+	use tith_wire::tlv::{OwnedTlv, TlvReader, parse_sequence};
+	use tith_wire::types;
+
+	use crate::framing::{IncomingBundle, read_header};
 
 	use super::*;
 
@@ -1168,7 +715,10 @@ mod tests {
 		top.push(build_signed_tlv(&[poll], None, &peer_keys.secret).unwrap());
 		let request = top.iter().flat_map(OwnedTlv::encode).collect::<Vec<_>>();
 		let (response, completed) = exchange(&request, &mailer);
-		assert!(completed);
+		assert!(
+			!completed,
+			"the reason-1 response is sent before the required close"
+		);
 		assert_eq!(response_kind(&response, &mailer), ItemKind::Rejected);
 		assert_eq!(
 			rejected_reason(&response, &mailer),
@@ -1976,6 +1526,132 @@ mod tests {
 			.map(|item| item.request_identifier)
 			.collect::<Vec<_>>();
 		assert_eq!(statuses, vec![1, 2]);
+		drop(mailer);
+		fs::remove_file(database).unwrap();
+	}
+
+	#[test]
+	fn a_client_reply_can_start_another_server_reply_round() {
+		let (mailer, peer_keys, peer, local, database) = setup();
+		let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+		let address = listener.local_addr().unwrap();
+		let server_mailer = Arc::clone(&mailer);
+		let server = std::thread::spawn(move || {
+			let (stream, _) = listener.accept().unwrap();
+			transaction(stream, &server_mailer).unwrap();
+		});
+		let mut client = TcpStream::connect(address).unwrap();
+		let mut reader = TlvReader::new(client.try_clone().unwrap());
+
+		let poll = container(
+			types::POLL_MESSAGES,
+			&[OwnedTlv::new(types::REQUEST_IDENTIFIER, encode_u64(1)).unwrap()],
+		);
+		let initial = build_bundle(&peer, &peer_keys.secret, &local, 1, vec![vec![poll]]).unwrap();
+		client.write_all(&initial).unwrap();
+		client.flush().unwrap();
+
+		let first_reply = read_header(&mut reader, None, mailer.as_ref())
+			.unwrap()
+			.unwrap();
+		let first_payload = reader.read_next().unwrap().unwrap().read_owned().unwrap();
+		let mut first_bytes = first_reply.prefix;
+		first_bytes.extend_from_slice(&first_payload.encode());
+		assert_eq!(
+			response_kind(&first_bytes, mailer.as_ref()),
+			ItemKind::Accepted
+		);
+
+		// The required Client Reply also carries a new Poll. The Server must
+		// answer it and wait for another Client Reply rather than imposing a
+		// round-count limit.
+		let next_poll = container(
+			types::POLL_FILES,
+			&[OwnedTlv::new(types::REQUEST_IDENTIFIER, encode_u64(2)).unwrap()],
+		);
+		let next =
+			build_bundle(&peer, &peer_keys.secret, &local, 2, vec![vec![next_poll]]).unwrap();
+		client.write_all(&next).unwrap();
+		client.flush().unwrap();
+
+		let second_reply = read_header(&mut reader, None, mailer.as_ref())
+			.unwrap()
+			.unwrap();
+		let second_payload = reader.read_next().unwrap().unwrap().read_owned().unwrap();
+		let mut second_bytes = second_reply.prefix;
+		second_bytes.extend_from_slice(&second_payload.encode());
+		assert_eq!(
+			response_kind(&second_bytes, mailer.as_ref()),
+			ItemKind::Accepted
+		);
+
+		let message = netmail(&peer, &peer_keys.secret, &local, 3);
+		let third = build_bundle(&peer, &peer_keys.secret, &local, 3, vec![vec![message]]).unwrap();
+		client.write_all(&third).unwrap();
+		client.flush().unwrap();
+		client.shutdown(Shutdown::Write).unwrap();
+		let third_reply = read_header(&mut reader, None, mailer.as_ref())
+			.unwrap()
+			.unwrap();
+		let third_payload = reader.read_next().unwrap().unwrap().read_owned().unwrap();
+		let mut third_bytes = third_reply.prefix;
+		third_bytes.extend_from_slice(&third_payload.encode());
+		assert_eq!(
+			response_kind(&third_bytes, mailer.as_ref()),
+			ItemKind::Accepted
+		);
+		drop(reader);
+		drop(client);
+		server.join().unwrap();
+
+		assert!(matches!(
+			mailer
+				.store
+				.claim("tosser", "continued", now().saturating_add(1), 60)
+				.unwrap(),
+			ClaimResult::Completed(_)
+		));
+		drop(mailer);
+		fs::remove_file(database).unwrap();
+	}
+
+	#[test]
+	fn a_bundle_without_a_poll_cannot_start_another_reply_round() {
+		let (mailer, peer_keys, peer, local, database) = setup();
+		let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+		let address = listener.local_addr().unwrap();
+		let server_mailer = Arc::clone(&mailer);
+		let server = std::thread::spawn(move || {
+			let (stream, _) = listener.accept().unwrap();
+			transaction(stream, &server_mailer).is_err()
+		});
+		let mut client = TcpStream::connect(address).unwrap();
+		let first = build_bundle(
+			&peer,
+			&peer_keys.secret,
+			&local,
+			1,
+			vec![vec![netmail(&peer, &peer_keys.secret, &local, 1)]],
+		)
+		.unwrap();
+		let second = build_bundle(
+			&peer,
+			&peer_keys.secret,
+			&local,
+			2,
+			vec![vec![netmail(&peer, &peer_keys.secret, &local, 2)]],
+		)
+		.unwrap();
+		client.write_all(&first).unwrap();
+		client.write_all(&second).unwrap();
+		client.shutdown(Shutdown::Write).unwrap();
+		let mut response = Vec::new();
+		client.read_to_end(&mut response).unwrap();
+		assert_eq!(
+			response_kind(&response, mailer.as_ref()),
+			ItemKind::Accepted
+		);
+		assert!(server.join().unwrap());
 		drop(mailer);
 		fs::remove_file(database).unwrap();
 	}

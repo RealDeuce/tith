@@ -1,6 +1,7 @@
 #![deny(unsafe_code)]
 
 mod accept;
+mod client_exchange;
 mod deliver;
 mod filesystem;
 mod framing;
@@ -9,6 +10,7 @@ mod mail;
 mod owner_only;
 mod public_key_response;
 mod schedule;
+mod server_exchange;
 mod submission;
 mod tcp;
 #[cfg(unix)]

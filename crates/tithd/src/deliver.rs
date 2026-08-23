@@ -11,16 +11,16 @@
 //! peers share the address `p2p#-1`.
 
 use std::error::Error;
-use std::io::{self, Read};
+use std::io;
 use std::net::{Shutdown, TcpStream, ToSocketAddrs};
 use std::sync::Arc;
 use std::time::Duration;
 
 use tith_config::{ConfigurationSet, IdentityRef, Schedule};
-use tith_crypto::{PublicKey, SecretKey, TlvHash, hash_tlv};
+use tith_crypto::{PublicKey, SecretKey, hash_tlv};
 use tith_exchange::{
-	ClientSession, CompletedResponse, ExchangeError, ExchangeIo, RequestKind, ResponseKind,
-	ResponseTracker, SessionState, send_bundle,
+	ClientSession, CompletedResponse, OutstandingRequest, RequestKind, ResponseKind,
+	ResponseTracker, send_bundle,
 };
 use tith_nodelist::Nodelist;
 use tith_router::selector_matches;
@@ -33,13 +33,14 @@ use tith_wire::bundle::{
 };
 use tith_wire::integer::encode_u64;
 use tith_wire::item::{
-	ItemKind, Rejection, RejectionReason, set_request_identifier, validate_item, validate_payload,
+	Rejection, RejectionReason, set_request_identifier, validate_item, validate_payload,
 };
 use tith_wire::tlv::{OwnedTlv, TlvReader, parse_sequence};
 use tith_wire::types;
 
-use crate::accept::Acceptance;
-use crate::framing::read_header;
+use crate::client_exchange::{
+	Exchange, FailureAction, StreamIo, failure_action, read_public_key_reply,
+};
 
 /// The most delivery copies one connection carries.
 ///
@@ -56,11 +57,11 @@ pub struct LocalIdentity {
 }
 
 pub struct Outbound {
-	inbound: Arc<InboundStore>,
+	pub(super) inbound: Arc<InboundStore>,
 	store: OutboundStore,
-	application: String,
-	configuration: Arc<ConfigurationSet>,
-	nodelist: Arc<Nodelist>,
+	pub(super) application: String,
+	pub(super) configuration: Arc<ConfigurationSet>,
+	pub(super) nodelist: Arc<Nodelist>,
 	locals: Vec<LocalIdentity>,
 	timeout: Duration,
 }
@@ -74,13 +75,6 @@ impl KeyResolver for Outbound {
 			.ok()
 			.flatten()
 	}
-}
-
-/// What one exchange produced.
-struct Exchange {
-	responses: Vec<CompletedResponse>,
-	/// How many values the peer returned in answer to a Poll or `FileRequest`.
-	returned: usize,
 }
 
 /// What one round of polling did, for logging by the caller.
@@ -424,12 +418,15 @@ impl Outbound {
 				.ok_or("key probe has no payload")?
 				.encode(),
 		)?;
-		let mut stream = self.connect_address(address, expected)?;
+		let stream = self.connect_address(address, expected)?;
 		let mut io = StreamIo(stream.try_clone()?);
 		send_bundle(&mut io, &request, false)?;
-		let mut response = Vec::new();
-		stream.read_to_end(&mut response)?;
-		let reply = Bundle::parse_public_key_reply(&response, self, expected)?;
+		let mut reader = TlvReader::new(stream.try_clone()?);
+		let reply = read_public_key_reply(&mut reader, self, expected)?;
+		// The authenticated response completes the dedicated exchange.  The
+		// Client has already closed its write side and now actively finishes the
+		// connection without waiting for Server FIN.
+		drop(stream.shutdown(Shutdown::Read));
 		if reply.origin.address != *address || reply.destination != local.identity {
 			return Err("PublicKeyRequest reply has the wrong identities".into());
 		}
@@ -591,37 +588,54 @@ impl Outbound {
 		let exchange = match self.converse(&mut stream, &encoded, &mut session, local, destination)
 		{
 			Ok(exchange) => exchange,
-			Err(error) if !destination.address.is_anonymous() && is_signature_failure(&*error) => {
-				let key = self.discover_key(
-					local,
-					&destination.address,
-					Some(destination.public_key),
-					now,
-				)?;
-				let destination = Identity {
-					address: destination.address.clone(),
-					public_key: key,
-				};
-				let encoded =
-					build_bundle(&local.identity, &local.secret, &destination, now, payloads)?;
-				let bundle = Bundle::parse(&encoded, self)?;
-				let tracker = ResponseTracker::for_bundle(&bundle, self)?;
-				let mut retry = ClientSession::new(tracker);
-				let mut stream = self.connect(&destination)?;
-				self.converse(&mut stream, &encoded, &mut retry, local, &destination)?
-			}
-			Err(error) => return Err(error),
+			Err(error) => match failure_action(
+				!session.responses().is_empty(),
+				destination.address.is_anonymous(),
+				&*error,
+			) {
+				FailureAction::RecoverContinuity => {
+					let key = self.discover_key(
+						local,
+						&destination.address,
+						Some(destination.public_key),
+						now,
+					)?;
+					let destination = Identity {
+						address: destination.address.clone(),
+						public_key: key,
+					};
+					let encoded =
+						build_bundle(&local.identity, &local.secret, &destination, now, payloads)?;
+					let bundle = Bundle::parse(&encoded, self)?;
+					let tracker = ResponseTracker::for_bundle(&bundle, self)?;
+					let mut retry = ClientSession::new(tracker);
+					let mut stream = self.connect(&destination)?;
+					self.converse(&mut stream, &encoded, &mut retry, local, &destination)?
+				}
+				FailureAction::PreserveCompleted => {
+					eprintln!(
+						"tithd: exchange failed after {} completed response(s): {error}",
+						session.responses().len()
+					);
+					Exchange {
+						requests: session.requests().to_vec(),
+						responses: session.responses().to_vec(),
+						returned: 0,
+					}
+				}
+				FailureAction::Fail => return Err(error),
+			},
 		};
 		let sent: Vec<(usize, bool)> = ordered
 			.into_iter()
 			.map(|(index, (_, relayed))| (index, relayed))
 			.collect();
-		let copy_responses = exchange
-			.responses
+		let copy_requests = exchange
+			.requests
 			.iter()
-			.filter(|response| {
+			.filter(|request| {
 				!matches!(
-					response.request.kind,
+					request.kind,
 					RequestKind::PollMessages
 						| RequestKind::PollFiles
 						| RequestKind::PollFileRequests
@@ -630,7 +644,7 @@ impl Outbound {
 			.cloned()
 			.collect::<Vec<_>>();
 		Ok((
-			Self::outcomes(&sent, &copy_responses, next_attempt),
+			Self::outcomes(&sent, &copy_requests, &exchange.responses, next_attempt),
 			exchange.returned,
 		))
 	}
@@ -674,130 +688,6 @@ impl Outbound {
 		))
 	}
 
-	/// Sends the Bundle and reads responses until the session is satisfied.
-	///
-	/// A Bundle carrying a Poll or `FileRequest` also gets values back, which are
-	/// dispatched as they arrive and answered in the final Reply Bundle this
-	/// then sends. TTS-0006 section 4 is why the write side stays open for
-	/// exactly those exchanges and is closed immediately for every other.
-	fn converse(
-		&self,
-		stream: &mut TcpStream,
-		encoded: &[u8],
-		session: &mut ClientSession,
-		local: &LocalIdentity,
-		destination: &Identity,
-	) -> Result<Exchange, Box<dyn Error>> {
-		let keep_open = session.requires_return_bundle();
-		let writer = if keep_open {
-			let mut io = StreamIo(stream.try_clone()?);
-			let encoded = encoded.to_vec();
-			Some(std::thread::spawn(move || {
-				send_bundle(&mut io, &encoded, true)
-			}))
-		} else {
-			let mut io = StreamIo(stream.try_clone()?);
-			send_bundle(&mut io, encoded, false)?;
-			None
-		};
-		session.initial_sent();
-
-		let received = (|| -> Result<(Vec<OwnedTlv>, usize), Box<dyn Error>> {
-			let mut reader = TlvReader::new(stream.try_clone()?);
-			let reply = read_header(&mut reader, None, self)?
-				.ok_or("peer closed before sending a Reply Header")?;
-			let mut answers = Vec::new();
-			let mut returned = 0;
-			while session.state() == SessionState::AwaitingResponses {
-				let Some(value) = reader.read_next()? else {
-					break;
-				};
-				let value = value.read_owned()?;
-				match value.type_code {
-					types::SIGNED_TLV => {
-						let mut bytes = reply.prefix.clone();
-						bytes.extend_from_slice(&value.encode());
-						let payload = Bundle::parse(&bytes, self)?;
-						if keep_open {
-							let response_to = hash_tlv(&value.encode())?;
-							returned += self.dispatch_returned(
-								&payload,
-								response_to,
-								local,
-								&reply.bundle.origin,
-								&mut answers,
-							)?;
-						}
-						session.reply_received(&payload, self)?;
-					}
-					type_code if types::is_defined(type_code) => {
-						return Err("unexpected defined value in a reply".into());
-					}
-					_ => {}
-				}
-			}
-			Ok((answers, returned))
-		})();
-		if let Some(writer) = writer {
-			writer.join().map_err(|_| "Bundle writer panicked")??;
-		}
-		let (answers, returned) = received?;
-		if keep_open {
-			// TTS-0005 section 6: one Accepted or Rejected for every value the
-			// peer returned, in a Reply Bundle of our own.
-			let final_reply = build_bundle(
-				&local.identity,
-				&local.secret,
-				destination,
-				crate::now(),
-				vec![answers],
-			)?;
-			let mut io = StreamIo(stream.try_clone()?);
-			send_bundle(&mut io, &final_reply, false)?;
-			session.final_reply_sent();
-		}
-		let responses = session.responses().to_vec();
-		session.closed()?;
-		// The write side was closed when the last Bundle was sent, so closing the
-		// read side completes the client's active close. The peer has usually gone
-		// by now, which some systems report as ENOTCONN; that is not a failure.
-		drop(stream.shutdown(Shutdown::Read));
-		Ok(Exchange {
-			responses,
-			returned,
-		})
-	}
-
-	/// Stores every request value a Poll or `FileRequest` reply carried.
-	fn dispatch_returned(
-		&self,
-		payload: &Bundle,
-		response_to: TlvHash,
-		local: &LocalIdentity,
-		peer: &Identity,
-		answers: &mut Vec<OwnedTlv>,
-	) -> Result<usize, Box<dyn Error>> {
-		let acceptance = Acceptance {
-			store: &self.inbound,
-			application: &self.application,
-			configuration: &self.configuration,
-			nodelist: &self.nodelist,
-			local_ref: &local.reference,
-			local: &local.identity,
-		};
-		let mut count = 0;
-		for signed in &payload.payloads {
-			for item in validate_payload(signed, self)? {
-				if matches!(item.kind, ItemKind::Accepted | ItemKind::Rejected) {
-					continue;
-				}
-				count += 1;
-				answers.push(acceptance.dispatch(&item, response_to, peer)?);
-			}
-		}
-		Ok(count)
-	}
-
 	/// Applies TSP-0002 section 6 to each response.
 	/// One outcome per claim, in the caller's group order.
 	///
@@ -807,6 +697,7 @@ impl Outbound {
 	/// an unacknowledged request be retried to the same next hop.
 	fn outcomes(
 		sent: &[(usize, bool)],
+		requests: &[OutstandingRequest],
 		responses: &[CompletedResponse],
 		next_attempt: u64,
 	) -> Vec<DeliveryOutcome> {
@@ -817,7 +708,11 @@ impl Outbound {
 			})
 			.collect();
 		for (position, &(index, relayed)) in sent.iter().enumerate() {
-			if let Some(response) = responses.get(position) {
+			if let Some(response) = requests.get(position).and_then(|request| {
+				responses
+					.iter()
+					.find(|response| response.request == *request)
+			}) {
 				outcomes[index] = outcome_for(response, next_attempt, relayed);
 			}
 		}
@@ -843,19 +738,6 @@ fn poll_values() -> Result<Vec<OwnedTlv>, BundleError> {
 		OwnedTlv::new(type_code, identifier.encode()).map_err(Into::into)
 	})
 	.collect()
-}
-
-fn is_signature_failure(error: &(dyn Error + 'static)) -> bool {
-	if matches!(
-		error.downcast_ref::<BundleError>(),
-		Some(BundleError::InvalidSignature)
-	) {
-		return true;
-	}
-	matches!(
-		error.downcast_ref::<ExchangeError>(),
-		Some(ExchangeError::Bundle(BundleError::InvalidSignature))
-	)
 }
 
 /// The TSP-0002 section 6 rule for one completed response.
@@ -921,42 +803,33 @@ pub(crate) fn is_relay_delivery(
 		.is_some_and(|destination| destination != *next_hop))
 }
 
-struct StreamIo(TcpStream);
-
-impl io::Read for StreamIo {
-	fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
-		self.0.read(buffer)
-	}
-}
-
-impl io::Write for StreamIo {
-	fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
-		self.0.write(buffer)
-	}
-
-	fn flush(&mut self) -> io::Result<()> {
-		self.0.flush()
-	}
-}
-
-impl ExchangeIo for StreamIo {
-	fn shutdown_write(&mut self) -> io::Result<()> {
-		match self.0.shutdown(Shutdown::Write) {
-			// The peer may close immediately after reading the final complete
-			// Bundle.  At this binding boundary that already-completed close is
-			// equivalent to completing our own write-side shutdown.
-			Err(error) if error.kind() == io::ErrorKind::NotConnected => Ok(()),
-			result => result,
-		}
-	}
-}
-
 #[cfg(test)]
 mod tests {
 	use super::*;
-	use tith_crypto::SigningKeyPair;
+	use std::io::Cursor;
+	use std::io::Read;
+	use tith_crypto::{SigningKeyPair, TlvHash};
 	use tith_wire::address::Address;
+	use tith_wire::bundle::build_public_key_reply;
 	use tith_wire::item::{ItemProvenance, MessageData, build_originated_message};
+
+	/// A complete response followed by a connection which deliberately remains
+	/// open. Any read past the supplied bytes fails instead of returning EOF.
+	struct OpenConnection {
+		bytes: Cursor<Vec<u8>>,
+	}
+
+	impl Read for OpenConnection {
+		fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+			if usize::try_from(self.bytes.position()).unwrap() == self.bytes.get_ref().len() {
+				return Err(io::Error::new(
+					io::ErrorKind::WouldBlock,
+					"Server write side remains open",
+				));
+			}
+			self.bytes.read(buffer)
+		}
+	}
 
 	fn rejection(reason: RejectionReason) -> Rejection {
 		Rejection {
@@ -1061,5 +934,91 @@ mod tests {
 			initial_trust_message(&address),
 			"tithd: established a new key pin for fidonet#1/2"
 		);
+	}
+
+	#[test]
+	fn a_later_exchange_error_preserves_each_completed_response() {
+		let first = OutstandingRequest {
+			signed_tlv_hash: TlvHash::from_bytes([78; 32]),
+			request_identifier: 1,
+			kind: RequestKind::Message,
+		};
+		let second = OutstandingRequest {
+			signed_tlv_hash: TlvHash::from_bytes([79; 32]),
+			request_identifier: 2,
+			kind: RequestKind::File,
+		};
+		let completed = CompletedResponse {
+			request: second.clone(),
+			response: ResponseKind::Accepted,
+			rejection: None,
+		};
+		let outcomes = Outbound::outcomes(
+			&[(0, false), (1, false)],
+			&[first, second],
+			&[completed],
+			100,
+		);
+		assert!(matches!(
+			outcomes[0],
+			DeliveryOutcome::Deferred { retry_at: 100, .. }
+		));
+		assert!(matches!(outcomes[1], DeliveryOutcome::Delivered(_)));
+	}
+
+	#[test]
+	fn a_key_reply_completes_without_server_fin() {
+		let client_keys = SigningKeyPair::from_seed(&[74; 32]).unwrap();
+		let server_keys = SigningKeyPair::from_seed(&[75; 32]).unwrap();
+		let client = Identity {
+			address: "fidonet#1/74".parse().unwrap(),
+			public_key: client_keys.public,
+		};
+		let server = Identity {
+			address: "fidonet#1/75".parse().unwrap(),
+			public_key: server_keys.public,
+		};
+		let response_to = TlvHash::from_bytes([76; 32]);
+		let encoded = build_public_key_reply(
+			&server,
+			&server_keys.secret,
+			&client,
+			1,
+			7,
+			response_to,
+			server.public_key,
+		)
+		.unwrap();
+		let resolver = |address: &Address| {
+			(address == &client.address)
+				.then_some(client.public_key)
+				.or_else(|| (address == &server.address).then_some(server.public_key))
+		};
+		let mut reader = TlvReader::new(OpenConnection {
+			bytes: Cursor::new(encoded.clone()),
+		});
+		let reply = read_public_key_reply(&mut reader, &resolver, Some(server.public_key)).unwrap();
+		assert_eq!(reply.origin, server);
+		assert_eq!(reply.destination, client);
+		let mut extended = parse_sequence(&encoded).unwrap();
+		extended.insert(2, OwnedTlv::new(200, b"before".to_vec()).unwrap());
+		extended.insert(4, OwnedTlv::new(201, b"between".to_vec()).unwrap());
+		let extended = extended
+			.iter()
+			.flat_map(OwnedTlv::encode)
+			.collect::<Vec<_>>();
+		let mut reader = TlvReader::new(OpenConnection {
+			bytes: Cursor::new(extended),
+		});
+		read_public_key_reply(&mut reader, &resolver, Some(server.public_key)).unwrap();
+
+		let mut truncated = encoded;
+		truncated.pop();
+		let mut reader = TlvReader::new(Cursor::new(truncated));
+		assert!(read_public_key_reply(&mut reader, &resolver, Some(server.public_key)).is_err());
+
+		let wrong = SigningKeyPair::from_seed(&[77; 32]).unwrap().public;
+		let mut reader = TlvReader::new(Cursor::new(reply.encoded));
+		assert!(read_public_key_reply(&mut reader, &resolver, Some(wrong)).is_err());
 	}
 }
