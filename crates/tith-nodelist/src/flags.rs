@@ -1,6 +1,8 @@
 use std::collections::BTreeSet;
-use std::fmt;
+use std::fmt::{self, Write as _};
 use std::net::{Ipv4Addr, Ipv6Addr};
+use std::ops::Deref;
+use std::str::FromStr;
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD_NO_PAD;
@@ -15,6 +17,14 @@ impl ServerAddress {
 	#[must_use]
 	pub fn as_str(&self) -> &str {
 		&self.0
+	}
+}
+
+impl FromStr for ServerAddress {
+	type Err = NodelistErrorKind;
+
+	fn from_str(value: &str) -> Result<Self, Self::Err> {
+		parse_server(value)
 	}
 }
 
@@ -34,6 +44,14 @@ impl EmailAddress {
 	}
 }
 
+impl FromStr for EmailAddress {
+	type Err = NodelistErrorKind;
+
+	fn from_str(value: &str) -> Result<Self, Self::Err> {
+		parse_email_address(value)
+	}
+}
+
 impl fmt::Display for EmailAddress {
 	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
 		f.write_str(&self.0)
@@ -44,8 +62,30 @@ impl fmt::Display for EmailAddress {
 /// or port is inherited from the applicable registered default.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct EndpointSpec {
-	pub server: Option<ServerAddress>,
-	pub port: Option<u16>,
+	server: Option<ServerAddress>,
+	port: Option<u16>,
+}
+
+impl EndpointSpec {
+	pub fn new(
+		server: Option<ServerAddress>,
+		port: Option<u16>,
+	) -> Result<Self, NodelistErrorKind> {
+		if port == Some(0) {
+			return Err(NodelistErrorKind::InvalidEndpoint);
+		}
+		Ok(Self { server, port })
+	}
+
+	#[must_use]
+	pub fn server(&self) -> Option<&ServerAddress> {
+		self.server.as_ref()
+	}
+
+	#[must_use]
+	pub fn port(&self) -> Option<u16> {
+		self.port
+	}
 }
 
 impl fmt::Display for EndpointSpec {
@@ -82,18 +122,64 @@ impl FileRequestFlag {
 			Self::Xx => "XX",
 		}
 	}
+
+	#[must_use]
+	pub const fn supports_bark_file(self) -> bool {
+		!matches!(self, Self::Xw | Self::Xx)
+	}
+
+	#[must_use]
+	pub const fn supports_bark_update(self) -> bool {
+		matches!(self, Self::Xa | Self::Xb | Self::Xp)
+	}
+
+	#[must_use]
+	pub const fn supports_wazoo_file(self) -> bool {
+		!matches!(self, Self::Xp)
+	}
+
+	#[must_use]
+	pub const fn supports_wazoo_update(self) -> bool {
+		matches!(self, Self::Xa | Self::Xc | Self::Xx)
+	}
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct MailPeriod {
-	pub bell_212a: bool,
-	pub hour: u8,
+	bell_212a: bool,
+	hour: u8,
+}
+
+impl MailPeriod {
+	pub fn new(bell_212a: bool, hour: u8) -> Result<Self, NodelistErrorKind> {
+		if hour > 23 {
+			return Err(NodelistErrorKind::InvalidFlag);
+		}
+		Ok(Self { bell_212a, hour })
+	}
+
+	#[must_use]
+	pub fn bell_212a(self) -> bool {
+		self.bell_212a
+	}
+
+	#[must_use]
+	pub fn hour(self) -> u8 {
+		self.hour
+	}
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct HalfHour(u8);
 
 impl HalfHour {
+	pub fn new(index: u8) -> Result<Self, NodelistErrorKind> {
+		if index >= 48 {
+			return Err(NodelistErrorKind::InvalidFlag);
+		}
+		Ok(Self(index))
+	}
+
 	#[must_use]
 	pub fn index(self) -> u8 {
 		self.0
@@ -107,8 +193,25 @@ impl HalfHour {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct OnlinePeriod {
-	pub start: HalfHour,
-	pub end: HalfHour,
+	start: HalfHour,
+	end: HalfHour,
+}
+
+impl OnlinePeriod {
+	#[must_use]
+	pub const fn new(start: HalfHour, end: HalfHour) -> Self {
+		Self { start, end }
+	}
+
+	#[must_use]
+	pub const fn start(self) -> HalfHour {
+		self.start
+	}
+
+	#[must_use]
+	pub const fn end(self) -> HalfHour {
+		self.end
+	}
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -389,7 +492,38 @@ pub enum OtherFlag {
 	NetPointlistKeeper,
 	EncryptedMail,
 	CdPoint,
-	Extension(String),
+	Extension(ExtensionFlag),
+}
+
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub struct ExtensionFlag(String);
+
+impl ExtensionFlag {
+	#[must_use]
+	pub fn as_str(&self) -> &str {
+		&self.0
+	}
+}
+
+impl FromStr for ExtensionFlag {
+	type Err = NodelistErrorKind;
+
+	fn from_str(value: &str) -> Result<Self, Self::Err> {
+		if (1..=32).contains(&value.len())
+			&& value.bytes().all(|byte| byte.is_ascii_alphanumeric())
+			&& !assigned_name(value)
+		{
+			Ok(Self(value.to_owned()))
+		} else {
+			Err(NodelistErrorKind::InvalidFlag)
+		}
+	}
+}
+
+impl fmt::Display for ExtensionFlag {
+	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+		f.write_str(&self.0)
+	}
 }
 
 impl OtherFlag {
@@ -408,7 +542,7 @@ impl OtherFlag {
 			Self::NetPointlistKeeper => "NPK",
 			Self::EncryptedMail => "ENC",
 			Self::CdPoint => "CDP",
-			Self::Extension(value) => value,
+			Self::Extension(value) => value.as_str(),
 		}
 	}
 
@@ -600,6 +734,44 @@ fn valid_dns_name(value: &str) -> bool {
 		})
 }
 
+fn canonical_ipv6(address: Ipv6Addr) -> String {
+	let segments = address.segments();
+	let mut best_start = None;
+	let mut best_len = 0;
+	let mut index = 0;
+	while index < segments.len() {
+		if segments[index] != 0 {
+			index += 1;
+			continue;
+		}
+		let start = index;
+		while index < segments.len() && segments[index] == 0 {
+			index += 1;
+		}
+		let len = index - start;
+		if len >= 2 && len > best_len {
+			best_start = Some(start);
+			best_len = len;
+		}
+	}
+
+	let mut output = String::new();
+	let mut index = 0;
+	while index < segments.len() {
+		if best_start == Some(index) {
+			output.push_str("::");
+			index += best_len;
+			continue;
+		}
+		if !output.is_empty() && !output.ends_with(':') {
+			output.push(':');
+		}
+		write!(output, "{:x}", segments[index]).expect("writing to String cannot fail");
+		index += 1;
+	}
+	output
+}
+
 fn parse_server(value: &str) -> Result<ServerAddress, NodelistErrorKind> {
 	if let Some(inner) = value
 		.strip_prefix('[')
@@ -608,7 +780,7 @@ fn parse_server(value: &str) -> Result<ServerAddress, NodelistErrorKind> {
 		let address: Ipv6Addr = inner
 			.parse()
 			.map_err(|_| NodelistErrorKind::InvalidEndpoint)?;
-		if format!("[{address}]") != value {
+		if format!("[{}]", canonical_ipv6(address)) != value {
 			return Err(NodelistErrorKind::InvalidEndpoint);
 		}
 	} else if let Ok(address) = value.parse::<Ipv4Addr>() {
@@ -791,7 +963,7 @@ fn parse_email_flag(text: &str, name: &str) -> Result<EmailMatch, NodelistErrorK
 	Ok(EmailMatch::Address(parse_email_address(address)?))
 }
 
-fn assigned_outside_other(text: &str) -> bool {
+fn assigned_name(text: &str) -> bool {
 	matches!(
 		text,
 		"CM" | "LO"
@@ -807,8 +979,7 @@ fn assigned_outside_other(text: &str) -> bool {
 			| "IEM" | "ITX"
 			| "IUC" | "IMI"
 			| "ISE" | "EVY"
-			| "EMA" | "V32B"
-			| "V42B"
+			| "EMA"
 	) || PSTN_NAMES.contains(&text)
 		|| (text.len() == 3
 			&& text.starts_with('T')
@@ -869,13 +1040,7 @@ pub(crate) fn parse_other(value: &str) -> Result<Vec<OtherFlag>, NodelistErrorKi
 				"NPK" => OtherFlag::NetPointlistKeeper,
 				"ENC" => OtherFlag::EncryptedMail,
 				"CDP" => OtherFlag::CdPoint,
-				_ if (1..=32).contains(&text.len())
-					&& text.bytes().all(|byte| byte.is_ascii_alphanumeric())
-					&& !assigned_outside_other(text) =>
-				{
-					OtherFlag::Extension(text.to_owned())
-				}
-				_ => return Err(NodelistErrorKind::InvalidFlag),
+				_ => OtherFlag::Extension(text.parse()?),
 			};
 			Ok(flag)
 		})
@@ -900,6 +1065,267 @@ pub(crate) fn parse_other(value: &str) -> Result<Vec<OtherFlag>, NodelistErrorKi
 		}
 	}
 	Ok(flags)
+}
+
+fn list_text<T: fmt::Display>(values: &[T]) -> String {
+	values
+		.iter()
+		.map(ToString::to_string)
+		.collect::<Vec<_>>()
+		.join(",")
+}
+
+fn validate_list<T: fmt::Display + PartialEq>(
+	values: &[T],
+	parse: fn(&str) -> Result<Vec<T>, NodelistErrorKind>,
+) -> Result<(), NodelistErrorKind> {
+	let parsed = parse(&list_text(values))?;
+	if parsed == values {
+		Ok(())
+	} else {
+		Err(NodelistErrorKind::InvalidFlag)
+	}
+}
+
+macro_rules! flag_list {
+	($list:ident, $item:ty, $parse:ident) => {
+		#[derive(Clone, Debug, Default, Eq, PartialEq)]
+		pub struct $list(Vec<$item>);
+
+		impl $list {
+			#[must_use]
+			pub fn into_vec(self) -> Vec<$item> {
+				self.0
+			}
+		}
+
+		impl TryFrom<Vec<$item>> for $list {
+			type Error = NodelistErrorKind;
+
+			fn try_from(values: Vec<$item>) -> Result<Self, Self::Error> {
+				validate_list(&values, $parse)?;
+				Ok(Self(values))
+			}
+		}
+
+		impl FromStr for $list {
+			type Err = NodelistErrorKind;
+
+			fn from_str(value: &str) -> Result<Self, Self::Err> {
+				Ok(Self($parse(value)?))
+			}
+		}
+
+		impl Deref for $list {
+			type Target = [$item];
+
+			fn deref(&self) -> &Self::Target {
+				&self.0
+			}
+		}
+
+		impl AsRef<[$item]> for $list {
+			fn as_ref(&self) -> &[$item] {
+				&self.0
+			}
+		}
+
+		impl<'a> IntoIterator for &'a $list {
+			type Item = &'a $item;
+			type IntoIter = std::slice::Iter<'a, $item>;
+
+			fn into_iter(self) -> Self::IntoIter {
+				self.0.iter()
+			}
+		}
+
+		impl fmt::Display for $list {
+			fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+				f.write_str(&list_text(&self.0))
+			}
+		}
+	};
+}
+
+flag_list!(SystemFlags, SystemFlag, parse_system);
+flag_list!(PstnIsdnFlags, PstnIsdnFlag, parse_pstn_isdn);
+flag_list!(InternetFlags, InternetFlag, parse_internet);
+flag_list!(EmailFlags, EmailFlag, parse_email);
+flag_list!(OtherFlags, OtherFlag, parse_other);
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum InternetProtocol {
+	Tith,
+	Binkp,
+	Ifcico,
+	Ftp,
+	Telnet,
+	Vmodem,
+	Unspecified,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ResolvedInternetEndpoint {
+	pub server: Option<ServerAddress>,
+	pub port: Option<u16>,
+}
+
+impl ResolvedInternetEndpoint {
+	#[must_use]
+	pub const fn is_usable(&self) -> bool {
+		self.server.is_some() && self.port.is_some()
+	}
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ResolvedInternetService {
+	pub protocol: InternetProtocol,
+	pub public_key: Option<PublicKey>,
+	pub endpoints: Vec<ResolvedInternetEndpoint>,
+}
+
+fn resolved_endpoints(
+	endpoint: &EndpointSpec,
+	defaults: &[ServerAddress],
+	default_port: Option<u16>,
+) -> Vec<ResolvedInternetEndpoint> {
+	let port = endpoint.port.or(default_port);
+	if let Some(server) = &endpoint.server {
+		return vec![ResolvedInternetEndpoint {
+			server: Some(server.clone()),
+			port,
+		}];
+	}
+	if defaults.is_empty() {
+		return vec![ResolvedInternetEndpoint { server: None, port }];
+	}
+	defaults
+		.iter()
+		.cloned()
+		.map(|server| ResolvedInternetEndpoint {
+			server: Some(server),
+			port,
+		})
+		.collect()
+}
+
+impl InternetFlags {
+	#[must_use]
+	pub fn no_incoming_ipv4(&self) -> bool {
+		self.iter()
+			.any(|flag| matches!(flag, InternetFlag::NoIncomingIpv4))
+	}
+
+	#[must_use]
+	pub fn resolved_services(&self) -> Vec<ResolvedInternetService> {
+		let defaults: Vec<_> = self
+			.iter()
+			.filter_map(|flag| match flag {
+				InternetFlag::DefaultServer(server) => Some(server.clone()),
+				_ => None,
+			})
+			.collect();
+		self.iter()
+			.filter_map(|flag| {
+				let (protocol, public_key, endpoint, default_port) = match flag {
+					InternetFlag::DefaultServer(_) | InternetFlag::NoIncomingIpv4 => return None,
+					InternetFlag::Tith {
+						endpoint,
+						public_key,
+					} => (InternetProtocol::Tith, Some(*public_key), endpoint, None),
+					InternetFlag::Binkp(endpoint) => {
+						(InternetProtocol::Binkp, None, endpoint, Some(24_554))
+					}
+					InternetFlag::Ifcico(endpoint) => {
+						(InternetProtocol::Ifcico, None, endpoint, Some(60_179))
+					}
+					InternetFlag::Ftp(endpoint) => {
+						(InternetProtocol::Ftp, None, endpoint, Some(21))
+					}
+					InternetFlag::Telnet(endpoint) => {
+						(InternetProtocol::Telnet, None, endpoint, Some(23))
+					}
+					InternetFlag::Vmodem(endpoint) => {
+						(InternetProtocol::Vmodem, None, endpoint, Some(3141))
+					}
+					InternetFlag::Unspecified(endpoint) => {
+						(InternetProtocol::Unspecified, None, endpoint, None)
+					}
+				};
+				Some(ResolvedInternetService {
+					protocol,
+					public_key,
+					endpoints: resolved_endpoints(endpoint, &defaults, default_port),
+				})
+			})
+			.collect()
+	}
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum EmailMethod {
+	Unspecified,
+	Transx,
+	Uuencode,
+	Mime,
+	Seat,
+	Voyager,
+	Other,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ResolvedEmailMethod {
+	pub method: EmailMethod,
+	pub address: Option<EmailAddress>,
+}
+
+impl EmailFlags {
+	#[must_use]
+	pub fn resolved_methods(&self) -> Vec<ResolvedEmailMethod> {
+		let defaults: Vec<_> = self
+			.iter()
+			.filter_map(|flag| match flag {
+				EmailFlag::Default(Some(address)) => Some(address.clone()),
+				_ => None,
+			})
+			.collect();
+		let mut methods = Vec::new();
+		for flag in self {
+			if matches!(flag, EmailFlag::Default(None)) {
+				methods.push(ResolvedEmailMethod {
+					method: EmailMethod::Unspecified,
+					address: None,
+				});
+				continue;
+			}
+			let (method, address): (EmailMethod, Option<&EmailAddress>) = match flag {
+				EmailFlag::Default(_) => continue,
+				EmailFlag::Transx(address) => (EmailMethod::Transx, address.as_ref()),
+				EmailFlag::Uuencode(address) => (EmailMethod::Uuencode, address.as_ref()),
+				EmailFlag::Mime(address) => (EmailMethod::Mime, address.as_ref()),
+				EmailFlag::Seat(address) => (EmailMethod::Seat, address.as_ref()),
+				EmailFlag::Voyager(address) => (EmailMethod::Voyager, address.as_ref()),
+				EmailFlag::OtherMethod(address) => (EmailMethod::Other, address.as_ref()),
+			};
+			if let Some(address) = address {
+				methods.push(ResolvedEmailMethod {
+					method,
+					address: Some(address.clone()),
+				});
+			} else if defaults.is_empty() {
+				methods.push(ResolvedEmailMethod {
+					method,
+					address: None,
+				});
+			} else {
+				methods.extend(defaults.iter().cloned().map(|address| ResolvedEmailMethod {
+					method,
+					address: Some(address),
+				}));
+			}
+		}
+		methods
+	}
 }
 
 #[cfg(test)]
@@ -969,7 +1395,6 @@ mod tests {
 			"bad-flag",
 			"CM",
 			"V22",
-			"V32B",
 			"INA",
 			"IBN",
 			"IEM",
@@ -1017,8 +1442,11 @@ mod tests {
 
 	#[test]
 	fn other_extensions_have_one_deterministic_slot() {
-		let parsed = parse_other("MO,CDP,ABC,AThing,z9").unwrap();
-		assert_eq!(text(&parsed), ["MO", "CDP", "ABC", "AThing", "z9"]);
+		let parsed = parse_other("MO,CDP,ABC,AThing,V32B,V42B,z9").unwrap();
+		assert_eq!(
+			text(&parsed),
+			["MO", "CDP", "ABC", "AThing", "V32B", "V42B", "z9"]
+		);
 		for value in [
 			"U,ABC",
 			"ABC,MO",

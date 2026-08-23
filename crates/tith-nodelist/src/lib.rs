@@ -12,10 +12,11 @@ use tith_wire::bundle::KeyResolver;
 mod flags;
 
 pub use flags::{
-	EmailAddress, EmailFlag, EndpointSpec, FileRequestFlag, HalfHour, InternetFlag, MailPeriod,
-	OnlinePeriod, OtherFlag, PstnIsdnFlag, ServerAddress, SystemFlag,
+	EmailAddress, EmailFlag, EmailFlags, EmailMethod, EndpointSpec, ExtensionFlag, FileRequestFlag,
+	HalfHour, InternetFlag, InternetFlags, InternetProtocol, MailPeriod, OnlinePeriod, OtherFlag,
+	OtherFlags, PstnIsdnFlag, PstnIsdnFlags, ResolvedEmailMethod, ResolvedInternetEndpoint,
+	ResolvedInternetService, ServerAddress, SystemFlag, SystemFlags,
 };
-use flags::{parse_email, parse_internet, parse_other, parse_pstn_isdn, parse_system};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Keyword {
@@ -80,11 +81,11 @@ pub struct Entry {
 	pub location: String,
 	pub sysop_name: String,
 	pub phone: String,
-	pub system_flags: Vec<SystemFlag>,
-	pub pstn_isdn_flags: Vec<PstnIsdnFlag>,
-	pub internet_flags: Vec<InternetFlag>,
-	pub email_flags: Vec<EmailFlag>,
-	pub other_flags: Vec<OtherFlag>,
+	pub system_flags: SystemFlags,
+	pub pstn_isdn_flags: PstnIsdnFlags,
+	pub internet_flags: InternetFlags,
+	pub email_flags: EmailFlags,
+	pub other_flags: OtherFlags,
 	pub tith: Option<TithService>,
 	pub branch: Branch,
 }
@@ -171,7 +172,7 @@ fn publishes_internet_contact(flag: &InternetFlag) -> bool {
 		| InternetFlag::Ftp(endpoint)
 		| InternetFlag::Telnet(endpoint)
 		| InternetFlag::Vmodem(endpoint)
-		| InternetFlag::Unspecified(endpoint) => endpoint.server.is_some() || endpoint.port.is_some(),
+		| InternetFlag::Unspecified(endpoint) => endpoint.server().is_some() || endpoint.port().is_some(),
 		InternetFlag::NoIncomingIpv4 => false,
 	}
 }
@@ -307,13 +308,16 @@ impl Nodelist {
 			if !validate_phone(fields[5]) {
 				return Err(fail(line_number, NodelistErrorKind::InvalidPhone));
 			}
-			let system_flags = parse_system(fields[6]).map_err(|kind| fail(line_number, kind))?;
-			let pstn_isdn_flags =
-				parse_pstn_isdn(fields[7]).map_err(|kind| fail(line_number, kind))?;
-			let internet_flags =
-				parse_internet(fields[8]).map_err(|kind| fail(line_number, kind))?;
-			let email_flags = parse_email(fields[9]).map_err(|kind| fail(line_number, kind))?;
-			let other_flags = parse_other(fields[10]).map_err(|kind| fail(line_number, kind))?;
+			let system_flags: SystemFlags =
+				fields[6].parse().map_err(|kind| fail(line_number, kind))?;
+			let pstn_isdn_flags: PstnIsdnFlags =
+				fields[7].parse().map_err(|kind| fail(line_number, kind))?;
+			let internet_flags: InternetFlags =
+				fields[8].parse().map_err(|kind| fail(line_number, kind))?;
+			let email_flags: EmailFlags =
+				fields[9].parse().map_err(|kind| fail(line_number, kind))?;
+			let other_flags: OtherFlags =
+				fields[10].parse().map_err(|kind| fail(line_number, kind))?;
 			if keyword == Keyword::Private
 				&& (!fields[5].is_empty()
 					|| internet_flags.iter().any(publishes_internet_contact)
@@ -367,58 +371,29 @@ impl Nodelist {
 				}
 			}
 
-			let default_servers: Vec<_> = internet_flags
-				.iter()
-				.filter_map(|flag| match flag {
-					InternetFlag::DefaultServer(server) => Some(server.as_str().to_owned()),
-					_ => None,
-				})
+			let services: Vec<_> = internet_flags
+				.resolved_services()
+				.into_iter()
+				.filter(|service| service.protocol == InternetProtocol::Tith)
 				.collect();
-			let mut services = Vec::new();
-			for flag in &internet_flags {
-				let InternetFlag::Tith {
-					endpoint,
-					public_key,
-				} = flag
-				else {
-					continue;
-				};
-				let port = endpoint
-					.port
-					.map_or(EndpointPort::RegisteredDefault, EndpointPort::Explicit);
-				if let Some(server) = &endpoint.server {
-					services.push((
-						Endpoint {
-							server: Some(server.as_str().to_owned()),
-							port,
-						},
-						*public_key,
-					));
-				} else if default_servers.is_empty() {
-					services.push((Endpoint { server: None, port }, *public_key));
-				} else {
-					services.extend(default_servers.iter().map(|server| {
-						(
-							Endpoint {
-								server: Some(server.clone()),
-								port,
-							},
-							*public_key,
-						)
-					}));
-				}
-			}
-			let tith = if let Some((_, public_key)) = services.first() {
-				Some(TithService {
-					endpoints: services
-						.iter()
-						.map(|(endpoint, _)| endpoint.clone())
-						.collect(),
-					public_key: *public_key,
-				})
-			} else {
-				None
-			};
+			let tith = services.first().map(|service| TithService {
+				endpoints: services
+					.iter()
+					.flat_map(|service| service.endpoints.iter())
+					.map(|endpoint| Endpoint {
+						server: endpoint
+							.server
+							.as_ref()
+							.map(|server| server.as_str().to_owned()),
+						port: endpoint
+							.port
+							.map_or(EndpointPort::RegisteredDefault, EndpointPort::Explicit),
+					})
+					.collect(),
+				public_key: service
+					.public_key
+					.expect("a resolved TITH service has a public key"),
+			});
 			let zone_address = Address::new(
 				domain.to_owned(),
 				hierarchy.zone.expect("a valid data line has a Zone"),
