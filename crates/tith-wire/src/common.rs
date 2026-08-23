@@ -110,11 +110,11 @@ fn signed_tlv_parts(
 	let mut stage = 0;
 	for child in children.into_iter().skip(index) {
 		match child.type_code {
-			types::SIGNED_DATA if stage == 0 && signed_data.is_none() => {
+			types::SIGNED_DATA if stage == 0 => {
 				signed_data = Some(child);
 				stage = 1;
 			}
-			types::SIGNATURE if stage == 1 && signature.is_none() => {
+			types::SIGNATURE if stage == 1 => {
 				signature = Some(child);
 				stage = 2;
 			}

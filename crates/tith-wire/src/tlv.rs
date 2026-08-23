@@ -361,6 +361,10 @@ mod tests {
 				Ok(1)
 			}
 		}
+		let mut probe = OneByte(&[42]);
+		assert_eq!(probe.read(&mut []).unwrap(), 0);
+		assert_eq!(probe.read(&mut [0]).unwrap(), 1);
+		assert_eq!(probe.read(&mut [0]).unwrap(), 0);
 
 		let encoded = OwnedTlv::new(378, b"payload".to_vec()).unwrap().encode();
 		let mut reader = TlvReader::new(OneByte(&encoded));
@@ -467,11 +471,17 @@ mod tests {
 		assert_eq!(value.remaining(), 1);
 		assert_eq!(value.read(&mut []).unwrap(), 0);
 		assert_eq!(value.remaining(), 1);
-		assert_eq!(value.read_owned().unwrap().value, [42]);
+		let mut byte = [0];
+		assert_eq!(value.read(&mut byte).unwrap(), 1);
+		assert_eq!(byte, [42]);
+		assert_eq!(value.remaining(), 0);
+		assert_eq!(value.read(&mut byte).unwrap(), 0);
 	}
 
 	#[test]
 	fn streaming_integer_and_value_io_failures_are_explicit() {
+		let mut empty_output = controlled(&[1]);
+		assert_eq!(empty_output.read(&mut []).unwrap(), 0);
 		assert!(
 			TlvReader::new(controlled(&[]))
 				.read_next()
@@ -520,10 +530,7 @@ mod tests {
 			.unwrap()
 			.read_owned()
 			.unwrap_err();
-		assert!(matches!(
-			error,
-			FramingError::Io(ref error) if error.kind() == io::ErrorKind::UnexpectedEof
-		));
+		assert_eq!(error.to_string(), "I/O error: 1 TLV value bytes remain");
 	}
 
 	#[test]
