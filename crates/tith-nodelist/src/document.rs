@@ -613,6 +613,10 @@ fn prohibited_character(character: char) -> bool {
 /// A streaming validated TTS-5000 record reader.
 pub struct NodelistReader<R> {
 	reader: R,
+	state: ReaderState,
+}
+
+struct ReaderState {
 	validator: Validator,
 	buffer: Vec<u8>,
 	line: usize,
@@ -623,20 +627,14 @@ impl<R: BufRead> NodelistReader<R> {
 	pub fn distribution(domain: impl Into<String>, reader: R) -> Result<Self, NodelistError> {
 		Ok(Self {
 			reader,
-			validator: Validator::distribution(domain.into())?,
-			buffer: Vec::new(),
-			line: 0,
-			done: false,
+			state: ReaderState::new(Validator::distribution(domain.into())?),
 		})
 	}
 
 	pub fn segment(context: SegmentContext, reader: R) -> Result<Self, NodelistError> {
 		Ok(Self {
 			reader,
-			validator: Validator::new(context, true),
-			buffer: Vec::new(),
-			line: 0,
-			done: false,
+			state: ReaderState::new(Validator::new(context, true)),
 		})
 	}
 }
@@ -645,11 +643,26 @@ impl<R: BufRead> Iterator for NodelistReader<R> {
 	type Item = Result<Record, NodelistError>;
 
 	fn next(&mut self) -> Option<Self::Item> {
+		self.state.next(&mut self.reader)
+	}
+}
+
+impl ReaderState {
+	fn new(validator: Validator) -> Self {
+		Self {
+			validator,
+			buffer: Vec::new(),
+			line: 0,
+			done: false,
+		}
+	}
+
+	fn next(&mut self, reader: &mut dyn BufRead) -> Option<Result<Record, NodelistError>> {
 		if self.done {
 			return None;
 		}
 		self.buffer.clear();
-		match self.reader.read_until(b'\n', &mut self.buffer) {
+		match reader.read_until(b'\n', &mut self.buffer) {
 			Ok(0) => {
 				self.done = true;
 				(self.validator.requires_data && self.validator.first_data)
