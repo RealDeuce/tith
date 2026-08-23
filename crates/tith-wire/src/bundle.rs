@@ -168,7 +168,6 @@ impl Bundle {
 		}
 		let dedicated_public_key_request = payloads.len() == 1
 			&& payloads[0].data.len() == 2
-			&& payloads[0].data[0].type_code == types::TLV_HASH
 			&& payloads[0].data[1].type_code == types::PUBLIC_KEY_REQUEST;
 		let contains_public_key_request = payloads.iter().any(|payload| {
 			payload
@@ -877,6 +876,12 @@ mod tests {
 			.unwrap();
 			assert!(matches!(
 				Bundle::parse(&encoded, &resolver),
+				Err(BundleError::Unexpected(
+					"PublicKeyRequest outside its dedicated Bundle"
+				))
+			));
+			assert!(matches!(
+				Bundle::parse_header_prefix(&encoded, &resolver),
 				Err(BundleError::Unexpected(
 					"PublicKeyRequest outside its dedicated Bundle"
 				))

@@ -190,7 +190,9 @@ mod tests {
 		build_public_key_unavailable_reply, build_signed_tlv,
 	};
 	use tith_wire::integer::encode_u64;
-	use tith_wire::item::{RejectionReason, accepted, accepted_public_key, rejected};
+	use tith_wire::item::{
+		RejectionReason, accepted, accepted_public_key, public_key_request, rejected,
+	};
 	use tith_wire::tlv::{OwnedTlv, parse_sequence};
 	use tith_wire::types;
 
@@ -493,6 +495,18 @@ mod tests {
 		let probe = Bundle::parse(&probe_bytes, &resolver).unwrap();
 		let mut probe_tracker = ResponseTracker::for_bundle(&probe, &resolver).unwrap();
 		let request = probe_tracker.outstanding[0].clone();
+		let mut mixed_probe = parse_sequence(&probe_bytes).unwrap();
+		let probe_header_hash = tith_crypto::hash_tlv(&mixed_probe[1].encode()).unwrap();
+		let mixed_payload = [
+			OwnedTlv::new(types::TLV_HASH, probe_header_hash.as_bytes().to_vec()).unwrap(),
+			public_key_request(request.request_identifier).unwrap(),
+			container(
+				types::POLL_MESSAGES,
+				&[OwnedTlv::new(types::REQUEST_IDENTIFIER, encode_u64(8)).unwrap()],
+			),
+		];
+		mixed_probe[2] = build_signed_tlv(&mixed_payload, None, &a_keys.secret).unwrap();
+		assert!(Bundle::parse_header_prefix(&concatenate(&mixed_probe), &resolver).is_err());
 		let reply_bytes = build_public_key_reply(
 			&b,
 			&b_keys.secret,
