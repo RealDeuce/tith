@@ -27,7 +27,7 @@ on:
       - "crates/tithd/src/main.rs"
       - "crates/tithd/src/submission.rs"
       - "qualification/check_source_line_coverage.py"
-      - "qualification/TTS-0008.001.md"
+      - "qualification/TTS-0008.002.md"
       - ".github/workflows/qualify-tts-0008.yml"
   workflow_dispatch:
 
