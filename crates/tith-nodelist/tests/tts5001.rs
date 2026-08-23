@@ -168,6 +168,7 @@ fn ipv6_has_one_exact_native_spelling() {
 		"INA:[::1]",
 		"INA:[1::]",
 		"INA:[2001:db8::1]",
+		"INA:[1:0:2:3:4:5:6:7]",
 		"INA:[1::2:0:0:3]",
 		"INA:[1:2:3:4:5:6:7:8]",
 		"INA:[::ffff:c000:201]",
@@ -341,7 +342,9 @@ fn email_defaults_expand_in_preference_order() {
 #[test]
 fn other_extensions_reserve_only_exact_assigned_names() {
 	let longest = "A".repeat(32);
-	for valid in ["U", "AAA", "TRACE", "V32B", "V42B", "a9", &longest] {
+	for valid in [
+		"U", "AAA", "TAY", "TYA", "TRACE", "V32B", "V42B", "a9", &longest,
+	] {
 		let parsed: OtherFlags = valid.parse().unwrap();
 		assert_eq!(parsed.to_string(), valid);
 	}
