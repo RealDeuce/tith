@@ -1,16 +1,229 @@
 //! Streaming TTS-5000 records, hierarchy validation, and publication framing.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
+use std::fmt;
 use std::io::{self, BufRead, Read, Write};
 
 use tith_crypto::PublicKey;
-use tith_wire::address::Address;
+use tith_wire::address::{Address, AddressError};
+use tith_wire::bundle::KeyResolver;
 
 use crate::{
-	Branch, EmailFlags, Endpoint, EndpointPort, Entry, InternetFlags, InternetProtocol, Keyword,
-	NodelistError, NodelistErrorKind, OtherFlag, OtherFlags, PstnIsdnFlags, SystemFlag,
-	SystemFlags, TithService, fail, parse_keyword, parse_node_number, validate_phone,
+	EmailFlag, EmailFlags, InternetFlags, InternetProtocol, OtherFlag, OtherFlags, PstnIsdnFlags,
+	SystemFlag, SystemFlags,
 };
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Keyword {
+	Normal,
+	Private,
+	Hold,
+	Down,
+	Zone,
+	Region,
+	Host,
+	Hub,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Endpoint {
+	pub server: Option<String>,
+	pub port: EndpointPort,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum EndpointPort {
+	RegisteredDefault,
+	Explicit(u16),
+}
+
+pub const REGISTERED_TITH_PORT: Option<u16> = None;
+
+impl Endpoint {
+	#[must_use]
+	pub fn resolved_port(&self) -> Option<u16> {
+		match self.port {
+			EndpointPort::RegisteredDefault => REGISTERED_TITH_PORT,
+			EndpointPort::Explicit(port) => Some(port),
+		}
+	}
+
+	#[must_use]
+	pub fn is_usable(&self) -> bool {
+		self.server.is_some() && self.resolved_port().is_some()
+	}
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TithService {
+	pub endpoints: Vec<Endpoint>,
+	pub public_key: PublicKey,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Branch {
+	pub zone: Address,
+	pub region: Option<Address>,
+	pub host: Option<Address>,
+	pub hub: Option<Address>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Entry {
+	pub keyword: Keyword,
+	pub address: Address,
+	pub node_name: String,
+	pub location: String,
+	pub sysop_name: String,
+	pub phone: String,
+	pub system_flags: SystemFlags,
+	pub pstn_isdn_flags: PstnIsdnFlags,
+	pub internet_flags: InternetFlags,
+	pub email_flags: EmailFlags,
+	pub other_flags: OtherFlags,
+	pub tith: Option<TithService>,
+	pub branch: Branch,
+}
+
+#[derive(Debug)]
+pub enum NodelistErrorKind {
+	Io,
+	InvalidUtf8,
+	MissingFinalLineFeed,
+	ControlCharacter,
+	InvalidComment,
+	WrongFieldCount,
+	InvalidKeyword,
+	InvalidNodeNumber,
+	InvalidHierarchy,
+	DuplicateAddress,
+	InvalidPhone,
+	PrivateContact,
+	InvalidFlag,
+	InvalidPublicKey,
+	InvalidEndpoint,
+	InvalidPublication,
+	ApplicationKeyMismatch,
+	Address(AddressError),
+}
+
+#[derive(Debug)]
+pub struct NodelistError {
+	pub line: usize,
+	pub kind: NodelistErrorKind,
+}
+
+impl fmt::Display for NodelistError {
+	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+		write!(f, "nodelist line {}: {:?}", self.line, self.kind)
+	}
+}
+
+impl std::error::Error for NodelistError {}
+
+#[derive(Clone, Debug, Default)]
+pub struct Nodelist {
+	entries: BTreeMap<Address, Entry>,
+}
+
+fn fail(line: usize, kind: NodelistErrorKind) -> NodelistError {
+	NodelistError { line, kind }
+}
+
+fn parse_keyword(value: &str) -> Option<Keyword> {
+	match value {
+		"" => Some(Keyword::Normal),
+		"Pvt" => Some(Keyword::Private),
+		"Hold" => Some(Keyword::Hold),
+		"Down" => Some(Keyword::Down),
+		"Zone" => Some(Keyword::Zone),
+		"Region" => Some(Keyword::Region),
+		"Host" => Some(Keyword::Host),
+		"Hub" => Some(Keyword::Hub),
+		_ => None,
+	}
+}
+
+pub(crate) fn parse_node_number(value: &str) -> Option<i32> {
+	if value.is_empty()
+		|| value.starts_with('0')
+		|| !value.bytes().all(|byte| byte.is_ascii_digit())
+	{
+		return None;
+	}
+	let number: i32 = value.parse().ok()?;
+	(1..=32_767).contains(&number).then_some(number)
+}
+
+fn publishes_email_contact(flag: &EmailFlag) -> bool {
+	match flag {
+		EmailFlag::Default(address)
+		| EmailFlag::Transx(address)
+		| EmailFlag::Uuencode(address)
+		| EmailFlag::Mime(address)
+		| EmailFlag::Seat(address)
+		| EmailFlag::Voyager(address)
+		| EmailFlag::OtherMethod(address) => address.is_some(),
+	}
+}
+
+pub(crate) fn validate_phone(phone: &str) -> bool {
+	if phone.is_empty() {
+		return true;
+	}
+	if !(3..=29).contains(&phone.len()) {
+		return false;
+	}
+	let pieces: Vec<_> = phone.split('-').collect();
+	pieces.len() >= 2
+		&& pieces
+			.iter()
+			.all(|piece| !piece.is_empty() && piece.bytes().all(|byte| byte.is_ascii_digit()))
+}
+
+impl Nodelist {
+	pub fn parse(domain: &str, input: &str) -> Result<Self, NodelistError> {
+		Self::read(domain, std::io::Cursor::new(input.as_bytes()))
+	}
+
+	pub fn read<R: BufRead>(domain: &str, reader: R) -> Result<Self, NodelistError> {
+		let mut entries = BTreeMap::new();
+		for record in NodelistReader::distribution(domain.to_owned(), reader)? {
+			if let Record::Entry(entry) = record? {
+				entries.insert(entry.address.clone(), *entry);
+			}
+		}
+		Ok(Self { entries })
+	}
+
+	#[must_use]
+	pub fn get(&self, address: &Address) -> Option<&Entry> {
+		self.entries.get(address)
+	}
+
+	pub fn iter(&self) -> impl Iterator<Item = &Entry> {
+		self.entries.values()
+	}
+
+	#[must_use]
+	pub fn len(&self) -> usize {
+		self.entries.len()
+	}
+
+	#[must_use]
+	pub fn is_empty(&self) -> bool {
+		self.entries.is_empty()
+	}
+}
+
+impl KeyResolver for Nodelist {
+	fn public_key(&self, address: &Address) -> Option<PublicKey> {
+		self.get(address)?
+			.tith
+			.as_ref()
+			.map(|service| service.public_key)
+	}
+}
 
 /// One parsed nodelist record.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -97,10 +310,10 @@ struct Validator {
 
 impl Validator {
 	fn distribution(domain: String) -> Result<Self, NodelistError> {
-		Self::new(SegmentContext::zone(domain)?, false)
+		Ok(Self::new(SegmentContext::zone(domain)?, false))
 	}
 
-	fn new(context: SegmentContext, requires_data: bool) -> Result<Self, NodelistError> {
+	fn new(context: SegmentContext, requires_data: bool) -> Self {
 		let mut hierarchy = Hierarchy::default();
 		match context.initial {
 			InitialContext::Zone => {}
@@ -108,12 +321,13 @@ impl Validator {
 			InitialContext::WithinLocalNet { zone, net } => {
 				hierarchy.zone = Some(zone);
 				hierarchy.host = Some(
-					Address::new(context.domain.clone(), zone, net, 0, 0)
-						.map_err(|error| fail(0, NodelistErrorKind::Address(error)))?,
+					Address::new(context.domain.clone(), zone, net, 0, 0).expect(
+						"SegmentContext validates the supplied domain, zone, and local net",
+					),
 				);
 			}
 		}
-		Ok(Self {
+		Self {
 			domain: context.domain,
 			initial: context.initial,
 			requires_data,
@@ -126,7 +340,7 @@ impl Validator {
 			echomail_coordinator_nets: BTreeSet::new(),
 			pointlist_keeper_nets: BTreeSet::new(),
 			coordinator_override_nets: BTreeSet::new(),
-		})
+		}
 	}
 
 	fn parse_line(&mut self, line_number: usize, raw_line: &str) -> Result<Record, NodelistError> {
@@ -143,6 +357,15 @@ impl Validator {
 				text: remainder[interest_len..].to_owned(),
 			}));
 		}
+		self.parse_data_line(line_number, raw_line)
+			.map(|entry| Record::Entry(Box::new(entry)))
+	}
+
+	fn parse_data_line(
+		&mut self,
+		line_number: usize,
+		raw_line: &str,
+	) -> Result<Entry, NodelistError> {
 		if raw_line
 			.chars()
 			.any(|character| prohibited_character(character) && character != '\t')
@@ -198,7 +421,7 @@ impl Validator {
 				.iter()
 				.flat_map(|service| &service.endpoints)
 				.any(crate::ResolvedInternetEndpoint::is_usable)
-			|| email_flags.iter().any(crate::publishes_email_contact);
+			|| email_flags.iter().any(publishes_email_contact);
 		if matches!(keyword, Keyword::Normal | Keyword::Private)
 			&& (keyword == Keyword::Private) == usable_contact
 		{
@@ -232,7 +455,7 @@ impl Validator {
 			.expect("a data record has an active Zone");
 		let zone_address = Address::new(self.domain.clone(), zone, zone, 0, 0)
 			.expect("validated hierarchy values remain valid");
-		Ok(Record::Entry(Box::new(Entry {
+		Ok(Entry {
 			keyword,
 			address,
 			node_name: fields[2].to_owned(),
@@ -251,7 +474,7 @@ impl Validator {
 				host: self.hierarchy.host.clone(),
 				hub: self.hierarchy.hub.clone(),
 			},
-		})))
+		})
 	}
 
 	fn address_for(
@@ -267,26 +490,26 @@ impl Validator {
 				self.hierarchy.host = None;
 				self.hierarchy.hub = None;
 				Address::new(self.domain.clone(), number, number, 0, 0)
+					.expect("a canonical nodelist node number is a valid Zone")
 			}
 			Keyword::Region => {
 				let zone = self
 					.hierarchy
 					.zone
-					.ok_or_else(|| fail(line, NodelistErrorKind::InvalidHierarchy))?;
+					.expect("a Region follows an active Zone");
 				self.hierarchy.host = None;
 				self.hierarchy.hub = None;
-				let address = Address::new(self.domain.clone(), zone, number, 0, 0);
-				self.hierarchy.region = address.as_ref().ok().cloned();
+				let address = Address::new(self.domain.clone(), zone, number, 0, 0)
+					.expect("validated hierarchy values remain valid");
+				self.hierarchy.region = Some(address.clone());
 				address
 			}
 			Keyword::Host => {
-				let zone = self
-					.hierarchy
-					.zone
-					.ok_or_else(|| fail(line, NodelistErrorKind::InvalidHierarchy))?;
+				let zone = self.hierarchy.zone.expect("a Host follows an active Zone");
 				self.hierarchy.hub = None;
-				let address = Address::new(self.domain.clone(), zone, number, 0, 0);
-				self.hierarchy.host = address.as_ref().ok().cloned();
+				let address = Address::new(self.domain.clone(), zone, number, 0, 0)
+					.expect("validated hierarchy values remain valid");
+				self.hierarchy.host = Some(address.clone());
 				address
 			}
 			Keyword::Hub => {
@@ -295,15 +518,16 @@ impl Validator {
 					.host
 					.as_ref()
 					.ok_or_else(|| fail(line, NodelistErrorKind::InvalidHierarchy))?;
-				let address = Address::new(self.domain.clone(), host.zone(), host.net(), number, 0);
-				self.hierarchy.hub = address.as_ref().ok().cloned();
+				let address = Address::new(self.domain.clone(), host.zone(), host.net(), number, 0)
+					.expect("validated hierarchy values remain valid");
+				self.hierarchy.hub = Some(address.clone());
 				address
 			}
 			Keyword::Normal | Keyword::Private | Keyword::Hold | Keyword::Down => {
 				let zone = self
 					.hierarchy
 					.zone
-					.ok_or_else(|| fail(line, NodelistErrorKind::InvalidHierarchy))?;
+					.expect("a member record follows an active Zone");
 				let net = self
 					.hierarchy
 					.host
@@ -311,9 +535,10 @@ impl Validator {
 					.or(self.hierarchy.region.as_ref())
 					.map_or(zone, Address::net);
 				Address::new(self.domain.clone(), zone, net, number, 0)
+					.expect("validated hierarchy values remain valid")
 			}
 		};
-		result.map_err(|error| fail(line, NodelistErrorKind::Address(error)))
+		Ok(result)
 	}
 
 	fn validate_flags(
@@ -404,7 +629,7 @@ impl<R: BufRead> NodelistReader<R> {
 	pub fn segment(context: SegmentContext, reader: R) -> Result<Self, NodelistError> {
 		Ok(Self {
 			reader,
-			validator: Validator::new(context, true)?,
+			validator: Validator::new(context, true),
 			buffer: Vec::new(),
 			line: 0,
 			done: false,
@@ -496,7 +721,7 @@ impl<W: Write> NodelistWriter<W> {
 	pub fn segment(context: SegmentContext, writer: W) -> Result<Self, NodelistError> {
 		Ok(Self {
 			writer,
-			validator: Validator::new(context, true)?,
+			validator: Validator::new(context, true),
 			line: 0,
 		})
 	}
@@ -542,9 +767,7 @@ impl<W: Write> NodelistWriter<W> {
 			input.other_flags,
 		);
 		self.line += 1;
-		let Record::Entry(entry) = self.validator.parse_line(self.line, &line)? else {
-			unreachable!("an entry input formats one data record");
-		};
+		let entry = self.validator.parse_data_line(self.line, &line)?;
 		if let PublicationSource::FirstPublicationFromAnonymousApplication(application_key) = source
 			&& entry.tith.as_ref().map(|service| service.public_key) != Some(application_key)
 		{
@@ -553,7 +776,7 @@ impl<W: Write> NodelistWriter<W> {
 		self.writer
 			.write_all(format!("{line}\n").as_bytes())
 			.map_err(|_| fail(self.line, NodelistErrorKind::Io))?;
-		Ok(*entry)
+		Ok(entry)
 	}
 
 	pub fn finish(mut self) -> Result<W, NodelistError> {
@@ -681,4 +904,11 @@ pub fn decompress_zstd_frame<R: BufRead, W: Write>(input: R, mut output: W) -> i
 		));
 	}
 	Ok(output)
+}
+
+#[cfg(test)]
+mod qualification_tests {
+	use crate as tith_nodelist;
+
+	include!("../tests/tts5000.rs");
 }

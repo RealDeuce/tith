@@ -9,6 +9,8 @@ use tith_nodelist::{
 	PublicationSource, Record, SegmentContext, SystemFlags, compress_zstd_frame,
 	decompress_zstd_frame,
 };
+use tith_wire::address::Address;
+use tith_wire::bundle::KeyResolver;
 
 // `zstd` 1.5.2 command-line output for `hello\n`, with its content checksum.
 const CLI_FRAME: &[u8] = &[
@@ -27,6 +29,10 @@ fn prefix() -> String {
 fn flagged_line(keyword: &str, number: u16, system: &str, other: &str) -> String {
 	let phone = if keyword.is_empty() { "1-1" } else { "" };
 	format!("{keyword}\t{number}\tNode\tLocation\tSysop\t{phone}\t{system}\t\t\t\t{other}\n")
+}
+
+fn fields_line(fields: [&str; 11]) -> String {
+	format!("{}\n", fields.join("\t"))
 }
 
 fn input(keyword: Keyword, number: u16) -> EntryInput {
@@ -144,6 +150,64 @@ fn streaming_records_define_utf8_controls_and_comment_interests() {
 			.unwrap()
 			.unwrap_err();
 		assert!(matches!(error.kind, NodelistErrorKind::InvalidKeyword));
+	}
+
+	let error = Nodelist::parse(
+		"fidonet",
+		&fields_line([
+			"Zone", "1", "No\0de", "Place", "Sysop", "", "", "", "", "", "",
+		]),
+	)
+	.unwrap_err();
+	assert!(matches!(error.kind, NodelistErrorKind::ControlCharacter));
+}
+
+#[test]
+fn every_data_field_rejection_is_exercised_through_the_reader() {
+	for number in ["", "0", "01", "32768", "x", "99999999999999999999"] {
+		let text = fields_line([
+			"Zone", number, "Node", "Place", "Sysop", "", "", "", "", "", "",
+		]);
+		assert!(matches!(
+			Nodelist::parse("fidonet", &text),
+			Err(error) if matches!(error.kind, NodelistErrorKind::InvalidNodeNumber)
+		));
+	}
+
+	for phone in ["1", "123", "1--2", "1-a", "1-23456789012345678901234567890"] {
+		let invalid_phone = fields_line([
+			"Zone", "1", "Node", "Place", "Sysop", phone, "", "", "", "", "",
+		]);
+		assert!(matches!(
+			Nodelist::parse("fidonet", &invalid_phone),
+			Err(error) if matches!(error.kind, NodelistErrorKind::InvalidPhone)
+		));
+	}
+
+	let outside_local_net = [line("Zone", 1, "", "", ""), line("Pvt", 2, "", "", "")].concat();
+	assert!(matches!(
+		Nodelist::parse("fidonet", &outside_local_net),
+		Err(error) if matches!(error.kind, NodelistErrorKind::InvalidHierarchy)
+	));
+
+	for fields in [
+		[
+			"Zone", "1", "Node", "Place", "Sysop", "", "BAD", "", "", "", "",
+		],
+		[
+			"Zone", "1", "Node", "Place", "Sysop", "", "", "BAD", "", "", "",
+		],
+		[
+			"Zone", "1", "Node", "Place", "Sysop", "", "", "", "BAD", "", "",
+		],
+		[
+			"Zone", "1", "Node", "Place", "Sysop", "", "", "", "", "BAD", "",
+		],
+		[
+			"Zone", "1", "Node", "Place", "Sysop", "", "", "", "", "", "bad-",
+		],
+	] {
+		assert!(Nodelist::parse("fidonet", &fields_line(fields)).is_err());
 	}
 }
 
@@ -319,6 +383,26 @@ fn coordinator_assertions_use_their_exact_scopes() {
 
 	for text in [
 		[
+			flagged_line("Zone", 1, "", ""),
+			flagged_line("", 2, "CM,ICM", ""),
+		]
+		.concat(),
+		[
+			flagged_line("Zone", 1, "", ""),
+			flagged_line("", 2, "CM,#02", ""),
+		]
+		.concat(),
+		[
+			flagged_line("Zone", 1, "", ""),
+			flagged_line("", 2, "CM,TAB", ""),
+		]
+		.concat(),
+		[
+			flagged_line("Zone", 1, "", ""),
+			flagged_line("", 2, "XA,XB", ""),
+		]
+		.concat(),
+		[
 			flagged_line("Zone", 1, "", "ZEC"),
 			flagged_line("", 2, "", "ZEC"),
 		]
@@ -424,6 +508,20 @@ fn pvt_is_exactly_the_absence_of_a_usable_contact_target() {
 		)
 		.is_ok()
 	);
+
+	for method in ["IEM", "ITX", "IUC", "IMI", "ISE", "EVY", "EMA"] {
+		let bare = format!("{}{}", prefix(), line("Pvt", 20, "", "", method));
+		assert!(Nodelist::parse("fidonet", &bare).is_ok(), "bare {method}");
+		let addressed = format!(
+			"{}{}",
+			prefix(),
+			line("", 20, "", "", &format!("{method}:sysop@example.org"))
+		);
+		assert!(
+			Nodelist::parse("fidonet", &addressed).is_ok(),
+			"addressed {method}"
+		);
+	}
 }
 
 #[test]
@@ -457,6 +555,12 @@ fn writer_round_trips_records_and_checks_application_keys() {
 	let text = String::from_utf8(bytes).unwrap();
 	let parsed = Nodelist::parse("fidonet", &text).unwrap();
 	assert_eq!(parsed.len(), 3);
+	let member_address: Address = "fidonet#1:10/20".parse().unwrap();
+	assert_eq!(parsed.public_key(&member_address), Some(key));
+	let zone_address: Address = "fidonet#1".parse().unwrap();
+	assert_eq!(parsed.public_key(&zone_address), None);
+	let missing_address: Address = "fidonet#2".parse().unwrap();
+	assert_eq!(parsed.public_key(&missing_address), None);
 
 	let mut wrong = NodelistWriter::distribution("fidonet", Vec::new()).unwrap();
 	wrong
@@ -698,6 +802,14 @@ fn streaming_io_failures_are_reported() {
 	assert!(matches!(error.kind, NodelistErrorKind::Io));
 	let mut writer = NodelistWriter::distribution("fidonet", FailingWriter).unwrap();
 	let error = writer
+		.write_comment(&Comment {
+			interests: "A".to_owned(),
+			text: " notice".to_owned(),
+		})
+		.unwrap_err();
+	assert!(matches!(error.kind, NodelistErrorKind::Io));
+	let mut writer = NodelistWriter::distribution("fidonet", FailingWriter).unwrap();
+	let error = writer
 		.write_entry(&input(Keyword::Zone, 1), PublicationSource::Ordinary)
 		.unwrap_err();
 	assert!(matches!(error.kind, NodelistErrorKind::Io));
@@ -712,4 +824,5 @@ fn streaming_io_failures_are_reported() {
 	assert!(compress_zstd_frame(FailingReader, Vec::new()).is_err());
 	assert!(compress_zstd_frame(Cursor::new(b"text"), FailingWriter).is_err());
 	assert!(decompress_zstd_frame(FailingReader, Vec::new()).is_err());
+	assert!(decompress_zstd_frame(BufReader::new(Cursor::new(CLI_FRAME)), FailingWriter).is_err());
 }

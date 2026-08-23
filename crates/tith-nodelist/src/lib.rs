@@ -2,19 +2,14 @@
 
 #![forbid(unsafe_code)]
 
-use std::collections::BTreeMap;
-use std::fmt;
-
-use tith_crypto::PublicKey;
-use tith_wire::address::{Address, AddressError};
-use tith_wire::bundle::KeyResolver;
-
 mod document;
 mod flags;
 
 pub use document::{
-	AlternatePublicationName, Comment, EntryInput, NodelistReader, NodelistWriter, PublicationName,
-	PublicationSource, Record, SegmentContext, compress_zstd_frame, decompress_zstd_frame,
+	AlternatePublicationName, Branch, Comment, Endpoint, EndpointPort, Entry, EntryInput, Keyword,
+	Nodelist, NodelistError, NodelistErrorKind, NodelistReader, NodelistWriter, PublicationName,
+	PublicationSource, REGISTERED_TITH_PORT, Record, SegmentContext, TithService,
+	compress_zstd_frame, decompress_zstd_frame,
 };
 
 pub use flags::{
@@ -23,223 +18,16 @@ pub use flags::{
 	OtherFlags, PstnIsdnFlag, PstnIsdnFlags, ResolvedEmailMethod, ResolvedInternetEndpoint,
 	ResolvedInternetService, ServerAddress, SystemFlag, SystemFlags,
 };
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum Keyword {
-	Normal,
-	Private,
-	Hold,
-	Down,
-	Zone,
-	Region,
-	Host,
-	Hub,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct Endpoint {
-	pub server: Option<String>,
-	pub port: EndpointPort,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum EndpointPort {
-	RegisteredDefault,
-	Explicit(u16),
-}
-
-pub const REGISTERED_TITH_PORT: Option<u16> = None;
-
-impl Endpoint {
-	#[must_use]
-	pub fn resolved_port(&self) -> Option<u16> {
-		match self.port {
-			EndpointPort::RegisteredDefault => REGISTERED_TITH_PORT,
-			EndpointPort::Explicit(port) => Some(port),
-		}
-	}
-
-	#[must_use]
-	pub fn is_usable(&self) -> bool {
-		self.server.is_some() && self.resolved_port().is_some()
-	}
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct TithService {
-	pub endpoints: Vec<Endpoint>,
-	pub public_key: PublicKey,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct Branch {
-	pub zone: Address,
-	pub region: Option<Address>,
-	pub host: Option<Address>,
-	pub hub: Option<Address>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct Entry {
-	pub keyword: Keyword,
-	pub address: Address,
-	pub node_name: String,
-	pub location: String,
-	pub sysop_name: String,
-	pub phone: String,
-	pub system_flags: SystemFlags,
-	pub pstn_isdn_flags: PstnIsdnFlags,
-	pub internet_flags: InternetFlags,
-	pub email_flags: EmailFlags,
-	pub other_flags: OtherFlags,
-	pub tith: Option<TithService>,
-	pub branch: Branch,
-}
-
-#[derive(Debug)]
-pub enum NodelistErrorKind {
-	Io,
-	InvalidUtf8,
-	MissingFinalLineFeed,
-	ControlCharacter,
-	InvalidComment,
-	WrongFieldCount,
-	InvalidKeyword,
-	InvalidNodeNumber,
-	InvalidHierarchy,
-	DuplicateAddress,
-	InvalidPhone,
-	PrivateContact,
-	InvalidFlag,
-	InvalidPublicKey,
-	InvalidEndpoint,
-	InvalidPublication,
-	ApplicationKeyMismatch,
-	Address(AddressError),
-}
-
-#[derive(Debug)]
-pub struct NodelistError {
-	pub line: usize,
-	pub kind: NodelistErrorKind,
-}
-
-impl fmt::Display for NodelistError {
-	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-		write!(f, "nodelist line {}: {:?}", self.line, self.kind)
-	}
-}
-
-impl std::error::Error for NodelistError {}
-
-#[derive(Clone, Debug, Default)]
-pub struct Nodelist {
-	entries: BTreeMap<Address, Entry>,
-}
-
-pub(crate) fn fail(line: usize, kind: NodelistErrorKind) -> NodelistError {
-	NodelistError { line, kind }
-}
-
-pub(crate) fn parse_keyword(value: &str) -> Option<Keyword> {
-	match value {
-		"" => Some(Keyword::Normal),
-		"Pvt" => Some(Keyword::Private),
-		"Hold" => Some(Keyword::Hold),
-		"Down" => Some(Keyword::Down),
-		"Zone" => Some(Keyword::Zone),
-		"Region" => Some(Keyword::Region),
-		"Host" => Some(Keyword::Host),
-		"Hub" => Some(Keyword::Hub),
-		_ => None,
-	}
-}
-
-pub(crate) fn parse_node_number(value: &str) -> Option<i32> {
-	if value.is_empty()
-		|| value.starts_with('0')
-		|| !value.bytes().all(|byte| byte.is_ascii_digit())
-	{
-		return None;
-	}
-	let number: i32 = value.parse().ok()?;
-	(1..=32_767).contains(&number).then_some(number)
-}
-
-pub(crate) fn publishes_email_contact(flag: &EmailFlag) -> bool {
-	match flag {
-		EmailFlag::Default(address)
-		| EmailFlag::Transx(address)
-		| EmailFlag::Uuencode(address)
-		| EmailFlag::Mime(address)
-		| EmailFlag::Seat(address)
-		| EmailFlag::Voyager(address)
-		| EmailFlag::OtherMethod(address) => address.is_some(),
-	}
-}
-
-pub(crate) fn validate_phone(phone: &str) -> bool {
-	if phone.is_empty() {
-		return true;
-	}
-	if !(3..=29).contains(&phone.len()) {
-		return false;
-	}
-	let pieces: Vec<_> = phone.split('-').collect();
-	pieces.len() >= 2
-		&& pieces
-			.iter()
-			.all(|piece| !piece.is_empty() && piece.bytes().all(|byte| byte.is_ascii_digit()))
-}
-
-impl Nodelist {
-	pub fn parse(domain: &str, input: &str) -> Result<Self, NodelistError> {
-		Self::read(domain, std::io::Cursor::new(input.as_bytes()))
-	}
-
-	pub fn read<R: std::io::BufRead>(domain: &str, reader: R) -> Result<Self, NodelistError> {
-		let mut entries = BTreeMap::new();
-		for record in NodelistReader::distribution(domain.to_owned(), reader)? {
-			if let Record::Entry(entry) = record? {
-				entries.insert(entry.address.clone(), *entry);
-			}
-		}
-		Ok(Self { entries })
-	}
-	#[must_use]
-	pub fn get(&self, address: &Address) -> Option<&Entry> {
-		self.entries.get(address)
-	}
-
-	pub fn iter(&self) -> impl Iterator<Item = &Entry> {
-		self.entries.values()
-	}
-
-	#[must_use]
-	pub fn len(&self) -> usize {
-		self.entries.len()
-	}
-
-	#[must_use]
-	pub fn is_empty(&self) -> bool {
-		self.entries.is_empty()
-	}
-}
-
-impl KeyResolver for Nodelist {
-	fn public_key(&self, address: &Address) -> Option<PublicKey> {
-		self.get(address)?
-			.tith
-			.as_ref()
-			.map(|service| service.public_key)
-	}
-}
-
 #[cfg(test)]
 mod tests {
 	use super::*;
 	use base64::Engine as _;
 	use base64::engine::general_purpose::STANDARD_NO_PAD;
+	use tith_crypto::PublicKey;
+	use tith_wire::address::Address;
+	use tith_wire::bundle::KeyResolver;
+
+	use crate::document::{parse_node_number, validate_phone};
 
 	fn line(keyword: &str, number: u16, internet: &str) -> String {
 		let phone = if keyword.is_empty() { "1-1" } else { "" };

@@ -60,5 +60,4 @@ jobs:
           sha256sum tts-5000-coverage.json
           python3 qualification/check_source_line_coverage.py \
             tts-5000-coverage.json \
-            crates/tith-nodelist/src/document.rs \
-            crates/tith-nodelist/src/lib.rs
+            crates/tith-nodelist/src/document.rs
