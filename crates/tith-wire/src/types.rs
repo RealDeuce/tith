@@ -1,5 +1,10 @@
 //! Type assignments from TTS-0003, TTS-0005, and TSP-0016.
 
+pub use crate::bundle_types::{
+	ACCEPTED, FILE, FILE_REQUEST, MESSAGE, POLL_FILE_REQUESTS, POLL_FILES, POLL_MESSAGES,
+	PUBLIC_KEY_REQUEST, REJECTED, TLV_HASH, is_request,
+};
+
 pub use crate::item_types::{
 	ADDITIONAL_KLUDGE_LINE, AREA, AREA_DESCRIPTION, AREA_NAME, CONTENTS, FILENAME, FROM_USER_NAME,
 	LEGACY_ATTRIBUTES, LONG_DESCRIPTION_LINE, MAGIC_WORD, MESSAGE_ID, MESSAGE_TEXT, ORIGIN_LINE,
@@ -17,34 +22,9 @@ pub const ADDRESS: u64 = 7;
 pub const PUBLIC_KEY: u64 = 8;
 pub const SIGNED_ORIGIN: u64 = 9;
 
-pub const MESSAGE: u64 = 64;
-pub const FILE: u64 = 65;
-pub const FILE_REQUEST: u64 = 66;
-pub const REJECTED: u64 = 67;
-pub const ACCEPTED: u64 = 68;
-pub const POLL_MESSAGES: u64 = 69;
-pub const POLL_FILES: u64 = 70;
-pub const POLL_FILE_REQUESTS: u64 = 71;
-pub const PUBLIC_KEY_REQUEST: u64 = 72;
-
-pub const TLV_HASH: u64 = 99;
-
 #[must_use]
 pub const fn is_defined(type_code: u64) -> bool {
-	matches!(type_code, 0..=9 | 64..=72 | 96..=99 | 101..=121)
-}
-
-#[must_use]
-pub const fn is_request(type_code: u64) -> bool {
-	matches!(
-		type_code,
-		MESSAGE
-			| FILE | FILE_REQUEST
-			| POLL_MESSAGES
-			| POLL_FILES
-			| POLL_FILE_REQUESTS
-			| PUBLIC_KEY_REQUEST
-	)
+	matches!(type_code, 0..=9 | 96..=98 | 101..=121) || crate::bundle_types::is_defined(type_code)
 }
 
 #[cfg(test)]

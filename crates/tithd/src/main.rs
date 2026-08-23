@@ -7,6 +7,7 @@ mod framing;
 mod ipc;
 mod mail;
 mod owner_only;
+mod public_key_response;
 mod schedule;
 mod submission;
 mod tcp;

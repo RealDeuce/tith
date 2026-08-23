@@ -12,8 +12,8 @@ use super::{
 	take_string, take_u64,
 };
 
-const JOBS: TableDefinition<&str, &[u8]> = TableDefinition::new("outbound-jobs");
-const ITEMS: TableDefinition<&str, &[u8]> = TableDefinition::new("outbound-items");
+pub(crate) const JOBS: TableDefinition<&str, &[u8]> = TableDefinition::new("outbound-jobs");
+pub(crate) const ITEMS: TableDefinition<&str, &[u8]> = TableDefinition::new("outbound-items");
 const SUBMISSIONS: TableDefinition<&[u8], &[u8]> = TableDefinition::new("outbound-submissions");
 const EVENTS: TableDefinition<&str, &[u8]> = TableDefinition::new("outbound-events");
 
@@ -292,7 +292,7 @@ pub enum ControlOutcome {
 
 #[derive(Clone)]
 pub struct OutboundStore {
-	database: Arc<Database>,
+	pub(crate) database: Arc<Database>,
 }
 
 pub struct BatchContext<'a> {
@@ -725,101 +725,6 @@ impl OutboundStore {
 		})
 	}
 
-	/// Claims the complete poll snapshot for one authenticated identity.
-	///
-	/// TTS-0005 section 3: the Destination "MUST atomically claim every matching
-	/// held value which is not already claimed for an active exchange" and "MUST
-	/// NOT select only part of the otherwise available matching set", so this
-	/// takes all of them in one transaction or none.
-	///
-	/// A held value matches only when it is held for the identity the Bundle
-	/// Origin represents, which for an anonymous Origin includes its `PublicKey`.
-	/// TSP-0002 section 8 adds that an inbound Poll "is not constrained by
-	/// schedules, delivery class, passive status, or a retry Timestamp", so
-	/// neither the mode nor `retry_at` is consulted here.
-	pub fn claim_poll_snapshot(
-		&self,
-		next_hop: &str,
-		next_hop_key: Option<&PublicKey>,
-		kinds: &[JobKind],
-		now: u64,
-	) -> Result<Vec<DeliveryClaim>, StoreError> {
-		let write = self.database.begin_write()?;
-		let mut selected: Vec<(OutboundJob, usize)> = Vec::new();
-		{
-			let jobs = write.open_table(JOBS)?;
-			for entry in jobs.iter()? {
-				let (_, value) = entry?;
-				let job = decode_job(value.value())?;
-				if !kinds.contains(&job.kind) {
-					continue;
-				}
-				for (index, copy) in job.deliveries.iter().enumerate() {
-					if copy.next_hop == next_hop
-						&& copy.next_hop_key.as_ref() == next_hop_key
-						&& matches!(copy.state, JobState::Queued | JobState::Deferred)
-					{
-						selected.push((job.clone(), index));
-					}
-				}
-			}
-		}
-		if selected.is_empty() {
-			return Ok(Vec::new());
-		}
-		// Order is stable so a snapshot is reproducible for diagnosis.
-		selected.sort_by(|(left, left_index), (right, right_index)| {
-			(
-				left.created,
-				&left.job_id,
-				left.deliveries[*left_index].index,
-			)
-				.cmp(&(
-					right.created,
-					&right.job_id,
-					right.deliveries[*right_index].index,
-				))
-		});
-		let mut claims = Vec::with_capacity(selected.len());
-		for (mut job, index) in selected {
-			let previous = job.state;
-			let token = random_identifier('W')?;
-			let copy = &mut job.deliveries[index];
-			copy.state = JobState::Active;
-			copy.attempts = copy
-				.attempts
-				.checked_add(1)
-				.ok_or(StoreError::CorruptRecord)?;
-			copy.retry_at = None;
-			copy.worker_token = Some(token.clone());
-			job.changed = now;
-			job.state = aggregate_state(&job.deliveries);
-			let item = {
-				let items = write.open_table(ITEMS)?;
-				items
-					.get(job.job_id.as_str())?
-					.ok_or(StoreError::CorruptRecord)?
-					.value()
-					.to_vec()
-			};
-			{
-				let mut jobs = write.open_table(JOBS)?;
-				jobs.insert(job.job_id.as_str(), encode_job(&job).as_slice())?;
-			}
-			append_event(&write, &job, Some(previous))?;
-			let delivery = job.deliveries[index].clone();
-			claims.push(DeliveryClaim {
-				job_id: job.job_id,
-				delivery_index: delivery.index,
-				worker_token: token,
-				item,
-				delivery,
-			});
-		}
-		write.commit()?;
-		Ok(claims)
-	}
-
 	fn claim_matching(
 		&self,
 		now: u64,
@@ -1058,7 +963,7 @@ fn make_job(job_id: String, value: NewOutboundJob) -> OutboundJob {
 	}
 }
 
-fn aggregate_state(copies: &[DeliveryRecord]) -> JobState {
+pub(crate) fn aggregate_state(copies: &[DeliveryRecord]) -> JobState {
 	if copies.iter().any(|copy| copy.state == JobState::Active) {
 		JobState::Active
 	} else if copies.iter().any(|copy| copy.state == JobState::Queued) {
@@ -1109,7 +1014,7 @@ fn decode_submission(mut input: &[u8]) -> Result<(String, TlvHash), StoreError> 
 	Ok((id, digest))
 }
 
-fn append_event(
+pub(crate) fn append_event(
 	write: &redb::WriteTransaction,
 	job: &OutboundJob,
 	previous: Option<JobState>,
@@ -1197,7 +1102,7 @@ fn decode_event(mut input: &[u8]) -> Result<(String, bool, OutboundEvent), Store
 	))
 }
 
-fn encode_job(value: &OutboundJob) -> Vec<u8> {
+pub(crate) fn encode_job(value: &OutboundJob) -> Vec<u8> {
 	let mut output = vec![4];
 	for text in [&value.job_id, &value.application, &value.idempotency_key] {
 		put_string(&mut output, text);
@@ -1270,7 +1175,7 @@ fn encode_job(value: &OutboundJob) -> Vec<u8> {
 	output
 }
 
-fn decode_job(mut input: &[u8]) -> Result<OutboundJob, StoreError> {
+pub(crate) fn decode_job(mut input: &[u8]) -> Result<OutboundJob, StoreError> {
 	let version = take_byte(&mut input)?;
 	if version != 4 {
 		return Err(StoreError::UnsupportedRecordVersion {

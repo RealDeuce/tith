@@ -3,10 +3,10 @@ TITH                                              THIS ISN'T THAT HARD
 **********************************************************************
 
 Publication:  TTS‑0006
-Revision:     12
+Revision:     13
 Title:        Bundle Exchange Protocol
 Author(s):    Stephen Hurd
-Date:         2026‑08‑22
+Date:         2026‑08‑23
 ══════════════════════════════════════════════════════════════════════
 
 Status of this document
@@ -170,6 +170,13 @@ Contents
   one retry ends that sequence; this rule does not create an unbounded
   retry loop.
 
+  If the requested predecessor private key is unavailable, TTS‑0005
+  requires a refusal signed by the Server's current key.  Because that
+  reply cannot be authenticated with the requested predecessor, the
+  Client MUST leave the PublicKeyRequest incomplete, MUST NOT submit
+  either its Rejected value or current key as trust evidence, and MUST
+  end the continuity‐recovery sequence.
+
   A first‐contact PublicKeyRequest omits the non‐anonymous Destination
   PublicKey.  A Client MUST do this only when its local configuration
   explicitly authorizes trust on first use for that contact and fixes
@@ -270,17 +277,15 @@ Contents
 A. References
 ─────────────
 
-  [TTS‑0008] "Public Key Trust and Continuity", TITH, 2026‑08‑22.
+  [TTS‑0008] "Public Key Trust and Continuity", TITH, 2026‑08‑23.
 
-  [TTS‑0009] "Item Format", TITH, 2026‑08‑22.
+  [TTS‑0009] "Item Format", TITH, 2026‑08‑23.
 
   [TTS‑0003] "Common TLV Types", TITH, 2026‑08‑22.
 
-  [TTS‑0004] "Node Addresses", TITH, 2026‑08‑21.
+  [TTS‑0004] "Node Addresses", TITH, 2026‑08‑22.
 
-  [TTS‑0005] "Bundle Format", TITH, 2026‑08‑22.
-
-  [TTS‑5000] "The Distribution Nodelist", TITH, 2026‑08‑22.
+  [TTS‑0005] "Bundle Format", TITH, 2026‑08‑23.
 
 
 B. History
@@ -325,5 +330,9 @@ B. History
 
    Rev.12, 2026‑08‑22: Defined continuity recovery as a bounded exchange
    sequence independent of scheduling.
+
+   Rev.13, 2026‑08‑23: Required an unavailable‐predecessor refusal to
+   complete no response, produce no trust evidence, and end the bounded
+   continuity‐recovery sequence.
 
 **********************************************************************

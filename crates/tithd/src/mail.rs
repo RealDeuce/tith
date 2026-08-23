@@ -14,8 +14,7 @@ use tith_nodelist::Nodelist;
 use tith_store::{DeliveryClaim, DeliveryOutcome, InboundStore, JobKind, OutboundStore};
 use tith_wire::address::Address;
 use tith_wire::bundle::{
-	Bundle, BundleError, Identity, KeyResolver, build_public_key_reply,
-	unauthenticated_signed_data, verify_signed_tlv,
+	Bundle, BundleError, Identity, KeyResolver, unauthenticated_signed_data, verify_signed_tlv,
 };
 
 use crate::accept::Acceptance;
@@ -353,23 +352,17 @@ fn answer_public_key_request(
 	if request.bundle.destination.address != mailer.local.address {
 		return Err("PublicKeyRequest names a different local address".into());
 	}
-	let requested = request.bundle.destination.public_key;
-	let signing_secret = std::iter::once(&mailer.local_secret)
-		.chain(mailer.retired_secrets.iter())
-		.find(|secret| secret.public_key() == requested)
-		.ok_or("PublicKeyRequest names an unavailable predecessor key")?;
-	let signing_origin = Identity {
-		address: mailer.local.address.clone(),
-		public_key: requested,
-	};
-	let encoded = build_public_key_reply(
-		&signing_origin,
-		signing_secret,
-		&request.bundle.origin,
-		now(),
-		request_identifier,
-		response_to,
-		mailer.local_secret.public_key(),
+	let encoded = crate::public_key_response::build(
+		&mailer.local,
+		&mailer.local_secret,
+		&mailer.retired_secrets,
+		crate::public_key_response::Parameters {
+			destination: &request.bundle.origin,
+			requested: request.bundle.destination.public_key,
+			timestamp: now(),
+			identifier: request_identifier,
+			response_to,
+		},
 	)?;
 	writer.write_all(&encoded)?;
 	writer.flush()?;
@@ -922,6 +915,47 @@ mod tests {
 			.unwrap()
 			.remove(0);
 		assert_eq!(accepted.response_public_key, Some(local.public_key));
+		drop(mailer);
+		fs::remove_file(database).unwrap();
+	}
+
+	#[test]
+	fn unavailable_predecessor_gets_a_current_key_signed_permanent_refusal() {
+		let (mailer, peer_keys, peer, local, database) = setup();
+		let unavailable = SigningKeyPair::from_seed(&[45; 32]).unwrap().public;
+		let request = tith_wire::bundle::build_public_key_probe(
+			&peer,
+			&peer_keys.secret,
+			&local.address,
+			Some(unavailable),
+			1,
+			9,
+		)
+		.unwrap();
+		let (response, completed) = exchange(&request, &mailer);
+		assert!(completed);
+		assert!(matches!(
+			Bundle::parse_public_key_reply(&response, mailer.as_ref(), Some(unavailable)),
+			Err(BundleError::InvalidSignature)
+		));
+
+		let top = parse_sequence(&response).unwrap();
+		assert_eq!(top[1].type_code, types::PUBLIC_KEY);
+		assert_eq!(top[1].value, local.public_key.as_bytes());
+		let header = verify_signed_tlv(&top[2], Some(&local), mailer.as_ref()).unwrap();
+		assert_eq!(header.identity, local);
+		let payload = verify_signed_tlv(&top[3], Some(&local), mailer.as_ref()).unwrap();
+		let item = validate_payload(&payload, mailer.as_ref())
+			.unwrap()
+			.remove(0);
+		assert_eq!(item.kind, ItemKind::Rejected);
+		let rejection = item.rejection.unwrap();
+		assert_eq!(rejection.reason, RejectionReason::Permanent);
+		assert_eq!(rejection.retry_after, None);
+		assert_eq!(
+			rejection.description,
+			"requested predecessor private key is unavailable"
+		);
 		drop(mailer);
 		fs::remove_file(database).unwrap();
 	}

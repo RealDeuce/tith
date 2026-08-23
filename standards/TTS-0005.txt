@@ -3,10 +3,10 @@ TITH                                              THIS ISN'T THAT HARD
 **********************************************************************
 
 Publication:  TTS‑0005
-Revision:     15
+Revision:     16
 Title:        Bundle Format
 Author(s):    Stephen Hurd
-Date:         2026‑08‑22
+Date:         2026‑08‑23
 ══════════════════════════════════════════════════════════════════════
 
 Status of this document
@@ -231,10 +231,13 @@ Contents
   with operational work or a Poll.
 
   When the non‐anonymous Destination PublicKey is present in the
-  Header, the Server MUST sign the reply with that exact key.  It MAY
-  use a retained private key for this reply even though that key is no
-  longer current.  When it is absent, the request is a first‑contact
-  probe and the Server signs with its current key.
+  Header and its private key is available, the Server MUST sign a
+  successful reply with that exact key.  It MAY use a retained private
+  key for this reply even though that key is no longer current.  If the
+  requested private key is unavailable, the Server MUST instead send a
+  Rejected response with reason 1 and no Timestamp, signed by its
+  current key.  When the Header PublicKey is absent, the request is a
+  first‑contact probe and the Server signs with its current key.
 
   When the Destination accepts a Poll value, it MUST atomically claim
   every matching held value which is not already claimed for an active
@@ -362,8 +365,10 @@ Contents
   another request in the Bundle.
 
   A PublicKeyRequest reply MUST use the non‐anonymous Origin PublicKey
-  rule in section 2 and MUST contain exactly one payload SignedTLV.  Its
-  Accepted value MUST contain the Server's current PublicKey.
+  rule in section 2 and MUST contain exactly one payload SignedTLV.  A
+  successful reply's Accepted value MUST contain the Server's current
+  PublicKey.  The unavailable‐predecessor response defined in section 3
+  contains Rejected instead.
 
   When the original Header's non‐anonymous Destination is followed by
   a PublicKey, a reply supplies an authenticated continuity proof only
@@ -374,6 +379,14 @@ Contents
   and requested predecessor to the successor in Accepted.  It
   establishes continuity only; it is not revocation of the predecessor
   or evidence that the predecessor was not compromised.
+
+  A receiver which requested a predecessor key cannot authenticate the
+  unavailable‐predecessor response with that requested key.  It
+  therefore completes no response from that reply and obtains no trust
+  evidence from it.  The Rejected value permits a peer which already
+  trusts the current key through another channel to diagnose why the
+  continuity request failed; it does not make the current key a
+  successor to the unavailable predecessor.
 
   When the original Header's non‐anonymous Destination is not followed
   by a PublicKey, section 3 requires both the PublicKey immediately
@@ -427,20 +440,23 @@ Contents
 A. References
 ─────────────
 
-  [TTS‑0008] "Public Key Trust and Continuity", TITH, 2026‑08‑22.
+  [FTA‑1006.002] "Key words to indicate requirement levels" FTSC,
+  1998‑01‑17.
 
-  [TTS‑0009] "Item Format", TITH, 2026‑08‑22.
+  [TTS‑0008] "Public Key Trust and Continuity", TITH, 2026‑08‑23.
 
-  [Libhydrogen] Version 1,
-  https://github.com/jedisct1/libhydrogen/wiki
+  [TTS‑0009] "Item Format", TITH, 2026‑08‑23.
 
-  [TTS‑0002] "Type Length Value Encoding", TITH, 2026‑08‑16.
+  [Libhydrogen] Version 1, "Generic hashing", Git repository
+  https://github.com/jedisct1/libhydrogen.wiki.git, file
+  "Generic-hashing.md" at commit
+  705149f9c8db1f400775477adb6f9c2254103dca, 2024‑05‑06.
+
+  [TTS‑0002] "Type Length Value Encoding", TITH, 2026‑08‑22.
 
   [TTS‑0003] "Common TLV Types", TITH, 2026‑08‑22.
 
-  [TTS‑0004] "Node Addresses", TITH, 2026‑08‑21.
-
-  [TTS‑5000] "The Distribution Nodelist", TITH, 2026‑08‑22.
+  [TTS‑0004] "Node Addresses", TITH, 2026‑08‑22.
 
 
 B. History
@@ -503,5 +519,9 @@ B. History
    Rev.15, 2026‑08‑22: Classified a completely validated
    predecessor‐signed PublicKeyRequest reply as continuity evidence and
    a self‐signed first‐contact result as an observation only.
+
+   Rev.16, 2026‑08‑23: Defined the permanent current‐key‐signed refusal
+   when a requested predecessor private key is unavailable, and pinned
+   the exact generic‐hashing dependency baseline.
 
 **********************************************************************

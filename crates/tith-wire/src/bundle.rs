@@ -63,8 +63,11 @@ impl Bundle {
 		}
 		let accepted = crate::item::validate_item(&bundle.payloads[0].data[1], resolver)?
 			.ok_or(BundleError::Unexpected("PublicKeyRequest Accepted"))?;
-		if accepted.response_public_key.is_none() {
-			return Err(BundleError::Missing("Accepted current PublicKey"));
+		let current = accepted
+			.response_public_key
+			.ok_or(BundleError::Missing("Accepted current PublicKey"))?;
+		if expected.is_none() && bundle.advertised_origin_key != Some(current) {
+			return Err(BundleError::InvalidSignature);
 		}
 		Ok(bundle)
 	}
@@ -163,15 +166,22 @@ impl Bundle {
 				unknown_top_level.push(value.clone());
 			}
 		}
-		if requested_destination_key.is_some()
+		let dedicated_public_key_request = payloads.len() == 1
+			&& payloads[0].data.len() == 2
+			&& payloads[0].data[0].type_code == types::TLV_HASH
+			&& payloads[0].data[1].type_code == types::PUBLIC_KEY_REQUEST;
+		let contains_public_key_request = payloads.iter().any(|payload| {
+			payload
+				.data
+				.iter()
+				.any(|value| value.type_code == types::PUBLIC_KEY_REQUEST)
+		});
+		if (requested_destination_key.is_some() || contains_public_key_request)
 			&& !(allow_header_only && payloads.is_empty())
-			&& !(payloads.len() == 1
-				&& payloads[0].data.len() == 2
-				&& payloads[0].data[0].type_code == types::TLV_HASH
-				&& payloads[0].data[1].type_code == types::PUBLIC_KEY_REQUEST)
+			&& !dedicated_public_key_request
 		{
 			return Err(BundleError::Unexpected(
-				"non-anonymous Destination PublicKey outside a sole PublicKeyRequest",
+				"PublicKeyRequest outside its dedicated Bundle",
 			));
 		}
 
@@ -403,6 +413,56 @@ pub fn build_public_key_reply(
 	];
 	top.push(header);
 	top.push(build_signed_tlv(&payload, None, signing_secret)?);
+	Ok(concatenate(&top))
+}
+
+/// Builds the required permanent refusal when the requested predecessor
+/// private key is unavailable.
+///
+/// The current key signs and is advertised by this reply. A client which
+/// requested another predecessor consequently cannot authenticate it and must
+/// leave that request outstanding.
+pub fn build_public_key_unavailable_reply(
+	current_origin: &Identity,
+	current_secret: &SecretKey,
+	destination: &Identity,
+	timestamp: u64,
+	request_identifier: u64,
+	response_to: TlvHash,
+) -> Result<Vec<u8>, BundleError> {
+	let mut top = vec![OwnedTlv::new(
+		types::ORIGIN,
+		current_origin.address.to_string().into_bytes(),
+	)?];
+	top.push(OwnedTlv::new(
+		types::PUBLIC_KEY,
+		current_origin.public_key.as_bytes().to_vec(),
+	)?);
+	let mut header_data = vec![OwnedTlv::new(
+		types::DESTINATION,
+		destination.address.to_string().into_bytes(),
+	)?];
+	if destination.address.is_anonymous() {
+		header_data.push(OwnedTlv::new(
+			types::PUBLIC_KEY,
+			destination.public_key.as_bytes().to_vec(),
+		)?);
+	}
+	header_data.push(OwnedTlv::new(types::TIMESTAMP, encode_u64(timestamp))?);
+	let header = build_signed_tlv(&header_data, None, current_secret)?;
+	let header_hash = hash_tlv(&header.encode())?;
+	let payload = [
+		OwnedTlv::new(types::TLV_HASH, header_hash.as_bytes().to_vec())?,
+		crate::item::rejected(
+			request_identifier,
+			response_to,
+			None,
+			crate::item::RejectionReason::Permanent,
+			"requested predecessor private key is unavailable",
+		)?,
+	];
+	top.push(header);
+	top.push(build_signed_tlv(&payload, None, current_secret)?);
 	Ok(concatenate(&top))
 }
 
@@ -658,5 +718,145 @@ mod tests {
 			Bundle::parse(&encoded, &|_: &Address| None),
 			Err(BundleError::Missing("initial Origin"))
 		));
+	}
+
+	#[test]
+	fn first_contact_requires_the_advertised_and_accepted_keys_to_match() {
+		let client_keys = SigningKeyPair::from_seed(&[31; 32]).unwrap();
+		let server_keys = SigningKeyPair::from_seed(&[32; 32]).unwrap();
+		let other_keys = SigningKeyPair::from_seed(&[33; 32]).unwrap();
+		let client = Identity {
+			address: "fidonet#1/31".parse().unwrap(),
+			public_key: client_keys.public,
+		};
+		let server = Identity {
+			address: "fidonet#1/32".parse().unwrap(),
+			public_key: server_keys.public,
+		};
+		let resolver =
+			|address: &Address| (address == &client.address).then_some(client.public_key);
+		let response_to = hash_tlv(b"probe").unwrap();
+		let valid = build_public_key_reply(
+			&server,
+			&server_keys.secret,
+			&client,
+			2,
+			1,
+			response_to,
+			server.public_key,
+		)
+		.unwrap();
+		assert!(Bundle::parse_public_key_reply(&valid, &resolver, None).is_ok());
+
+		let mismatched = build_public_key_reply(
+			&server,
+			&server_keys.secret,
+			&client,
+			2,
+			1,
+			response_to,
+			other_keys.public,
+		)
+		.unwrap();
+		assert!(matches!(
+			Bundle::parse_public_key_reply(&mismatched, &resolver, None),
+			Err(BundleError::InvalidSignature)
+		));
+	}
+
+	#[test]
+	fn public_key_request_is_rejected_when_mixed_or_repeated() {
+		let origin_keys = SigningKeyPair::from_seed(&[34; 32]).unwrap();
+		let destination_keys = SigningKeyPair::from_seed(&[35; 32]).unwrap();
+		let origin = Identity {
+			address: "fidonet#1/34".parse().unwrap(),
+			public_key: origin_keys.public,
+		};
+		let destination = Identity {
+			address: "fidonet#1/35".parse().unwrap(),
+			public_key: destination_keys.public,
+		};
+		let resolver = |address: &Address| {
+			if address == &origin.address {
+				Some(origin.public_key)
+			} else if address == &destination.address {
+				Some(destination.public_key)
+			} else {
+				None
+			}
+		};
+		let request = crate::item::public_key_request(1).unwrap();
+		let poll = OwnedTlv::new(
+			types::POLL_MESSAGES,
+			OwnedTlv::new(types::REQUEST_IDENTIFIER, encode_u64(2))
+				.unwrap()
+				.encode(),
+		)
+		.unwrap();
+		for payload_groups in [
+			vec![vec![request.clone(), poll]],
+			vec![vec![request.clone()], vec![request]],
+		] {
+			let encoded = build_bundle(
+				&origin,
+				&origin_keys.secret,
+				&destination,
+				1,
+				payload_groups,
+			)
+			.unwrap();
+			assert!(matches!(
+				Bundle::parse(&encoded, &resolver),
+				Err(BundleError::Unexpected(
+					"PublicKeyRequest outside its dedicated Bundle"
+				))
+			));
+		}
+	}
+
+	#[test]
+	fn unavailable_predecessor_reply_is_signed_by_the_current_key() {
+		let client_keys = SigningKeyPair::from_seed(&[36; 32]).unwrap();
+		let old_server_keys = SigningKeyPair::from_seed(&[37; 32]).unwrap();
+		let current_server_keys = SigningKeyPair::from_seed(&[38; 32]).unwrap();
+		let client = Identity {
+			address: "fidonet#1/36".parse().unwrap(),
+			public_key: client_keys.public,
+		};
+		let current_server = Identity {
+			address: "fidonet#1/37".parse().unwrap(),
+			public_key: current_server_keys.public,
+		};
+		let response_to = hash_tlv(b"unavailable").unwrap();
+		let reply = build_public_key_unavailable_reply(
+			&current_server,
+			&current_server_keys.secret,
+			&client,
+			2,
+			7,
+			response_to,
+		)
+		.unwrap();
+		let resolver =
+			|address: &Address| (address == &client.address).then_some(client.public_key);
+		assert!(matches!(
+			Bundle::parse_public_key_reply(&reply, &resolver, Some(old_server_keys.public)),
+			Err(BundleError::InvalidSignature)
+		));
+		let parsed = Bundle::parse_internal(
+			&reply,
+			&resolver,
+			NonAnonymousOriginKey::Exact(current_server.public_key),
+			false,
+		)
+		.unwrap();
+		let rejected = crate::item::validate_item(&parsed.payloads[0].data[1], &resolver)
+			.unwrap()
+			.unwrap();
+		assert_eq!(rejected.kind, crate::item::ItemKind::Rejected);
+		assert_eq!(
+			rejected.rejection.unwrap().reason,
+			crate::item::RejectionReason::Permanent
+		);
 	}
 }

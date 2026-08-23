@@ -3,7 +3,7 @@ TITH                                              THIS ISN'T THAT HARD
 **********************************************************************
 
 Publication:  TTS‑0009
-Revision:     1
+Revision:     2
 Title:        Item Format
 Author(s):    Stephen Hurd
 Date:         2026‑08‑23
@@ -515,11 +515,14 @@ A. References
   [FSC‑0068.001] "A Proposed Replacement For FTS-0004", FTSC,
   1992‑12‑13.
 
+  [FTA‑1006.002] "Key words to indicate requirement levels" FTSC,
+  1998‑01‑17.
+
   [TTS‑0002] "Type Length Value Encoding", TITH, 2026‑08‑22.
 
   [TTS‑0003] "Common TLV Types", TITH, 2026‑08‑22.
 
-  [TTS‑0004] "Node Addresses", TITH, 2026‑08‑21.
+  [TTS‑0004] "Node Addresses", TITH, 2026‑08‑22.
 
   [TTS‑0007] "Signed Integer Encoding", TITH, 2026‑08‑22.
 
@@ -537,5 +540,8 @@ B. History
 
    TTS Rev.1, 2026‑08‑23: Promoted TSP‑0016 revision 2 without technical
    changes.
+
+   TTS Rev.2, 2026‑08‑23: Carried the unchanged requirements forward
+   with corrected dependency citations and revision labels.
 
 **********************************************************************

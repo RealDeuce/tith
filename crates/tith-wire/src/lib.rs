@@ -4,6 +4,7 @@
 
 pub mod address;
 pub mod bundle;
+mod bundle_types;
 mod common;
 mod error;
 pub mod identity;
