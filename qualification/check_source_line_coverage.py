@@ -27,6 +27,7 @@ def main() -> int:
 	if len(data) != 1:
 		raise SystemExit(f"expected one LLVM coverage data set, found {len(data)}")
 	files = data[0]["files"]
+	functions = data[0].get("functions", [])
 	failed = False
 	for source in wanted:
 		matches = [
@@ -47,6 +48,18 @@ def main() -> int:
 			if kind != "lines" and counts["covered"] != counts["count"]:
 				failed = True
 		print(f"{source}: " + ", ".join(parts))
+		if summary["functions"]["covered"] != summary["functions"]["count"]:
+			uncovered = sorted(
+				function["name"]
+				for function in functions
+				if function.get("count", 0) == 0
+				and any(
+					pathlib.Path(filename).as_posix().endswith(f"/{source}")
+					or pathlib.Path(filename).as_posix() == source
+					for filename in function.get("filenames", [])
+				)
+			)
+			print(f"{source}: uncovered functions {uncovered}")
 		if summary["lines"]["covered"] != summary["lines"]["count"]:
 			uncovered = uncovered_lines(matches[0])
 			print(f"{source}: uncovered primary source lines {uncovered}")
