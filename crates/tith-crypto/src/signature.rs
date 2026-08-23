@@ -36,7 +36,7 @@ impl fmt::Display for CryptoError {
 
 impl std::error::Error for CryptoError {}
 
-fn operation_result(result: i32, error: CryptoError) -> Result<(), CryptoError> {
+pub(crate) fn operation_result(result: i32, error: CryptoError) -> Result<(), CryptoError> {
 	if result == 0 { Ok(()) } else { Err(error) }
 }
 

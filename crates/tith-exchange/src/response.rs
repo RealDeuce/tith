@@ -72,7 +72,7 @@ pub struct ResponseTracker {
 }
 
 impl ResponseTracker {
-	pub fn for_bundle(bundle: &Bundle, resolver: &impl KeyResolver) -> Result<Self, ExchangeError> {
+	pub fn for_bundle(bundle: &Bundle, resolver: &dyn KeyResolver) -> Result<Self, ExchangeError> {
 		let mut outstanding = Vec::new();
 		for payload in &bundle.payloads {
 			let signed_tlv_hash = hash_tlv(&payload.encoded)?;
@@ -124,7 +124,7 @@ impl ResponseTracker {
 	pub fn observe_reply(
 		&mut self,
 		reply: &Bundle,
-		resolver: &impl KeyResolver,
+		resolver: &dyn KeyResolver,
 	) -> Result<(), ExchangeError> {
 		if reply.origin != self.destination {
 			return Err(ExchangeError::WrongReplyOrigin);
@@ -241,5 +241,61 @@ impl ServerReply {
 		);
 		data.extend(responses);
 		Ok(build_signed_tlv(&data, None, local_secret)?.encode())
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	fn item(kind: ItemKind) -> ValidatedItem {
+		ValidatedItem {
+			kind,
+			request_identifier: 1,
+			duplicate_identity: None,
+			authentication: None,
+			response_to: None,
+			response_public_key: None,
+			rejection: None,
+			provenance: None,
+			destination: None,
+			area: None,
+			raw: OwnedTlv::new(200, Vec::new()).unwrap(),
+		}
+	}
+
+	#[test]
+	fn every_item_and_request_kind_has_one_accounting_class() {
+		for kind in [ItemKind::NetMail, ItemKind::EchoMail] {
+			assert_eq!(request_kind(&item(kind)), Some(RequestKind::Message));
+		}
+		for (item_kind, request_kind_value) in [
+			(ItemKind::File, RequestKind::File),
+			(ItemKind::FileRequest, RequestKind::FileRequest),
+			(ItemKind::PollMessages, RequestKind::PollMessages),
+			(ItemKind::PollFiles, RequestKind::PollFiles),
+			(ItemKind::PollFileRequests, RequestKind::PollFileRequests),
+			(ItemKind::PublicKeyRequest, RequestKind::PublicKeyRequest),
+		] {
+			assert_eq!(request_kind(&item(item_kind)), Some(request_kind_value));
+		}
+		for kind in [ItemKind::Accepted, ItemKind::Rejected] {
+			assert_eq!(request_kind(&item(kind)), None);
+		}
+		for kind in [
+			RequestKind::Message,
+			RequestKind::File,
+			RequestKind::PublicKeyRequest,
+		] {
+			assert!(!kind.requires_return_bundle());
+		}
+		for kind in [
+			RequestKind::FileRequest,
+			RequestKind::PollMessages,
+			RequestKind::PollFiles,
+			RequestKind::PollFileRequests,
+		] {
+			assert!(kind.requires_return_bundle());
+		}
 	}
 }

@@ -4,7 +4,7 @@ use std::mem::MaybeUninit;
 
 use libhydrogen_sys as hydro;
 
-use crate::signature::initialize;
+use crate::signature::{initialize, operation_result};
 use crate::{CryptoError, HASH_BYTES};
 
 const HASH_TLV_CONTEXT: [u8; 8] = *b"HashTLV\0";
@@ -48,9 +48,7 @@ impl TlvHasher {
 				std::ptr::null(),
 			)
 		};
-		if result != 0 {
-			return Err(CryptoError::Operation);
-		}
+		operation_result(result, CryptoError::Operation)?;
 		// SAFETY: a successful call initialized state.
 		Ok(Self {
 			state: unsafe { state.assume_init() },
@@ -62,11 +60,7 @@ impl TlvHasher {
 		let result = unsafe {
 			hydro::hydro_hash_update(&mut self.state, bytes.as_ptr().cast(), bytes.len())
 		};
-		if result == 0 {
-			Ok(())
-		} else {
-			Err(CryptoError::Operation)
-		}
+		operation_result(result, CryptoError::Operation)
 	}
 
 	pub fn finish(mut self) -> Result<TlvHash, CryptoError> {
@@ -74,11 +68,8 @@ impl TlvHasher {
 		// SAFETY: output has exactly the requested length.
 		let result =
 			unsafe { hydro::hydro_hash_final(&mut self.state, hash.as_mut_ptr(), hash.len()) };
-		if result == 0 {
-			Ok(TlvHash(hash))
-		} else {
-			Err(CryptoError::Operation)
-		}
+		operation_result(result, CryptoError::Operation)?;
+		Ok(TlvHash(hash))
 	}
 }
 

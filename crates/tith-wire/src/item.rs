@@ -3,3 +3,4 @@
 include!("item_format_impl.rs");
 include!("item_carrier.rs");
 include!("item_format_tests.rs");
+include!("item_carrier_tests.rs");

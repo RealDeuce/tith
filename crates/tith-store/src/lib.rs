@@ -23,6 +23,7 @@ mod poll_snapshot;
 pub use key_pin::*;
 mod duplicate_identity;
 mod inbound_accept;
+mod inbound_identifier;
 #[cfg(test)]
 use duplicate_identity::encode_duplicate_identity;
 
@@ -1030,6 +1031,97 @@ mod tests {
 		};
 		assert_ne!(reaccepted.inbound_id, stored_id);
 		assert_eq!(store.query(&stored_id).unwrap().inbound_id, stored_id);
+		drop(store);
+		std::fs::remove_file(path).unwrap();
+	}
+
+	#[test]
+	fn inbound_acceptance_rejects_every_invalid_carrier_combination() {
+		let path = std::env::temp_dir().join(format!(
+			"tith-store-{}.redb",
+			random_identifier('T').unwrap()
+		));
+		let store = InboundStore::create(&path).unwrap();
+		let peer_key = PublicKey::from_bytes([12; 32]);
+		let message_identity = SignedItemIdentity {
+			kind: SignedItemKind::Message,
+			signer: Identity {
+				address: "fidonet#1/2".parse().unwrap(),
+				public_key: peer_key,
+			},
+			signature: Signature::from_bytes([13; 64]),
+		};
+		let message = OwnedTlv::new(types::MESSAGE, Vec::new()).unwrap().encode();
+		let file = OwnedTlv::new(types::FILE, Vec::new()).unwrap().encode();
+		let file_request = OwnedTlv::new(types::FILE_REQUEST, Vec::new())
+			.unwrap()
+			.encode();
+		let unknown = OwnedTlv::new(200, Vec::new()).unwrap().encode();
+		let two = [message.as_slice(), file.as_slice()].concat();
+		let value = |payload, authentication| NewInbound {
+			application: "tosser",
+			local_identity: "fidonet#1",
+			peer: "fidonet#1/2",
+			peer_key,
+			received: 1,
+			authentication,
+			payload,
+		};
+		for (payload, authentication) in [
+			(&b"\x80"[..], ItemAuthentication::OriginValid),
+			(&b""[..], ItemAuthentication::OriginValid),
+			(two.as_slice(), ItemAuthentication::OriginValid),
+			(unknown.as_slice(), ItemAuthentication::OriginValid),
+			(message.as_slice(), ItemAuthentication::Transport),
+			(file.as_slice(), ItemAuthentication::Transport),
+			(file_request.as_slice(), ItemAuthentication::OriginValid),
+		] {
+			assert!(store.accept(value(payload, authentication), None).is_err());
+		}
+		assert!(
+			store
+				.accept(
+					value(file.as_slice(), ItemAuthentication::OriginValid),
+					None
+				)
+				.is_ok()
+		);
+		assert!(
+			store
+				.accept(
+					value(file_request.as_slice(), ItemAuthentication::Transport),
+					None
+				)
+				.is_ok()
+		);
+
+		let file_identity = SignedItemIdentity {
+			kind: SignedItemKind::File,
+			..message_identity.clone()
+		};
+		for (payload, authentication, identity) in [
+			(
+				message.as_slice(),
+				ItemAuthentication::OriginValid,
+				&file_identity,
+			),
+			(
+				message.as_slice(),
+				ItemAuthentication::Unsigned,
+				&message_identity,
+			),
+			(
+				file_request.as_slice(),
+				ItemAuthentication::Transport,
+				&message_identity,
+			),
+		] {
+			assert!(
+				store
+					.accept(value(payload, authentication), Some(identity))
+					.is_err()
+			);
+		}
 		drop(store);
 		std::fs::remove_file(path).unwrap();
 	}

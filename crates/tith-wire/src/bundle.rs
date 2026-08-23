@@ -30,7 +30,7 @@ pub struct Bundle {
 }
 
 impl Bundle {
-	pub fn parse(encoded: &[u8], resolver: &impl KeyResolver) -> Result<Self, BundleError> {
+	pub fn parse(encoded: &[u8], resolver: &dyn KeyResolver) -> Result<Self, BundleError> {
 		Self::parse_internal(encoded, resolver, NonAnonymousOriginKey::Prohibited, false)
 	}
 
@@ -38,7 +38,7 @@ impl Bundle {
 	/// depend on seeing the payload.
 	pub fn parse_header_prefix(
 		encoded: &[u8],
-		resolver: &impl KeyResolver,
+		resolver: &dyn KeyResolver,
 	) -> Result<Self, BundleError> {
 		Self::parse_internal(encoded, resolver, NonAnonymousOriginKey::Prohibited, true)
 	}
@@ -48,7 +48,7 @@ impl Bundle {
 	/// already trusted; `None` is the explicit first-contact TOFU case.
 	pub fn parse_public_key_reply(
 		encoded: &[u8],
-		resolver: &impl KeyResolver,
+		resolver: &dyn KeyResolver,
 		expected: Option<PublicKey>,
 	) -> Result<Self, BundleError> {
 		let mode = expected.map_or(NonAnonymousOriginKey::Any, NonAnonymousOriginKey::Exact);
@@ -74,7 +74,7 @@ impl Bundle {
 
 	fn parse_internal(
 		encoded: &[u8],
-		resolver: &impl KeyResolver,
+		resolver: &dyn KeyResolver,
 		non_anonymous_origin_key: NonAnonymousOriginKey,
 		allow_header_only: bool,
 	) -> Result<Self, BundleError> {
@@ -236,7 +236,7 @@ fn next_defined<'a>(values: &'a [OwnedTlv], index: &mut usize) -> Option<&'a Own
 
 fn validate_header(
 	children: &[OwnedTlv],
-	resolver: &impl KeyResolver,
+	resolver: &dyn KeyResolver,
 ) -> Result<(Identity, Option<PublicKey>, u64), BundleError> {
 	let mut index = 0;
 	let destination_tlv = next_defined(children, &mut index)
@@ -843,6 +843,10 @@ mod tests {
 			Bundle::parse_public_key_reply(&reply, &resolver, Some(old_server_keys.public)),
 			Err(BundleError::InvalidSignature)
 		));
+		assert!(matches!(
+			Bundle::parse_public_key_reply(&reply, &resolver, Some(current_server.public_key)),
+			Err(BundleError::Unexpected("PublicKeyRequest reply grammar"))
+		));
 		let parsed = Bundle::parse_internal(
 			&reply,
 			&resolver,
@@ -858,5 +862,207 @@ mod tests {
 			rejected.rejection.unwrap().reason,
 			crate::item::RejectionReason::Permanent
 		);
+	}
+
+	#[test]
+	fn bundle_parser_rejects_each_header_and_payload_boundary() {
+		let origin_keys = SigningKeyPair::from_seed(&[51; 32]).unwrap();
+		let destination_keys = SigningKeyPair::from_seed(&[52; 32]).unwrap();
+		let origin = Identity {
+			address: "fidonet#1/51".parse().unwrap(),
+			public_key: origin_keys.public,
+		};
+		let destination = Identity {
+			address: "fidonet#1/52".parse().unwrap(),
+			public_key: destination_keys.public,
+		};
+		let anonymous = Identity {
+			address: Address::anonymous("p2p".to_owned()).unwrap(),
+			public_key: destination_keys.public,
+		};
+		let resolver = |address: &Address| {
+			if address == &origin.address {
+				Some(origin.public_key)
+			} else if address == &destination.address {
+				Some(destination.public_key)
+			} else {
+				None
+			}
+		};
+		let outer_origin =
+			OwnedTlv::new(types::ORIGIN, origin.address.to_string().into_bytes()).unwrap();
+		let signed_header =
+			|data: Vec<OwnedTlv>| build_signed_tlv(&data, None, &origin_keys.secret).unwrap();
+		let valid_header_data = vec![
+			OwnedTlv::new(
+				types::DESTINATION,
+				destination.address.to_string().into_bytes(),
+			)
+			.unwrap(),
+			OwnedTlv::new(types::TIMESTAMP, encode_u64(1)).unwrap(),
+		];
+
+		assert!(matches!(
+			Bundle::parse(&[], &resolver),
+			Err(BundleError::Missing("Origin"))
+		));
+		let anonymous_origin =
+			OwnedTlv::new(types::ORIGIN, anonymous.address.to_string().into_bytes()).unwrap();
+		assert!(matches!(
+			Bundle::parse(&anonymous_origin.encode(), &resolver),
+			Err(BundleError::Missing("Origin PublicKey"))
+		));
+		let wrong_after_anonymous = concatenate(&[
+			anonymous_origin,
+			OwnedTlv::new(types::TIMESTAMP, encode_u64(1)).unwrap(),
+		]);
+		assert!(matches!(
+			Bundle::parse(&wrong_after_anonymous, &resolver),
+			Err(BundleError::Missing("Origin PublicKey"))
+		));
+		let prohibited_key = concatenate(&[
+			outer_origin.clone(),
+			OwnedTlv::new(types::PUBLIC_KEY, origin.public_key.as_bytes().to_vec()).unwrap(),
+		]);
+		assert!(matches!(
+			Bundle::parse(&prohibited_key, &resolver),
+			Err(BundleError::Unexpected("non-anonymous Origin PublicKey"))
+		));
+
+		for header_data in [
+			Vec::new(),
+			vec![OwnedTlv::new(types::TIMESTAMP, encode_u64(1)).unwrap()],
+			vec![
+				OwnedTlv::new(
+					types::DESTINATION,
+					anonymous.address.to_string().into_bytes(),
+				)
+				.unwrap(),
+				OwnedTlv::new(types::TIMESTAMP, encode_u64(1)).unwrap(),
+			],
+			vec![
+				OwnedTlv::new(
+					types::DESTINATION,
+					anonymous.address.to_string().into_bytes(),
+				)
+				.unwrap(),
+				OwnedTlv::new(types::ADDRESS, b"p2p#-1".to_vec()).unwrap(),
+				OwnedTlv::new(types::TIMESTAMP, encode_u64(1)).unwrap(),
+			],
+			vec![
+				OwnedTlv::new(
+					types::DESTINATION,
+					destination.address.to_string().into_bytes(),
+				)
+				.unwrap(),
+			],
+			{
+				let mut values = valid_header_data.clone();
+				values.push(OwnedTlv::new(types::ADDRESS, b"fidonet#1/52".to_vec()).unwrap());
+				values
+			},
+		] {
+			let encoded = concatenate(&[outer_origin.clone(), signed_header(header_data)]);
+			assert!(Bundle::parse(&encoded, &resolver).is_err());
+		}
+
+		let header = signed_header(valid_header_data);
+		let header_hash = hash_tlv(&header.encode()).unwrap();
+		let payloads = [
+			Vec::new(),
+			vec![OwnedTlv::new(types::ADDRESS, Vec::new()).unwrap()],
+			vec![OwnedTlv::new(types::TLV_HASH, vec![0; 31]).unwrap()],
+			vec![OwnedTlv::new(types::TLV_HASH, vec![0; 32]).unwrap()],
+		];
+		for data in payloads {
+			let encoded = concatenate(&[
+				outer_origin.clone(),
+				header.clone(),
+				build_signed_tlv(&data, None, &origin_keys.secret).unwrap(),
+			]);
+			assert!(Bundle::parse(&encoded, &resolver).is_err());
+		}
+		let valid_payload = build_signed_tlv(
+			&[OwnedTlv::new(types::TLV_HASH, header_hash.as_bytes().to_vec()).unwrap()],
+			None,
+			&origin_keys.secret,
+		)
+		.unwrap();
+		let defined_top = concatenate(&[
+			outer_origin.clone(),
+			header.clone(),
+			valid_payload.clone(),
+			OwnedTlv::new(types::TIMESTAMP, encode_u64(2)).unwrap(),
+		]);
+		assert!(Bundle::parse(&defined_top, &resolver).is_err());
+		let extension = OwnedTlv::new(200, b"tail".to_vec()).unwrap();
+		let extended = concatenate(&[outer_origin, header, valid_payload, extension.clone()]);
+		let parsed = Bundle::parse(&extended, &resolver).unwrap();
+		assert_eq!(parsed.unknown_top_level, vec![extension]);
+		assert_eq!(parsed.public_key_request().unwrap(), None);
+	}
+
+	#[test]
+	fn probe_builders_cover_first_contact_and_anonymous_requesters() {
+		let origin_keys = SigningKeyPair::from_seed(&[53; 32]).unwrap();
+		let destination_keys = SigningKeyPair::from_seed(&[54; 32]).unwrap();
+		let anonymous_origin = Identity {
+			address: Address::anonymous("p2p".to_owned()).unwrap(),
+			public_key: origin_keys.public,
+		};
+		let destination = Identity {
+			address: "fidonet#1/54".parse().unwrap(),
+			public_key: destination_keys.public,
+		};
+		let probe = build_public_key_probe(
+			&anonymous_origin,
+			&origin_keys.secret,
+			&destination.address,
+			None,
+			1,
+			4,
+		)
+		.unwrap();
+		let parsed = Bundle::parse(&probe, &|address: &Address| {
+			(address == &destination.address).then_some(destination.public_key)
+		})
+		.unwrap();
+		assert_eq!(parsed.origin, anonymous_origin);
+		assert_eq!(parsed.requested_destination_key, None);
+		assert!(parsed.public_key_request().unwrap().is_some());
+		assert!(
+			build_public_key_probe(
+				&parsed.origin,
+				&origin_keys.secret,
+				&Address::anonymous("p2p".to_owned()).unwrap(),
+				None,
+				1,
+				4,
+			)
+			.is_err()
+		);
+
+		let response_to = hash_tlv(b"request").unwrap();
+		let accepted = build_public_key_reply(
+			&destination,
+			&destination_keys.secret,
+			&anonymous_origin,
+			2,
+			4,
+			response_to,
+			destination.public_key,
+		)
+		.unwrap();
+		assert!(Bundle::parse_public_key_reply(&accepted, &|_: &Address| None, None).is_ok());
+		let unavailable = build_public_key_unavailable_reply(
+			&destination,
+			&destination_keys.secret,
+			&anonymous_origin,
+			2,
+			4,
+			response_to,
+		)
+		.unwrap();
+		assert!(!unavailable.is_empty());
 	}
 }

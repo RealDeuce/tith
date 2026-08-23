@@ -20,6 +20,7 @@ on:
       - "crates/tith-wire/src/integer.rs"
       - "crates/tith-wire/src/item.rs"
       - "crates/tith-wire/src/item_carrier.rs"
+      - "crates/tith-wire/src/item_carrier_tests.rs"
       - "crates/tith-wire/src/item_format.rs"
       - "crates/tith-wire/src/item_format_impl.rs"
       - "crates/tith-wire/src/item_format_tests.rs"

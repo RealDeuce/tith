@@ -142,7 +142,7 @@ impl ClientSession {
 	pub fn reply_received(
 		&mut self,
 		reply: &Bundle,
-		resolver: &impl KeyResolver,
+		resolver: &dyn KeyResolver,
 	) -> Result<(), ExchangeError> {
 		if self.state != SessionState::AwaitingResponses {
 			self.state = SessionState::Failed;
@@ -187,6 +187,7 @@ mod tests {
 	use tith_wire::address::Address;
 	use tith_wire::bundle::{Identity, build_bundle};
 	use tith_wire::integer::encode_u64;
+	use tith_wire::item::{RejectionReason, accepted, accepted_public_key, rejected};
 	use tith_wire::tlv::OwnedTlv;
 	use tith_wire::types;
 
@@ -280,8 +281,60 @@ mod tests {
 		let request = Bundle::parse(&request_bytes, &resolver).unwrap();
 		let mut tracker = ResponseTracker::for_bundle(&request, &resolver).unwrap();
 		assert!(tracker.requires_return_bundle());
+		assert!(matches!(
+			tracker.require_complete(),
+			Err(ExchangeError::IncompleteResponse {
+				expected: 2,
+				received: 0
+			})
+		));
 
 		let request_hash = tracker.outstanding[0].signed_tlv_hash;
+		let non_response_bytes = build_bundle(
+			&b,
+			&b_keys.secret,
+			&a,
+			2,
+			vec![vec![container(
+				types::POLL_MESSAGES,
+				&[OwnedTlv::new(types::REQUEST_IDENTIFIER, encode_u64(99)).unwrap()],
+			)]],
+		)
+		.unwrap();
+		let non_response = Bundle::parse(&non_response_bytes, &resolver).unwrap();
+		tracker.observe_reply(&non_response, &resolver).unwrap();
+		assert_eq!(tracker.received(), 0);
+
+		let unexpected_bytes = build_bundle(
+			&b,
+			&b_keys.secret,
+			&a,
+			2,
+			vec![vec![
+				accepted(9, tith_crypto::hash_tlv(b"other").unwrap()).unwrap(),
+			]],
+		)
+		.unwrap();
+		let unexpected = Bundle::parse(&unexpected_bytes, &resolver).unwrap();
+		assert!(matches!(
+			tracker.observe_reply(&unexpected, &resolver),
+			Err(ExchangeError::UnexpectedResponse)
+		));
+		let wrong_key_bytes = build_bundle(
+			&b,
+			&b_keys.secret,
+			&a,
+			2,
+			vec![vec![
+				accepted_public_key(9, request_hash, b.public_key).unwrap(),
+			]],
+		)
+		.unwrap();
+		let wrong_key = Bundle::parse(&wrong_key_bytes, &resolver).unwrap();
+		assert!(matches!(
+			tracker.observe_reply(&wrong_key, &resolver),
+			Err(ExchangeError::UnexpectedResponse)
+		));
 		let accepted_second = container(
 			types::ACCEPTED,
 			&[
@@ -305,10 +358,76 @@ mod tests {
 		)
 		.unwrap();
 		let reply = Bundle::parse(&reply_bytes, &resolver).unwrap();
+		let mut wrong_origin = reply.clone();
+		wrong_origin.origin = a.clone();
+		assert!(matches!(
+			tracker.observe_reply(&wrong_origin, &resolver),
+			Err(ExchangeError::WrongReplyOrigin)
+		));
+		let mut wrong_destination = reply.clone();
+		wrong_destination.destination = b.clone();
+		assert!(matches!(
+			tracker.observe_reply(&wrong_destination, &resolver),
+			Err(ExchangeError::WrongReplyDestination)
+		));
 		tracker.observe_reply(&reply, &resolver).unwrap();
 		assert!(tracker.is_complete());
+		tracker.require_complete().unwrap();
 		assert_eq!(tracker.completed()[0].request.request_identifier, 9);
 		assert_eq!(tracker.completed()[1].request.request_identifier, 10);
 		assert_eq!(tracker.completed()[0].response, ResponseKind::Accepted);
+		assert!(matches!(
+			tracker.observe_reply(&reply, &resolver),
+			Err(ExchangeError::DuplicateResponse)
+		));
+
+		let one_request_bytes = build_bundle(
+			&a,
+			&a_keys.secret,
+			&b,
+			3,
+			vec![vec![container(
+				types::POLL_FILE_REQUESTS,
+				&[OwnedTlv::new(types::REQUEST_IDENTIFIER, encode_u64(12)).unwrap()],
+			)]],
+		)
+		.unwrap();
+		let one_request = Bundle::parse(&one_request_bytes, &resolver).unwrap();
+		let mut rejected_tracker = ResponseTracker::for_bundle(&one_request, &resolver).unwrap();
+		let rejected_hash = rejected_tracker.outstanding[0].signed_tlv_hash;
+		let rejected_bytes = build_bundle(
+			&b,
+			&b_keys.secret,
+			&a,
+			4,
+			vec![vec![
+				rejected(12, rejected_hash, None, RejectionReason::Permanent, "no").unwrap(),
+			]],
+		)
+		.unwrap();
+		let rejected_reply = Bundle::parse(&rejected_bytes, &resolver).unwrap();
+		rejected_tracker
+			.observe_reply(&rejected_reply, &resolver)
+			.unwrap();
+		assert_eq!(
+			rejected_tracker.completed()[0].response,
+			ResponseKind::Rejected
+		);
+		assert!(rejected_tracker.completed()[0].rejection.is_some());
+
+		assert!(matches!(
+			ServerReply::for_request(&request, &a, &a_keys.secret, 5),
+			Err(ExchangeError::WrongDestination)
+		));
+		let server_reply = ServerReply::for_request(&request, &b, &b_keys.secret, 5).unwrap();
+		assert_eq!(server_reply.origin, b);
+		assert_eq!(server_reply.destination, a);
+		assert!(!server_reply.prefix().is_empty());
+		assert!(
+			!server_reply
+				.payload(vec![accepted(9, request_hash).unwrap()], &b_keys.secret)
+				.unwrap()
+				.is_empty()
+		);
 	}
 }

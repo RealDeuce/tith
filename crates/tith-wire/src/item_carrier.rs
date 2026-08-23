@@ -247,7 +247,7 @@ pub fn set_request_identifier(value: &OwnedTlv, identifier: u64) -> Result<Owned
 
 pub fn validate_item(
 	value: &OwnedTlv,
-	resolver: &impl KeyResolver,
+	resolver: &dyn KeyResolver,
 ) -> Result<Option<ValidatedItem>, BundleError> {
 	match value.type_code {
 		types::MESSAGE => validate_message(value, resolver).map(Some),
@@ -265,7 +265,7 @@ pub fn validate_item(
 
 pub fn validate_payload(
 	payload: &VerifiedSignedTlv,
-	resolver: &impl KeyResolver,
+	resolver: &dyn KeyResolver,
 ) -> Result<Vec<ValidatedItem>, PayloadError> {
 	let mut validated = Vec::new();
 	let mut request_identifiers = HashSet::new();

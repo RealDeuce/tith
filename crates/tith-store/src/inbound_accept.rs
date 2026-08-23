@@ -6,9 +6,10 @@ use tith_wire::item::{ItemAuthentication, SignedItemIdentity, SignedItemKind};
 use tith_wire::{tlv::parse_sequence, types};
 
 use crate::duplicate_identity::encode_duplicate_identity;
+use crate::inbound_identifier;
 use crate::{
 	AcceptResult, DUPLICATES, InboundRecord, InboundState, InboundStore, ItemKind, NewInbound,
-	PAYLOADS, RECORDS, StoreError, encode_record, random_identifier,
+	PAYLOADS, RECORDS, StoreError, encode_record,
 };
 
 impl InboundStore {
@@ -56,15 +57,7 @@ impl InboundStore {
 				});
 			}
 		}
-		let id = {
-			let records = write.open_table(RECORDS)?;
-			loop {
-				let candidate = random_identifier('I')?;
-				if records.get(candidate.as_str())?.is_none() {
-					break candidate;
-				}
-			}
-		};
+		let id = inbound_identifier::allocate(&write)?;
 		let record = InboundRecord {
 			inbound_id: id.clone(),
 			application: value.application.to_owned(),
