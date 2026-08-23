@@ -289,7 +289,7 @@ Contents
 
   Once a method selects a next hop, the router compares its exact
   identity with every Via in the NetMail Message.  For an anonymous Via
-  the identity includes its PublicKey as specified by TSP‑0016.  A
+  the identity includes its PublicKey as specified by TTS‑0009.  A
   match fails as Loop.  The router MUST NOT conceal the loop by trying
   a later method.
 
@@ -462,7 +462,7 @@ Contents
 
   An EchoArea applies to an EchoMail Message carrying its Area.  A
   FileArea applies to a standalone distribution File carrying its
-  Area as specified by TSP‑0016.  A File attached to a Message travels
+  Area as specified by TTS‑0009.  A File attached to a Message travels
   with that Message and does not independently use a FileArea.
 
   An item received for an undefined area or from a Peer not named by
@@ -478,7 +478,7 @@ Contents
 
   Before the resulting copy set is committed, a locally originated
   item has its initial Via and a received item has one Via for the
-  forwarding local identity appended as required by TSP‑0016.  The
+  forwarding local identity appended as required by TTS‑0009.  The
   distributor retains every existing SeenBy address and adds each
   non‐anonymous identity which is known to have or to receive the item:
   its local identity, the immediate incoming Peer when any, and every
@@ -794,7 +794,7 @@ A. References
 
   [TTS‑0008] "Public Key Trust and Continuity", TITH, 2026‑08‑22.
 
-  [TSP‑0016] "Item Format", TITH, 2026‑08‑22.
+  [TTS‑0009] "Item Format", TITH, 2026‑08‑22.
 
   [TTS‑0003] "Common TLV Types", TITH, 2026‑08‑22.
 
@@ -865,7 +865,7 @@ B. History
    Rev.13, 2026‑08‑21: Made every local identity independent and
    removed any implied primary or alias relationship between them.
 
-   Rev.14, 2026‑08‑22: Referred item Area and Via data to TSP‑0016
+   Rev.14, 2026‑08‑22: Referred item Area and Via data to TTS‑0009
    while retaining TTS‑0005 polling and acceptance behaviour.
 
    Rev.15, 2026‑08‑22: Handled peer‐correctable rejection reason 2

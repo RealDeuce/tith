@@ -512,7 +512,7 @@ A. References
 
   [TTS‑0008] "Public Key Trust and Continuity", TITH, 2026‑08‑22.
 
-  [TSP‑0016] "Item Format", TITH, 2026‑08‑22.
+  [TTS‑0009] "Item Format", TITH, 2026‑08‑22.
 
   [TTS‑5001] "Nodelist Flags", TITH, 2026‑08‑22.
 

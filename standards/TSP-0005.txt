@@ -52,7 +52,7 @@ Contents
 ───────────────
 
   A Job is the mailer's durable unit of local outbound work.  It owns
-  one immutable TSP‑0016 NetMail Message, EchoMail Message, standalone
+  one immutable TTS‑0009 NetMail Message, EchoMail Message, standalone
   distribution File, peer‐addressed standalone File, or FileRequest,
   its private Source copies, zero or more committed delivery copies,
   and the local metadata needed to deliver and report it.
@@ -85,11 +85,11 @@ Contents
   access to the Job; spelling the Application name grants no authority.
 
   A Job records Kind NetMail, EchoMail, File, Peer-File, or FileRequest
-  and owns one complete TSP‑0016 item of that kind.  NetMail and
+  and owns one complete TTS‑0009 item of that kind.  NetMail and
   EchoMail own a Message; File owns a standalone distribution File
   carrying an Area; Peer-File owns a standalone File with no Area,
   Via, or SeenBy, addressed by the Bundle which carries it; FileRequest
-  owns a TSP‑0016 FileRequest.  The Kind never changes.
+  owns a TTS‑0009 FileRequest.  The Kind never changes.
 
   An Attachment is a File child inside a Message.  A Message may have
   no Attachments.  A locally submitted standalone File of either Kind
@@ -104,7 +104,7 @@ Contents
 
   Every Attachment and locally submitted standalone File Source has an
   immutable private copy controlled by the mailer and a stable
-  WireFilename equal to its TSP‑0016 Filename.  The private copy never
+  WireFilename equal to its TTS‑0009 Filename.  The private copy never
   depends on a caller pathname or handle after Job commitment.
   WireFilenames within one Job are distinct by exact UTF‑8 bytes and do
   not change during the Job's life.  A Forward Job retains the inbound
@@ -663,7 +663,7 @@ A. References
 
   [TSP‑0011] "Durable Inbound Delivery Items", TITH, 2026‑08‑21.
 
-  [TSP‑0016] "Item Format", TITH, 2026‑08‑22.
+  [TTS‑0009] "Item Format", TITH, 2026‑08‑22.
 
   [TTS‑0003] "Common TLV Types", TITH, 2026‑08‑22.
 
@@ -704,7 +704,7 @@ B. History
    independent of a Message's end‐to‐end signer.
 
    Rev.10, 2026‑08‑22: Referred immutable item data and child fields
-   to TSP‑0016 while retaining TTS‑0005 response and duplicate‑acceptance
+   to TTS‑0009 while retaining TTS‑0005 response and duplicate‑acceptance
    behaviour.
 
    Rev.11, 2026‑08‑22: Applied rejection reason 2 generically while

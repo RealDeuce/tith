@@ -61,7 +61,7 @@ Contents
   is its own.
 
   Nothing in TITH requires transport and item authentication to be
-  adopted together.  TSP‑0016 places the Message Signature over encoded
+  adopted together.  TTS‑0009 places the Message Signature over encoded
   Message children, not over a Bundle, and TSP‑0003 section 3.1 already
   defines a byte‐exact carriage of that signature through legacy stored
   and packed Messages.  The missing pieces for a legacy‐only system are
@@ -85,10 +85,10 @@ Contents
     • has a non‐anonymous address in a legacy FTN domain, whether
       listed or unlisted for the verifier;
     • exchanges mail using legacy transports and file formats only; and
-    • holds a TITH signing key pair used as defined by TSP‑0016.
+    • holds a TITH signing key pair used as defined by TTS‑0009.
 
   Such a system needs the TTS‑0002 integer and TLV encodings, the
-  TTS‑0003 common types, the TSP‑0016 Message child order and Signature
+  TTS‑0003 common types, the TTS‑0009 Message child order and Signature
   rules, the TSP‑0003 field mappings, and a libhydrogen signing
   implementation.  That is a library, not a mailer.  It does not need
   TTS‑0006 Bundle Exchange, a Bundle, a TITH listener, an assigned
@@ -395,7 +395,7 @@ Contents
 
   The originator constructs the canonical Message children for its
   message under the TSP‑0003 field mappings, signs the exact encoded
-  byte range TSP‑0016 specifies, and emits the two TITHSIG controls
+  byte range TTS‑0009 specifies, and emits the two TITHSIG controls
   carrying that 64‑byte Signature.
 
   Because the originator is the author, Origin is its own TTS‑0004
@@ -472,7 +472,7 @@ Contents
     • confidentiality of any kind;
     • authentication of the legacy transport beyond whatever binkp or
       EMSI authentication the operator already configured;
-    • protection against replay beyond the signed‑item identity TSP‑0016
+    • protection against replay beyond the signed‑item identity TTS‑0009
       already defines for a validated item;
     • authority over EchoMail area membership or distribution; or
     • any means of revoking a key whose holder has lost control of it.
@@ -558,7 +558,7 @@ A. References
 
   [TTS‑0008] "Public Key Trust and Continuity", TITH, 2026‑08‑22.
 
-  [TSP‑0016] "Item Format", TITH, 2026‑08‑22.
+  [TTS‑0009] "Item Format", TITH, 2026‑08‑22.
 
   [TTS‑0002] "Type Length Value Encoding", TITH, 2026‑08‑16.
 
@@ -585,7 +585,7 @@ B. History
    key for legacy signature verification.
 
    Rev.3, 2026‑08‑22: Referred the Message child order, Signature byte
-   range, and stable signed‑item identity to TSP‑0016.
+   range, and stable signed‑item identity to TTS‑0009.
 
    Rev.4, 2026‑08‑22: Referred IIH syntax to TTS‑5001 while retaining
    TTS‑5000 as the nodelist publication and trust context.

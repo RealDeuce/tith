@@ -95,7 +95,7 @@ Contents
     A Rejected value will indicate this.
   • Every Bundle Header and payload SignedTLV is authenticated before
     its contents are processed.  A Message or standalone File has the
-    independent end‑to‑end authentication states defined by TSP‑0016;
+    independent end‑to‑end authentication states defined by TTS‑0009;
     its Signature may be absent or invalid without weakening the
     authenticated SignedTLV which carried its exact bytes.
   • The Client must be able to send all of the bundles it has
@@ -245,9 +245,9 @@ Contents
   RequestIdentifier, the receiver MUST close the connection.
 
   These reason 1 responses do not change the independent end‐to‐end
-  item authentication states defined by TSP‑0016.
+  item authentication states defined by TTS‑0009.
 
-  For the request types defined by TTS‑0005 and TSP‑0016, the receiver
+  For the request types defined by TTS‑0005 and TTS‑0009, the receiver
   MUST NOT generate a Rejected response with reason number 2 except
   for a FileRequest which contains a Timestamp and whose condition is
   unmet.  A file last modified at a time equal to or older than the
@@ -272,7 +272,7 @@ A. References
 
   [TTS‑0008] "Public Key Trust and Continuity", TITH, 2026‑08‑22.
 
-  [TSP‑0016] "Item Format", TITH, 2026‑08‑22.
+  [TTS‑0009] "Item Format", TITH, 2026‑08‑22.
 
   [TTS‑0003] "Common TLV Types", TITH, 2026‑08‑22.
 

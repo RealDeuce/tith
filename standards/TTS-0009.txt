@@ -2,19 +2,20 @@
 TITH                                              THIS ISN'T THAT HARD
 **********************************************************************
 
-Publication:  TSP‑0016
-Revision:     2
+Publication:  TTS‑0009
+Revision:     1
 Title:        Item Format
 Author(s):    Stephen Hurd
-Date:         2026‑08‑22
+Date:         2026‑08‑23
 ══════════════════════════════════════════════════════════════════════
 
 Status of this document
 ───────────────────────
 
-  This document is a TITH Standard Proposal (TSP) — it documents a
-  proposed standard and solicits discussion.  Until promoted to a TTS,
-  this is experimental only and does not describe required behaviour.
+  This document is a TITH Technical Standard (TTS) — it specifies
+  the current technical requirements and recommendations for TITH
+  software developers, coordinators and sysops of the Fidonet network
+  and other networks using FTN technology.
 
   This document is released to the public domain, and may be used,
   copied or modified for any purpose whatever.
@@ -526,12 +527,15 @@ A. References
 B. History
 ──────────
 
-   Rev.2, 2026‑08‑22: Defined exact Replaces matching and portable
+   TSP Rev.2, 2026‑08‑22: Defined exact Replaces matching and portable
    Filename guidance, separated legacy metadata conventions from the
    native data model, and updated integer standard references.
 
-   Rev.1, 2026‑08‑22: Initial Release.  Extracted the Message, File,
+   TSP Rev.1, 2026‑08‑22: Initial Release.  Extracted the Message, File,
    and FileRequest child‑TLV sequences, item authentication, and stable
    signed‑item identity from TTS‑0005 without changing their encodings.
+
+   TTS Rev.1, 2026‑08‑23: Promoted TSP‑0016 revision 2 without technical
+   changes.
 
 **********************************************************************

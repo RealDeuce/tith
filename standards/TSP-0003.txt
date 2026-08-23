@@ -73,7 +73,7 @@ Contents
   grammar.
 
   These legacy forms are alternate serializations of the Message,
-  File, and FileRequest data defined by TSP‑0016.  They do not define a
+  File, and FileRequest data defined by TTS‑0009.  They do not define a
   second item model or make the native Bundle serialization part of
   the legacy data.
 
@@ -130,7 +130,7 @@ Contents
   gateway imported the displayed legacy claim; it is not proof that the
   legacy author wrote the message.
 
-  TSP‑0016 gives an available Origin key precedence over SignedOrigin.
+  TTS‑0009 gives an available Origin key precedence over SignedOrigin.
   Therefore an unsigned legacy message whose remote Origin currently
   has an effective TITH key cannot be signed on that node's behalf by a
   gateway which does not own that key.  It is retained as unsupported
@@ -144,10 +144,10 @@ Contents
   and point component must fit an unsigned 16‑bit field.  An adapter
   MUST NOT truncate an address component or invent a domain or zone.
 
-  2.1 TSP‑0016 Message Field Map
+  2.1 TTS‑0009 Message Field Map
   ───────────────────────────────
   This subsection lists both directions for every defined child in the
-  TSP‑0016 Message grammar.  "No legacy field" means that the value is
+  TTS‑0009 Message grammar.  "No legacy field" means that the value is
   local to native construction and MUST NOT be hidden in an unrelated
   legacy semantic field.  These Legacy‑to‑TITH entries describe ordinary
   import.  For an eligible TITH‑originated Message, successful section
@@ -302,7 +302,7 @@ Contents
       AdditionalKludgeLine and does not contribute to
       LegacyAttributes.  FileRequest bit 11 and FileUpdateReq bit 15
       remain legacy processing state; neither is signed or creates a
-      TSP‑0016 FileRequest.
+      TTS‑0009 FileRequest.
 
   TimestampOffset
       Legacy to TITH: TZUTC or TZUTCINFO, or trusted source policy when
@@ -401,11 +401,11 @@ Contents
       TITH to legacy: no exact legacy mapping.  An unknown child before
       or after Signature makes revision 1 canonical conversion
       unavailable.  It MUST NOT be silently discarded in violation of
-      the unknown‑value retention requirements of TSP‑0016.
+      the unknown‑value retention requirements of TTS‑0009.
 
   2.2 Other Item and Bundle Types
   ───────────────────────────
-  A TSP‑0016 FileRequest maps to one FTS‑0006 WaZOO REQ action as
+  A TTS‑0009 FileRequest maps to one FTS‑0006 WaZOO REQ action as
   specified in section 8.  A standalone distribution File maps to one
   FTS‑5006 TIC and companion file as specified in section 9.  File
   children of a Message use ASSOC and the file‐attach rules above.
@@ -496,7 +496,7 @@ Contents
 
   Both sides terminate a paragraph rather than separate two.
   FTS‑0001.016 says a hard carriage return "marks the end of a
-  paragraph, and must be preserved", and TSP‑0016 makes MessageText
+  paragraph, and must be preserved", and TTS‑0009 makes MessageText
   paragraphs each terminated by one U+000A.  Each terminator therefore
   maps to the other one‑for‑one, and canonical conversion neither
   invents nor discards one.
@@ -513,7 +513,7 @@ Contents
 
   Revision 1 canonical export therefore requires MessageText to contain
   no U+0000 or U+000D and to be either empty or end in U+000A, which is
-  what TSP‑0016 already requires of every producer.  The export
+  what TTS‑0009 already requires of every producer.  The export
   self‑check in section 3.1 also rejects a user paragraph which the
   legacy parser would classify as control or EchoMail framing.
 
@@ -603,7 +603,7 @@ Contents
   FileAttached means that every FileSpec names a companion attachment.
   FileRequest and FileUpdateReq give the same list different legacy
   processing semantics; by themselves they do not identify companion
-  files and MUST NOT create TSP‑0016 FileRequest values.  If several bits
+  files and MUST NOT create TTS‑0009 FileRequest values.  If several bits
   are asserted, the one FileList has every asserted legacy meaning.
   Ordinary import preserves the list as Subject when a requested or
   update operation has no native equivalent, but does not place the
@@ -719,7 +719,7 @@ Contents
     ^ATZUTC: [-]HHMM
 
   A missing native TimestampOffset is exported as TZUTC 0000, and
-  TZUTC 0000 imports as a missing TimestampOffset.  TSP‑0016 makes an
+  TZUTC 0000 imports as a missing TimestampOffset.  TTS‑0009 makes an
   absent value the only native representation of a zero offset, so the
   two directions agree.  Canonical output always emits TZUTC: omitting
   it would make import fall back to a configured offset and derive a
@@ -755,7 +755,7 @@ Contents
 
   Nothing else follows NetMail body text.  A tear line and an Origin
   line are EchoMail control information in FTS‑0004.001 and
-  FSC‑0068.001, and TSP‑0016 consequently prohibits TearLine and
+  FSC‑0068.001, and TTS‑0009 consequently prohibits TearLine and
   OriginLine in NetMail.  The section 7 footer placement is EchoMail
   only.  A legacy NetMail which does carry such a line carries it as
   ordinary Message Text: import neither removes it nor gives it a
@@ -828,7 +828,7 @@ Contents
   would be misclassified on import makes canonical conversion
   unavailable.
 
-  TTS‑0002 requires minimal Type and Length encodings and TSP‑0016 fixes
+  TTS‑0002 requires minimal Type and Length encodings and TTS‑0009 fixes
   Message child order.  Consequently, reconstructing the same ordered
   children and Values also reconstructs their exact signed bytes.  An
   implementation MUST compare those bytes directly during the export
@@ -839,7 +839,7 @@ Contents
   the author of the Message.  A system which holds the key applicable
   to Origin and has no prior native Message — because it runs only
   legacy software — MAY construct the canonical Message children, sign
-  the byte range TSP‑0016 specifies, and emit TITHSIG for a Message it
+  the byte range TTS‑0009 specifies, and emit TITHSIG for a Message it
   authored.  Every requirement above applies to it unchanged, including
   the byte‐exact inverse conversion and the verification of that
   Signature over the result before the legacy Message is published.
@@ -860,13 +860,13 @@ Contents
   The importer constructs the candidate encoded children through the
   final child before Signature and verifies the retained Signature with
   the effective Origin or SignedOrigin key selected under section 2
-  and TSP‑0016.  On
+  and TTS‑0009.  On
   success, it emits those children,
   followed by the same Signature value in its canonical Signature TLV.
   It then appends a newly allocated RequestIdentifier and Via, SeenBy,
   and AdditionalKludgeLine values parsed from current legacy state.  The
   importing gateway appends its own Via before committing the Message to
-  a new next hop as required by TSP‑0016.
+  a new next hop as required by TTS‑0009.
 
   When the importer uses TSP‑0006, it submits those reconstructed named
   Message fields, the retained Signature, the actual SignedOrigin and
@@ -976,7 +976,7 @@ Contents
   projection.  No attribute grants native authority or silently
   creates a native request.
 
-  Both import rules follow from TSP‑0016, which makes an absent
+  Both import rules follow from TTS‑0009, which makes an absent
   LegacyAttributes the only native representation of a zero
   AttributeWord and keeps attachment presence in the File children
   alone.  Every legacy format here carries the AttributeWord in a fixed
@@ -1185,7 +1185,7 @@ Contents
 8. WaZOO File Requests
 ────────────────────────
 
-  One FTS‑0006.002 REQ file carries one or more TSP‑0016 FileRequest
+  One FTS‑0006.002 REQ file carries one or more TTS‑0009 FileRequest
   values for the same authenticated Bundle destination.  Its legacy
   filename and placement select the immediate legacy peer according to
   TSP‑0013 and local outbound policy; they are not a Filename value and
@@ -1199,14 +1199,14 @@ Contents
 
   The second form is used exactly when Timestamp is present.  It asks
   for matching files newer than that POSIX timestamp, which is the
-  TSP‑0016 condition.  Filename MUST NOT contain a path separator, NUL,
+  TTS‑0009 condition.  Filename MUST NOT contain a path separator, NUL,
   CR, LF, Space, or a leading "+", "-", or "!".  Wildcard semantics,
   when enabled, are explicit local policy and do not weaken pathname
   validation.
 
   Canonical output does not write a transaction password.  TITH
   authenticates the requester with its Bundle signature.  It also does
-  not write the FTS‑0006 minus timestamp form because TSP‑0016 has no
+  not write the FTS‑0006 minus timestamp form because TTS‑0009 has no
   request for files at or older than a timestamp.
 
   Import accepts CR, LF, or CRLF line endings.  Each nonempty line is
@@ -1234,7 +1234,7 @@ Contents
 ──────────────────────────
 
   One FTS‑5006.001 TIC and its named companion map to one standalone
-  TSP‑0016 distribution File.  TIC Origin becomes File Origin.  The
+  TTS‑0009 distribution File.  TIC Origin becomes File Origin.  The
   configured importing gateway signs directly when it owns that Origin
   key and otherwise becomes SignedOrigin under the section 2 rule.  TIC
   From and To identify immediate legacy processing endpoints and do not
@@ -1307,7 +1307,7 @@ Contents
   size, bad CRC, missing required keyword, missing companion, or
   conflict with trusted link context is malformed.
 
-  Unknown TIC lines have no TSP‑0016 File child.  The adapter retains
+  Unknown TIC lines have no TTS‑0009 File child.  The adapter retains
   them verbatim in its TSP‑0013 conversion ledger for replay to the same
   legacy side, but they do not enter the signed native File and cannot
   grant authority.  A gateway which requires end‑to‑end preservation of
@@ -1317,7 +1317,7 @@ Contents
   An FTS‑5005.003 reference file entry which no packed Message claims
   and which has no accompanying TIC is neither an attachment nor an
   area distribution.  An ARCmail bundle is the ordinary example.  It
-  maps to one peer‑addressed standalone TSP‑0016 File and is submitted
+  maps to one peer‑addressed standalone TTS‑0009 File and is submitted
   as a TSP‑0006 Peer-File Job.  Its Filename is the final component of
   the entry, which is a legacy pathname and not itself a Filename
   value; its Destination is the address the entry's placement selects;
@@ -1371,7 +1371,7 @@ Contents
       RealName, DBID, NOTE, and BBSID, retained without interpretation.
 
   Missing optional evidence is not an error.  Missing information
-  required by the TSP‑0016 grammar is supplied only by the authenticated
+  required by the TTS‑0009 grammar is supplied only by the authenticated
   gateway or trusted conversion context, never guessed from an unknown
   control.  This permits every message in that corpus to be represented
   without pretending that every historical producer used the same
@@ -1385,7 +1385,7 @@ Contents
 
   10.1 Final Delivery Authentication
   ────────────────────────────────────
-  TSP‑0016 defines five end‑to‑end authentication states for a
+  TTS‑0009 defines five end‑to‑end authentication states for a
   Message or standalone File carried in an authenticated payload
   SignedTLV.  TSP‑0011 names them Unsigned, SignedOrigin-Invalid,
   SignedOrigin-Valid, Origin-Invalid, and Origin-Valid.  These are item
@@ -1535,7 +1535,7 @@ A. References
 
   [TSP‑0011] "Durable Inbound Delivery Items", TITH, 2026‑08‑21.
 
-  [TSP‑0016] "Item Format", TITH, 2026‑08‑22.
+  [TTS‑0009] "Item Format", TITH, 2026‑08‑22.
 
   [TTS‑0002] "Type Length Value Encoding", TITH, 2026‑08‑16.
 
@@ -1593,7 +1593,7 @@ B. History
    inferring modification in transit.
 
    Rev.10, 2026‑08‑22: Defined the legacy forms as alternate
-   serializations of the TSP‑0016 item data, used its child order,
+   serializations of the TTS‑0009 item data, used its child order,
    signature byte range, authentication states, and item types, and
    made failed retained‑Signature reconstruction mint a distinct item.
 

@@ -419,7 +419,7 @@ Only the routing suffix is rebuilt. The signed region is carried through byte
 for byte and one Via naming this node is appended, so the end-to-end signature
 still validates at the far end. Retransmission of an item already relayed is
 answered `Accepted` without spooling a second copy, keyed on the signed-item
-identity that TSP-0016 section 5 defines. Relayed jobs are committed under the
+identity that TTS-0009 section 5 defines. Relayed jobs are committed under the
 reserved application name `tithd-relay`, so no IPC client can collide with them.
 
 ### Outbound delivery
@@ -648,14 +648,14 @@ That self-check is why absent and zero are one native fact. Every legacy format
 carries the AttributeWord in a fixed header field and canonical output always
 emits `TZUTC`, so an absent `LegacyAttributes` or `TimestampOffset` and a zero
 one have the same legacy encoding, and only one of the two can be reconstructed.
-TSP-0016 makes absence the one that survives, and likewise keeps attachment
+TTS-0009 makes absence the one that survives, and likewise keeps attachment
 presence in the `File` children rather than in AttributeWord bit 4. Without
 those rules a Message originated through `tith submit` — which carries none of
 them — could never be exported canonically, which is the case `TITHSIG` most
 needs to serve.
 
 `MessageText` works the same way and for the same reason. FTS-0001.016 makes a
-hard carriage return the *end* of a paragraph, so TSP-0016 makes U+000A the end
+hard carriage return the *end* of a paragraph, so TTS-0009 makes U+000A the end
 of a native one: the text is empty or ends in U+000A, U+000D never appears, and
 each terminator maps to one 0x0D and back with nothing invented or dropped at
 the boundary. `tith submit` callers need not know that — TSP-0006 has the
@@ -746,7 +746,7 @@ A claimed `FileRequest` is answered rather than published. `Request-Processor`
 names an FSC-0086.001 external processor: the adapter writes the SRIF and request
 list, runs it, and reads the `ResponseList`. Each offered file becomes one
 TSP-0006 `Job Peer-File` addressed back to the requesting peer, which is the
-shape TSP-0016 gives a File belonging to no distribution area. The whole set is
+shape TTS-0009 gives a File belonging to no distribution area. The whole set is
 one Batch keyed on `InboundID`, so a redelivered request resolves to the original
 Jobs instead of sending everything twice, and it is submitted while the claim is
 still current.

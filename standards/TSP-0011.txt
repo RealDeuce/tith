@@ -81,7 +81,7 @@ Contents
   transmitted to a remote TITH node.
 
   One inbound item owns one exact encoded TLV of type Message, File, or
-  FileRequest as defined by TSP‑0016.  Payload begins with that item's
+  FileRequest as defined by TTS‑0009.  Payload begins with that item's
   canonical Type and ends with the final byte of its Value.  It does
   not include the enclosing SignedTLV, Bundle Header, another sibling
   item, or connection framing.  Those exact payload bytes are immutable
@@ -155,7 +155,7 @@ Contents
     • InboundID and every inbound record field;
     • the selected consumer Application;
     • Available as the initial state; and
-    • the TSP‑0016 signed‑item identity when the item has one.
+    • the TTS‑0009 signed‑item identity when the item has one.
 
   A consumer Application is selected from trusted local configuration,
   not from an unauthenticated field or IPC request.  Configuration may
@@ -400,7 +400,7 @@ Contents
   idempotency identity in its durable work and recognize that replay.
   This standard does not promise exactly‐once application processing.
 
-  FileRequest has no TSP‑0016 signed‑item identity and is a
+  FileRequest has no TTS‑0009 signed‑item identity and is a
   repeatable request.  Separate accepted FileRequest values therefore
   create separate inbound items even when their requested data is
   identical.
@@ -442,7 +442,7 @@ Contents
   IPC operation and MUST NOT occur as silent ordinary age‐based
   processing.
 
-  A TSP‑0016 signed‑item identity is independent of the local
+  A TTS‑0009 signed‑item identity is independent of the local
   inbound record.  Purging InboundID MUST NOT remove that identity or
   permit remote redelivery.  Only the separate explicit administrative
   action allowed by TTS‑0005 may remove it.
@@ -491,7 +491,7 @@ A. References
 
   [TTS‑0008] "Public Key Trust and Continuity", TITH, 2026‑08‑22.
 
-  [TSP‑0016] "Item Format", TITH, 2026‑08‑22.
+  [TTS‑0009] "Item Format", TITH, 2026‑08‑22.
 
   [TTS‑0003] "Common TLV Types", TITH, 2026‑08‑22.
 
@@ -529,7 +529,7 @@ B. History
    unsupported claims that failure proves modification in transit.
 
    Rev.7, 2026‑08‑22: Referred the exact item payload, authentication
-   outcomes, and stable signed‑item identity to TSP‑0016 while retaining
+   outcomes, and stable signed‑item identity to TTS‑0009 while retaining
    the TTS‑0005 transport acceptance and duplicate handling rules.
 
 **********************************************************************

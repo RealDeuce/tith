@@ -171,7 +171,7 @@ need to guess.
   on.  Limited parsing of unauthenticated data is allowed only where the
   enclosing protocol explicitly requires it for error reporting.
 - Messages and standalone Files have the independent end-to-end item
-  authentication states defined by TSP-0016.  A File inside a Message shares
+  authentication states defined by TTS-0009.  A File inside a Message shares
   the enclosing Message's state and carries no independent Origin, PublicKey,
   SignedOrigin, or Signature.
 - NetMail has a Destination and no Area; Echomail has an Area and no
@@ -243,7 +243,7 @@ lengths and outstanding-response accounting cannot resolve.
   the FSC-0086.001 request-processor boundary. A conversion which cannot be
   represented is refused, never made lossy, and a step blocked on standards
   work fails loudly naming its issue rather than degrading silently.
-  That self-check is what makes TSP-0016 keep one native representation of each
+  That self-check is what makes TTS-0009 keep one native representation of each
   legacy fact: an absent `LegacyAttributes` or `TimestampOffset` is the only form
   of a zero one, attachment presence lives in the `File` children rather than in
   AttributeWord bit 4, and `MessageText` is paragraphs each terminated by one
@@ -448,7 +448,7 @@ type assignments.
 - Keep Contents entries, section numbers, type names, and cross-references in
   sync.
 - Do not assign a permanent TLV type casually.  Check TTS-0003, TTS-0005,
-  TSP-0016, and `poc/tith.h` for existing and reserved ranges.
+  TTS-0009, and `poc/tith.h` for existing and reserved ranges.
 - Examples illustrate normative rules; they must not introduce a second,
   contradictory grammar.
 - Do not turn non-conforming native behaviour into a normative compatibility
