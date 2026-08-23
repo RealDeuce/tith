@@ -35,6 +35,10 @@ def main() -> int:
 			if counts["covered"] != counts["count"]:
 				failed = True
 		print(f"{source}: " + ", ".join(parts))
+		if summary["lines"]["covered"] != summary["lines"]["count"]:
+			for segment in matches[0].get("segments", []):
+				if segment[3] and segment[2] == 0 and not segment[5]:
+					print(f"{source}: zero-count segment {segment}")
 		if summary["branches"]["covered"] != summary["branches"]["count"]:
 			for branch in matches[0].get("branches", []):
 				if branch[4] == 0 or branch[5] == 0:
