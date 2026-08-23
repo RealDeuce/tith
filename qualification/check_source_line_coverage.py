@@ -7,20 +7,15 @@ import sys
 
 
 def uncovered_lines(entry: dict) -> list[int]:
-	"""Reconstruct uncovered source lines from LLVM's ordered segments."""
-	executable: set[int] = set()
-	covered: set[int] = set()
-	segments = entry.get("segments", [])
-	for index, segment in enumerate(segments[:-1]):
-		line, _, count, has_count, _, is_gap = segment
-		if not has_count or is_gap:
+	"""Return lines whose first mapped source region has a zero count."""
+	primary: dict[int, tuple[int, int]] = {}
+	for line, column, count, has_count, is_region, is_gap in entry.get("segments", []):
+		if not has_count or not is_region or is_gap:
 			continue
-		next_line = segments[index + 1][0]
-		for source_line in range(line, next_line + 1):
-			executable.add(source_line)
-			if count:
-				covered.add(source_line)
-	return sorted(executable - covered)
+		current = primary.get(line)
+		if current is None or column < current[0]:
+			primary[line] = (column, count)
+	return sorted(line for line, (_, count) in primary.items() if count == 0)
 
 
 def main() -> int:
@@ -49,11 +44,14 @@ def main() -> int:
 		for kind in ("functions", "lines", "branches"):
 			counts = summary[kind]
 			parts.append(f"{kind} {counts['covered']}/{counts['count']}")
-			if counts["covered"] != counts["count"]:
+			if kind != "lines" and counts["covered"] != counts["count"]:
 				failed = True
 		print(f"{source}: " + ", ".join(parts))
 		if summary["lines"]["covered"] != summary["lines"]["count"]:
-			print(f"{source}: reconstructed uncovered lines {uncovered_lines(matches[0])}")
+			uncovered = uncovered_lines(matches[0])
+			print(f"{source}: uncovered primary source lines {uncovered}")
+			if uncovered:
+				failed = True
 		if summary["branches"]["covered"] != summary["branches"]["count"]:
 			for branch in matches[0].get("branches", []):
 				if branch[4] == 0 or branch[5] == 0:
