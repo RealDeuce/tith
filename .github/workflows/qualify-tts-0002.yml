@@ -3,9 +3,14 @@ name: Qualify TTS-0002
 on:
   push:
     paths:
+      - "standards/TTS-0002.txt"
+      - "Cargo.lock"
+      - "rust-toolchain.toml"
+      - ".github/workflows/rust.yml"
       - "crates/tith-wire/src/integer.rs"
       - "crates/tith-wire/src/tlv.rs"
       - "qualification/check_source_coverage.py"
+      - "qualification/TTS-0002.003.md"
       - ".github/workflows/qualify-tts-0002.yml"
   workflow_dispatch:
 

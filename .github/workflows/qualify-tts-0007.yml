@@ -5,9 +5,12 @@ on:
     paths:
       - "standards/TTS-0007.txt"
       - "standards/TTS-0002.txt"
+      - "Cargo.lock"
+      - "rust-toolchain.toml"
       - "crates/tith-wire/src/signed_integer.rs"
       - "crates/tith-wire/src/integer.rs"
       - "qualification/check_source_coverage.py"
+      - "qualification/TTS-0007.002.md"
       - ".github/workflows/rust.yml"
       - ".github/workflows/qualify-tts-0007.yml"
   workflow_dispatch:

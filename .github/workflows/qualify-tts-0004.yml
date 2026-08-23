@@ -3,6 +3,12 @@ name: Qualify TTS-0004
 on:
   push:
     paths:
+      - "standards/TTS-0004.txt"
+      - "standards/TTS-5000.txt"
+      - "standards/TRD-0003.txt"
+      - "Cargo.lock"
+      - "rust-toolchain.toml"
+      - ".github/workflows/rust.yml"
       - "crates/tith-wire/src/address.rs"
       - "crates/tith-wire/src/item.rs"
       - "crates/tith-wire/src/item_format_impl.rs"
@@ -15,7 +21,9 @@ on:
       - "crates/tith-crypto/src/lib.rs"
       - "crates/tith-crypto/src/public_key.rs"
       - "crates/tith-crypto/src/signature.rs"
+      - "crates/tithd/src/mail.rs"
       - "qualification/check_source_coverage.py"
+      - "qualification/TTS-0004.005.md"
       - ".github/workflows/qualify-tts-0004.yml"
   workflow_dispatch:
 

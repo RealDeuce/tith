@@ -1,8 +1,18 @@
-name: Qualify TSP-0015 for TTS-0008
+name: Qualify TTS-0008
 
 on:
   push:
     paths:
+      - "standards/TTS-0008.txt"
+      - "standards/TTS-0004.txt"
+      - "standards/TTS-0005.txt"
+      - "standards/TTS-5000.txt"
+      - "standards/TSP-0002.txt"
+      - "standards/TSP-0014.txt"
+      - "Cargo.lock"
+      - "rust-toolchain.toml"
+      - ".github/workflows/rust.yml"
+      - "crates/tith-config/src/lib.rs"
       - "crates/tith-store/src/key_pin.rs"
       - "crates/tith-store/src/lib.rs"
       - "crates/tith-store/src/outbound.rs"
@@ -17,6 +27,7 @@ on:
       - "crates/tithd/src/main.rs"
       - "crates/tithd/src/submission.rs"
       - "qualification/check_source_line_coverage.py"
+      - "qualification/TTS-0008.001.md"
       - ".github/workflows/qualify-tts-0008.yml"
   workflow_dispatch:
 
@@ -39,17 +50,17 @@ jobs:
       - name: Install pinned coverage driver
         run: cargo install cargo-llvm-cov --version 0.9.0 --locked
 
-      - name: Exercise the TSP-0015 conformance surface
+      - name: Exercise the TTS-0008 conformance surface
         run: |
           cargo +nightly-2026-08-20 llvm-cov clean --workspace
-          cargo +nightly-2026-08-20 llvm-cov --branch --workspace --json --output-path tts-0015-coverage.json
+          cargo +nightly-2026-08-20 llvm-cov --branch --workspace --json --output-path tts-0008-coverage.json
 
       - name: Report source coverage
         run: cargo +nightly-2026-08-20 llvm-cov report --branch --text --show-missing-lines
 
       - name: Require complete conformance coverage
         run: |
-          sha256sum tts-0015-coverage.json
+          sha256sum tts-0008-coverage.json
           python3 qualification/check_source_line_coverage.py \
-            tts-0015-coverage.json \
+            tts-0008-coverage.json \
             crates/tith-store/src/key_pin.rs

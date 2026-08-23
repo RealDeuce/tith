@@ -8,6 +8,9 @@ on:
       - "standards/TTS-0003.txt"
       - "standards/TTS-0004.txt"
       - "standards/TTS-0007.txt"
+      - "Cargo.lock"
+      - "rust-toolchain.toml"
+      - ".github/workflows/rust.yml"
       - "crates/tith-crypto/src/public_key.rs"
       - "crates/tith-crypto/src/signature.rs"
       - "crates/tith-wire/src/address.rs"
@@ -26,9 +29,12 @@ on:
       - "crates/tith-wire/src/type_code.rs"
       - "crates/tith-wire/src/types.rs"
       - "crates/tith-store/src/lib.rs"
+      - "crates/tith-adapter/src/convert.rs"
       - "crates/tithd/src/accept.rs"
+      - "crates/tithd/src/mail.rs"
       - "crates/tithd/src/submission.rs"
       - "qualification/check_source_line_coverage.py"
+      - "qualification/TTS-0009.001.md"
       - ".github/workflows/qualify-tts-0009.yml"
   workflow_dispatch:
 
