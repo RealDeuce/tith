@@ -815,8 +815,8 @@ pub struct PublicationName {
 }
 
 impl PublicationName {
-	pub fn new(domain: impl Into<String>, ordinal_day: u16) -> Result<Self, NodelistErrorKind> {
-		let domain = domain.into();
+	pub fn new(domain: &str, ordinal_day: u16) -> Result<Self, NodelistErrorKind> {
+		let domain = domain.to_owned();
 		if Address::new(domain.clone(), 1, 1, 0, 0).is_err() || !(1..=366).contains(&ordinal_day) {
 			return Err(NodelistErrorKind::InvalidPublication);
 		}
@@ -850,13 +850,9 @@ pub struct AlternatePublicationName {
 }
 
 impl AlternatePublicationName {
-	pub fn new(
-		domain: impl Into<String>,
-		base: impl Into<String>,
-		ordinal_day: u16,
-	) -> Result<Self, NodelistErrorKind> {
-		let domain = domain.into();
-		let base = base.into();
+	pub fn new(domain: &str, base: &str, ordinal_day: u16) -> Result<Self, NodelistErrorKind> {
+		let domain = domain.to_owned();
+		let base = base.to_owned();
 		if Address::new(domain.clone(), 1, 1, 0, 0).is_err()
 			|| base.is_empty()
 			|| base == format!("{domain}-nodelist")
