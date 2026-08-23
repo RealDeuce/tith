@@ -241,28 +241,11 @@ fn validate_originated_message_data(data: &MessageData) -> Result<(), BundleErro
 	// depends on that, because every legacy format carries the AttributeWord in a
 	// fixed field and canonical export always emits TZUTC, so a zero and an
 	// absent value share one legacy encoding and only one can reconstruct.
-	if data.legacy_attributes == Some(0) {
-		return Err(BundleError::Unexpected("zero LegacyAttributes"));
+	if let Some(value) = data.legacy_attributes {
+		validate_legacy_attributes(value)?;
 	}
-	if data.timestamp_offset == Some(0) {
-		return Err(BundleError::Unexpected("zero TimestampOffset"));
-	}
-	// Bit 4 is FileAttached, which the File children already carry.
-	if data
-		.legacy_attributes
-		.is_some_and(|value| value & LEGACY_ATTRIBUTE_FILE_ATTACHED != 0)
-	{
-		return Err(BundleError::Unexpected(
-			"LegacyAttributes bit 4, which the File children carry",
-		));
-	}
-	if data
-		.legacy_attributes
-		.is_some_and(|value| value & !LEGACY_ATTRIBUTES_SIGNED_MASK != 0)
-	{
-		return Err(BundleError::Unexpected(
-			"non-persistent LegacyAttributes bits",
-		));
+	if let Some(value) = data.timestamp_offset {
+		validate_timestamp_offset(value)?;
 	}
 	// TSP-0016 section 3.1: TearLine and OriginLine are EchoMail control
 	// information, so NetMail carries neither. A legacy NetMail which does carry
@@ -274,10 +257,40 @@ fn validate_originated_message_data(data: &MessageData) -> Result<(), BundleErro
 	// one U+000A, which is the only line break. A caller with text in another
 	// shape converts it before submitting; TSP-0006 has the service do that for
 	// an Application, because this is where the signed bytes are decided.
-	if data.text.contains('\r') {
+	validate_message_text(&data.text)
+}
+
+fn validate_legacy_attributes(value: u64) -> Result<(), BundleError> {
+	if value == 0 {
+		return Err(BundleError::Unexpected("zero LegacyAttributes"));
+	}
+	// Bit 4 is FileAttached, which the File children already carry.
+	if value & LEGACY_ATTRIBUTE_FILE_ATTACHED != 0 {
+		return Err(BundleError::Unexpected(
+			"LegacyAttributes bit 4, which the File children carry",
+		));
+	}
+	if value & !LEGACY_ATTRIBUTES_SIGNED_MASK != 0 {
+		return Err(BundleError::Unexpected(
+			"non-persistent LegacyAttributes bits",
+		));
+	}
+	Ok(())
+}
+
+fn validate_timestamp_offset(value: i64) -> Result<(), BundleError> {
+	if value == 0 {
+		Err(BundleError::Unexpected("zero TimestampOffset"))
+	} else {
+		Ok(())
+	}
+}
+
+fn validate_message_text(value: &str) -> Result<(), BundleError> {
+	if value.contains('\r') {
 		return Err(BundleError::Unexpected("U+000D in MessageText"));
 	}
-	if !data.text.is_empty() && !data.text.ends_with('\n') {
+	if !value.is_empty() && !value.ends_with('\n') {
 		return Err(BundleError::Unexpected(
 			"a MessageText whose final paragraph is unterminated",
 		));
@@ -1040,10 +1053,11 @@ fn validate_message(
 		(types::TO_USER_NAME, "ToUserName"),
 		(types::FROM_USER_NAME, "FromUserName"),
 		(types::SUBJECT, "Subject"),
-		(types::MESSAGE_TEXT, "MessageText"),
 	] {
 		text(cursor.take(type_code, name)?.1)?;
 	}
+	let message_text = text(cursor.take(types::MESSAGE_TEXT, "MessageText")?.1)?;
+	validate_message_text(message_text)?;
 	let area = cursor
 		.optional(types::AREA)
 		.map(|(_, value)| validate_area(value))
@@ -1060,10 +1074,10 @@ fn validate_message(
 		validate_file(file, false, resolver)?;
 	}
 	if let Some((_, value)) = cursor.optional(types::LEGACY_ATTRIBUTES) {
-		decode_u64(&value.value)?;
+		validate_legacy_attributes(decode_u64(&value.value)?)?;
 	}
 	if let Some((_, value)) = cursor.optional(types::TIMESTAMP_OFFSET) {
-		decode_i64(&value.value)?;
+		validate_timestamp_offset(decode_i64(&value.value)?)?;
 	}
 	let mut echo_control = false;
 	for type_code in [types::TEAR_LINE, types::ORIGIN_LINE, types::MESSAGE_ID] {
@@ -1129,7 +1143,7 @@ fn validate_message(
 		read_via(via)?;
 	}
 	if let Some((_, seen_by)) = cursor.optional(types::SEEN_BY) {
-		text(seen_by)?;
+		seen_by_addresses(seen_by)?;
 	}
 	for (_, line) in cursor.repeated(types::ADDITIONAL_KLUDGE_LINE) {
 		if text(line)?.contains('\u{0001}') {
@@ -1223,9 +1237,6 @@ fn validate_file(
 		}
 	}
 	let signature_entry = cursor.optional(types::SIGNATURE);
-	if signature_entry.is_some() && provenance_parts.is_none() {
-		return Err(BundleError::Unexpected("File Signature without Origin"));
-	}
 	let (provenance, authentication, signature) =
 		if let Some((signature_index, signature_value)) = signature_entry {
 			let signature = parse_signature(signature_value)?;

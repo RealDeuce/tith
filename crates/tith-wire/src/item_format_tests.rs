@@ -1318,4 +1318,601 @@ mod tests {
 			.is_ok()
 		);
 	}
+
+	#[test]
+	fn received_messages_enforce_the_canonical_data_rules() {
+		let keys = SigningKeyPair::from_seed(&[101; 32]).unwrap();
+		let destination_keys = SigningKeyPair::from_seed(&[102; 32]).unwrap();
+		let origin: Address = "fidonet#1/101".parse().unwrap();
+		let destination = Identity {
+			address: "fidonet#1/102".parse().unwrap(),
+			public_key: destination_keys.public,
+		};
+		let valid = build_originated_message(
+			&MessageData {
+				destination: Some(destination.clone()),
+				timestamp: 1,
+				to_user: "You".to_owned(),
+				from_user: "Me".to_owned(),
+				subject: String::new(),
+				text: "Body\n".to_owned(),
+				area: None,
+				attachments: Vec::new(),
+				legacy_attributes: None,
+				timestamp_offset: None,
+				tear_line: None,
+				origin_line: None,
+				message_id: None,
+				reply_to: None,
+				original_character_set: None,
+				additional_kludge_lines: Vec::new(),
+			},
+			&ItemProvenance {
+				origin: origin.clone(),
+				signer: Some(Identity {
+					address: origin.clone(),
+					public_key: keys.public,
+				}),
+			},
+			&keys.secret,
+			1,
+			1,
+			"test",
+			&[],
+		)
+		.unwrap();
+		let resolver = |address: &Address| {
+			if address == &origin {
+				Some(keys.public)
+			} else if address == &destination.address {
+				Some(destination.public_key)
+			} else {
+				None
+			}
+		};
+		let base = parse_sequence(&valid.value).unwrap();
+		let signature = base
+			.iter()
+			.position(|value| value.type_code == types::SIGNATURE)
+			.unwrap();
+
+		for (type_code, bytes, expected) in [
+			(types::LEGACY_ATTRIBUTES, crate::integer::encode_u64(0), "zero LegacyAttributes"),
+			(
+				types::LEGACY_ATTRIBUTES,
+				crate::integer::encode_u64(LEGACY_ATTRIBUTE_FILE_ATTACHED),
+				"LegacyAttributes bit 4, which the File children carry",
+			),
+			(
+				types::LEGACY_ATTRIBUTES,
+				crate::integer::encode_u64(1 << 9),
+				"non-persistent LegacyAttributes bits",
+			),
+			(types::TIMESTAMP_OFFSET, crate::integer::encode_i64(0), "zero TimestampOffset"),
+		] {
+			let mut children = base.clone();
+			children.insert(signature, OwnedTlv::new(type_code, bytes).unwrap());
+			let item = container(types::MESSAGE, &children);
+			assert!(matches!(
+				validate_message(&item, &resolver),
+				Err(BundleError::Unexpected(value)) if value == expected
+			));
+		}
+
+		for (bytes, expected) in [
+			(b"Body\r\n".to_vec(), "U+000D in MessageText"),
+			(
+				b"unterminated".to_vec(),
+				"a MessageText whose final paragraph is unterminated",
+			),
+		] {
+			let mut children = base.clone();
+			children
+				.iter_mut()
+				.find(|value| value.type_code == types::MESSAGE_TEXT)
+				.unwrap()
+				.value = bytes;
+			let item = container(types::MESSAGE, &children);
+			assert!(matches!(
+				validate_message(&item, &resolver),
+				Err(BundleError::Unexpected(value)) if value == expected
+			));
+		}
+
+		let mut children = base;
+		children.push(OwnedTlv::new(types::SEEN_BY, b"not an address".to_vec()).unwrap());
+		assert!(validate_message(&container(types::MESSAGE, &children), &resolver).is_err());
+	}
+
+	#[test]
+	fn item_helpers_reject_every_malformed_boundary() {
+		let keys = SigningKeyPair::from_seed(&[103; 32]).unwrap();
+		let non_anonymous: Address = "fidonet#1/103".parse().unwrap();
+		let anonymous = Address::anonymous("p2p".to_owned()).unwrap();
+		let key = OwnedTlv::new(types::PUBLIC_KEY, keys.public.as_bytes().to_vec()).unwrap();
+		let non_anonymous_value =
+			OwnedTlv::new(types::ORIGIN, non_anonymous.to_string().into_bytes()).unwrap();
+		let anonymous_value =
+			OwnedTlv::new(types::ORIGIN, anonymous.to_string().into_bytes()).unwrap();
+
+		assert!(matches!(
+			parse_identity(&anonymous_value, None, &|_: &Address| None),
+			Err(BundleError::Missing("anonymous PublicKey"))
+		));
+		assert!(parse_identity(&anonymous_value, Some(&key), &|_: &Address| None).is_ok());
+		assert!(matches!(
+			parse_identity(&non_anonymous_value, Some(&key), &|_: &Address| None),
+			Err(BundleError::Unexpected("non-anonymous PublicKey"))
+		));
+		assert!(matches!(
+			parse_identity(&non_anonymous_value, None, &|_: &Address| None),
+			Err(BundleError::UnknownKey(_))
+		));
+		assert!(
+			parse_identity(&non_anonymous_value, None, &|_: &Address| Some(keys.public)).is_ok()
+		);
+
+		assert!(matches!(
+			parse_provenance(&anonymous_value, None, None, &|_: &Address| None),
+			Err(BundleError::Missing("anonymous Origin PublicKey"))
+		));
+		assert!(matches!(
+			parse_provenance(
+				&non_anonymous_value,
+				Some(&key),
+				None,
+				&|_: &Address| None
+			),
+			Err(BundleError::Unexpected("non-anonymous Origin PublicKey"))
+		));
+		assert!(matches!(
+			parse_provenance(&non_anonymous_value, None, None, &|_: &Address| None),
+			Err(BundleError::UnknownKey(_))
+		));
+
+		let values = vec![OwnedTlv::new(200, Vec::new()).unwrap(), key.clone()];
+		let mut cursor = Cursor::new(&values);
+		assert!(conditional_public_key(&mut cursor, &anonymous).is_err());
+		let values = vec![key.clone()];
+		let mut cursor = Cursor::new(&values);
+		assert!(conditional_public_key(&mut cursor, &anonymous).is_ok());
+		let mut cursor = Cursor::new(&values);
+		assert!(conditional_public_key(&mut cursor, &non_anonymous).is_err());
+		let mut cursor = Cursor::new(&[]);
+		assert_eq!(conditional_public_key(&mut cursor, &non_anonymous).unwrap(), None);
+
+		let values = vec![
+			OwnedTlv::new(200, Vec::new()).unwrap(),
+			OwnedTlv::new(types::TIMESTAMP, vec![1]).unwrap(),
+			OwnedTlv::new(201, Vec::new()).unwrap(),
+		];
+		let mut cursor = Cursor::new(&values);
+		assert_eq!(cursor.next_defined().unwrap().1.type_code, types::TIMESTAMP);
+		assert!(cursor.next_defined().is_none());
+		let mut cursor = Cursor::new(&values);
+		assert!(cursor.take(types::CONTENTS, "Contents").is_err());
+		let mut cursor = Cursor::new(&[]);
+		assert!(cursor.take(types::CONTENTS, "Contents").is_err());
+		let cursor = Cursor::new(&values);
+		assert!(cursor.finish().is_err());
+		let unknown = vec![OwnedTlv::new(200, Vec::new()).unwrap()];
+		assert!(Cursor::new(&unknown).finish().is_ok());
+
+		let mut output = Vec::new();
+		assert!(push_file_metadata(&mut output, Some("bad\n"), &[], None, None, None).is_err());
+		assert!(
+			push_file_metadata(
+				&mut output,
+				None,
+				&["bad\r".to_owned()],
+				None,
+				None,
+				None
+			)
+			.is_err()
+		);
+		assert!(validate_produced_filename("dir/file").is_err());
+		assert!(validate_produced_filename("bad:name").is_err());
+		assert!(validate_produced_filename("good.name").is_ok());
+		assert!(push_filename(&mut output, None).is_ok());
+
+		let anonymous_signer = Identity {
+			address: anonymous.clone(),
+			public_key: keys.public,
+		};
+		assert!(matches!(
+			push_provenance(
+				&mut output,
+				&ItemProvenance {
+					origin: anonymous.clone(),
+					signer: None,
+				}
+			),
+			Err(BundleError::Missing("item signing identity"))
+		));
+		assert!(matches!(
+			push_provenance(
+				&mut output,
+				&ItemProvenance {
+					origin: anonymous,
+					signer: Some(Identity {
+						address: non_anonymous.clone(),
+						public_key: keys.public,
+					}),
+				}
+			),
+			Err(BundleError::Unexpected(
+				"anonymous Origin without its own PublicKey"
+			))
+		));
+		assert!(push_provenance(
+			&mut output,
+			&ItemProvenance {
+				origin: anonymous_signer.address.clone(),
+				signer: Some(anonymous_signer),
+			}
+		)
+		.is_ok());
+
+		let malformed_vias = [
+			container(
+				types::VIA,
+				&[OwnedTlv::new(types::TIMESTAMP, vec![1]).unwrap()],
+			),
+			container(
+				types::VIA,
+				&[
+					OwnedTlv::new(types::ADDRESS, b"p2p#-1".to_vec()).unwrap(),
+					OwnedTlv::new(types::TIMESTAMP, vec![1]).unwrap(),
+				],
+			),
+			container(
+				types::VIA,
+				&[
+					OwnedTlv::new(types::ADDRESS, b"fidonet#1/1".to_vec()).unwrap(),
+					key.clone(),
+				],
+			),
+			container(
+				types::VIA,
+				&[
+					OwnedTlv::new(types::ADDRESS, b"fidonet#1/1".to_vec()).unwrap(),
+					OwnedTlv::new(types::CONTENTS, Vec::new()).unwrap(),
+				],
+			),
+		];
+		for value in malformed_vias {
+			assert!(read_via(&value).is_err());
+		}
+		let reply = container(
+			types::REPLY_TO,
+			&[OwnedTlv::new(types::TIMESTAMP, vec![1]).unwrap()],
+		);
+		assert!(matches!(
+			read_reply_to(&reply),
+			Err(BundleError::Missing("ReplyTo Address"))
+		));
+
+		assert_eq!(
+			validate_area(&area_value(&AreaData {
+				name: "ANY UTF-8 😀".to_owned(),
+				description: Some("description".to_owned()),
+			}))
+			.unwrap()
+			.description
+			.as_deref(),
+			Some("description")
+		);
+	}
+
+	#[test]
+	fn retained_and_forwarded_items_cover_every_suffix_path() {
+		let keys = SigningKeyPair::from_seed(&[104; 32]).unwrap();
+		let destination_keys = SigningKeyPair::from_seed(&[105; 32]).unwrap();
+		let origin: Address = "fidonet#1/104".parse().unwrap();
+		let local = Identity {
+			address: origin.clone(),
+			public_key: keys.public,
+		};
+		let destination = Identity {
+			address: "fidonet#1/105".parse().unwrap(),
+			public_key: destination_keys.public,
+		};
+		let data = MessageData {
+			destination: Some(destination.clone()),
+			timestamp: 1,
+			to_user: "You".to_owned(),
+			from_user: "Me".to_owned(),
+			subject: String::new(),
+			text: "Body\n".to_owned(),
+			area: None,
+			attachments: Vec::new(),
+			legacy_attributes: None,
+			timestamp_offset: None,
+			tear_line: None,
+			origin_line: None,
+			message_id: None,
+			reply_to: None,
+			original_character_set: None,
+			additional_kludge_lines: vec!["FLAGS KFS".to_owned()],
+		};
+		let provenance = ItemProvenance {
+			origin: origin.clone(),
+			signer: Some(local.clone()),
+		};
+		let message = build_originated_message(
+			&data,
+			&provenance,
+			&keys.secret,
+			1,
+			1,
+			"test",
+			&[],
+		)
+		.unwrap();
+		let resolver = |address: &Address| {
+			if address == &origin {
+				Some(keys.public)
+			} else if address == &destination.address {
+				Some(destination.public_key)
+			} else {
+				None
+			}
+		};
+		let signature = read_message(&message, &resolver)
+			.unwrap()
+			.signing
+			.signature
+			.unwrap();
+		let suffix = |existing_vias| MessageSuffix {
+			existing_vias,
+			local_via: &local,
+			request_identifier: 2,
+			via_timestamp: 2,
+			software: "test 2",
+			seen_by: &[],
+		};
+		assert!(build_retained_message(
+			&data,
+			&provenance,
+			Signature::from_bytes([0; SIGNATURE_BYTES]),
+			&suffix(&[])
+		)
+		.is_err());
+
+		let missing_key = [ViaData {
+			address: Address::anonymous("p2p".to_owned()).unwrap(),
+			public_key: None,
+			timestamp: 1,
+			software: "old".to_owned(),
+		}];
+		assert!(build_retained_message(
+			&data,
+			&provenance,
+			signature,
+			&suffix(&missing_key)
+		)
+		.is_err());
+		let extra_key = [ViaData {
+			address: origin.clone(),
+			public_key: Some(keys.public),
+			timestamp: 1,
+			software: "old".to_owned(),
+		}];
+		assert!(build_retained_message(
+			&data,
+			&provenance,
+			signature,
+			&suffix(&extra_key)
+		)
+		.is_err());
+		let valid_vias = [
+			ViaData {
+				address: origin.clone(),
+				public_key: None,
+				timestamp: 1,
+				software: "old".to_owned(),
+			},
+			ViaData {
+				address: Address::anonymous("p2p".to_owned()).unwrap(),
+				public_key: Some(keys.public),
+				timestamp: 1,
+				software: "anonymous".to_owned(),
+			},
+		];
+		assert!(build_retained_message(
+			&data,
+			&provenance,
+			signature,
+			&suffix(&valid_vias)
+		)
+		.is_ok());
+
+		let request = build_file_request("file.zip", None, 1).unwrap();
+		assert!(forward_item(&request, &local, 2, 2, "test", &[]).is_err());
+		let mut unsigned_children = parse_sequence(&message.value).unwrap();
+		unsigned_children.retain(|value| value.type_code != types::SIGNATURE);
+		let unsigned = container(types::MESSAGE, &unsigned_children);
+		assert!(forward_item(&unsigned, &local, 2, 2, "test", &[]).is_err());
+
+		let mut children = parse_sequence(&message.value).unwrap();
+		let signature_index = children
+			.iter()
+			.position(|value| value.type_code == types::SIGNATURE)
+			.unwrap();
+		children.insert(signature_index + 1, OwnedTlv::new(200, b"extension".to_vec()).unwrap());
+		let extended = container(types::MESSAGE, &children);
+		let forwarded = forward_item(
+			&extended,
+			&local,
+			3,
+			3,
+			"test 3",
+			&["fidonet#1/200".parse().unwrap()],
+		)
+		.unwrap();
+		assert!(parse_sequence(&forwarded.value)
+			.unwrap()
+			.iter()
+			.any(|value| value.type_code == 200));
+		forward_item(&extended, &local, 4, 4, "test 4", &[]).unwrap();
+
+		let file = build_originated_file(
+			StandaloneFileData {
+				filename: Some("file.zip".to_owned()),
+				timestamp: None,
+				contents: b"file".to_vec(),
+				area: Some(area("FILES")),
+				short_description: None,
+				long_description_lines: Vec::new(),
+				tear_line: None,
+				magic_word: None,
+				replaces: None,
+			},
+			&provenance,
+			&keys.secret,
+			1,
+			1,
+			"test",
+			std::slice::from_ref(&origin),
+		)
+		.unwrap();
+		forward_item(&file, &local, 2, 2, "test 2", &[origin]).unwrap();
+		assert!(item_vias(&OwnedTlv::new(types::MESSAGE, vec![1]).unwrap()).is_err());
+	}
+
+	#[test]
+	fn message_and_file_grammars_reject_each_prohibited_shape() {
+		let keys = SigningKeyPair::from_seed(&[106; 32]).unwrap();
+		let origin: Address = "fidonet#1/106".parse().unwrap();
+		let origin_value = OwnedTlv::new(types::ORIGIN, origin.to_string().into_bytes()).unwrap();
+		let request = OwnedTlv::new(types::REQUEST_IDENTIFIER, vec![1]).unwrap();
+		let via = via_value(
+			&Identity {
+				address: origin.clone(),
+				public_key: keys.public,
+			},
+			1,
+			"test",
+		);
+		let area = area_value(&area("AREA"));
+
+		let base_message = [
+			origin_value.clone(),
+			OwnedTlv::new(types::TIMESTAMP, vec![1]).unwrap(),
+			OwnedTlv::new(types::TO_USER_NAME, Vec::new()).unwrap(),
+			OwnedTlv::new(types::FROM_USER_NAME, Vec::new()).unwrap(),
+			OwnedTlv::new(types::SUBJECT, Vec::new()).unwrap(),
+			OwnedTlv::new(types::MESSAGE_TEXT, Vec::new()).unwrap(),
+		];
+		let mut neither = base_message.to_vec();
+		neither.extend([request.clone(), via.clone()]);
+		let mut both = vec![
+			origin_value.clone(),
+			OwnedTlv::new(types::DESTINATION, b"fidonet#1/107".to_vec()).unwrap(),
+		];
+		both.extend_from_slice(&base_message[1..]);
+		both.extend([area.clone(), request.clone(), via.clone()]);
+		for children in [neither, both] {
+			assert!(matches!(
+				validate_message(&container(types::MESSAGE, &children), &|_: &Address| {
+					Some(keys.public)
+				}),
+				Err(BundleError::Unexpected("Message Destination/Area combination"))
+			));
+		}
+		let mut no_via = base_message.to_vec();
+		no_via.extend([area.clone(), request.clone()]);
+		assert!(matches!(
+			validate_message(&container(types::MESSAGE, &no_via), &|_: &Address| {
+				Some(keys.public)
+			}),
+			Err(BundleError::Missing("Message Via"))
+		));
+		let mut signed_without_signature = base_message.to_vec();
+		signed_without_signature.insert(
+			1,
+			OwnedTlv::new(types::SIGNED_ORIGIN, origin.to_string().into_bytes()).unwrap(),
+		);
+		signed_without_signature.extend([area.clone(), request.clone(), via.clone()]);
+		assert!(matches!(
+			validate_message(
+				&container(types::MESSAGE, &signed_without_signature),
+				&|_: &Address| Some(keys.public)
+			),
+			Err(BundleError::Unexpected("SignedOrigin without Signature"))
+		));
+
+		let contents = OwnedTlv::new(types::CONTENTS, Vec::new()).unwrap();
+		let validate_standalone = |children: &[OwnedTlv]| {
+			validate_file(
+				&container(types::FILE, children),
+				true,
+				&|_: &Address| Some(keys.public),
+			)
+		};
+		assert!(matches!(
+			validate_standalone(&[contents.clone(), request.clone()]),
+			Err(BundleError::Missing("standalone File Origin"))
+		));
+		assert!(matches!(
+			validate_file(
+				&container(types::FILE, &[contents.clone(), area.clone()]),
+				false,
+				&|_: &Address| None
+			),
+			Err(BundleError::Unexpected("attached File Area"))
+		));
+		assert!(matches!(
+			validate_standalone(&[
+				contents.clone(),
+				origin_value.clone(),
+				OwnedTlv::new(types::SIGNED_ORIGIN, origin.to_string().into_bytes()).unwrap(),
+				request.clone(),
+			]),
+			Err(BundleError::Unexpected("SignedOrigin without Signature"))
+		));
+
+		for description in [
+			OwnedTlv::new(types::SHORT_DESCRIPTION, b"bad\n".to_vec()).unwrap(),
+			OwnedTlv::new(types::LONG_DESCRIPTION_LINE, b"bad\r".to_vec()).unwrap(),
+		] {
+			assert!(validate_standalone(&[
+				contents.clone(),
+				origin_value.clone(),
+				description,
+				request.clone(),
+			])
+			.is_err());
+		}
+		assert!(validate_standalone(&[
+			OwnedTlv::new(types::FILENAME, b"dir/file".to_vec()).unwrap(),
+			contents.clone(),
+			origin_value.clone(),
+			request.clone(),
+		])
+		.is_err());
+
+		let seen = OwnedTlv::new(types::SEEN_BY, origin.to_string().into_bytes()).unwrap();
+		for suffix in [
+			vec![area.clone(), origin_value.clone(), request.clone()],
+			vec![area.clone(), origin_value.clone(), request.clone(), via.clone()],
+			vec![area, origin_value.clone(), request.clone(), seen.clone()],
+		] {
+			let mut children = vec![contents.clone()];
+			children.extend(suffix);
+			assert!(matches!(
+				validate_standalone(&children),
+				Err(BundleError::Missing("distribution File Via/SeenBy"))
+			));
+		}
+		for suffix in [vec![via], vec![seen]] {
+			let mut children = vec![contents.clone(), origin_value.clone(), request.clone()];
+			children.extend(suffix);
+			assert!(matches!(
+				validate_standalone(&children),
+				Err(BundleError::Unexpected("non-distribution File Via/SeenBy"))
+			));
+		}
+	}
 }
