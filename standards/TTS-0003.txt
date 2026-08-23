@@ -3,7 +3,7 @@ TITH                                              THIS ISN'T THAT HARD
 **********************************************************************
 
 Publication:  TTS‑0003
-Revision:     6
+Revision:     7
 Title:        Common TLV Types
 Author(s):    Stephen Hurd
 Date:         2026‑08‑22
@@ -46,7 +46,7 @@ Contents
   value having a context‐specific meaning.  However, there's a few
   general encodings that will be reused across different contexts, so
   it's good to have a small number of well known types that won't be
-  redfined based on the context.
+  redefined based on the context.
 
 
 2. Reservation
@@ -64,8 +64,11 @@ Contents
   this writing:
 
   0.  Invalid
-      A type of zero will never be used.  If it is encountered, the
-      implementation MUST stop processing the TLV data.
+      A producer MUST NOT emit a type of zero.  When a consumer
+      encounters one, the TLV sequence containing it is malformed.
+      The consumer MUST stop processing that sequence and MUST NOT
+      search for or resume processing at a later value.  The enclosing
+      standard defines the consequence for its object or transport.
 
   1.  Origin
       This type contains the 5D address as specified by TTS‑0004.
@@ -157,14 +160,14 @@ Contents
       most recently established Origin at a higher level if the
       SignedTLV does not contain one.
 
-      If there is no applicable Origin or SignedData, the
-      implementation SHOULD notify the appropriate entities of the
-      error.  If the Signature does not verify, the implementation
-      MUST NOT process or act upon any data from the SignedData field.
-      It MAY parse the SignedData only as required by the enclosing
-      protocol to identify request and response values and generate
-      error responses.  It SHOULD notify the appropriate entities
-      (Sysop, Origin, etc) of the error.
+      A value which does not satisfy this grammar is malformed.  The
+      enclosing standard defines its disposition.  If the Signature
+      does not verify, the implementation MUST NOT process or act upon
+      any data from the SignedData field.  It MAY parse the SignedData
+      only as required by the enclosing protocol to identify request
+      and response values and generate error responses.  The enclosing
+      protocol defines every response, connection, logging, or
+      notification consequence.
 
   5.  Timestamp
       The value is encoded in the same manner as the Type and Length
@@ -210,15 +213,17 @@ Contents
 A. References
 ─────────────
 
-  [TTS‑0002] "Type Length Value Encoding" TITH, 2026‑08‑16.
+  [TTS‑0002] "Type Length Value Encoding" TITH, 2026‑08‑22.
 
-  [TTS‑0004] "Node Addresses", TITH, 2026‑08‑21.
+  [TTS‑0004] "Node Addresses", TITH, 2026‑08‑22.
 
   [FTA‑1006.002] "Key words to indicate requirement levels" FTSC,
   1998‑01‑17.
 
-  [Libhydrogen] Version 1,
-  https://github.com/jedisct1/libhydrogen/wiki
+  [Libhydrogen] Version 1, "Public key signatures", Git repository
+  https://github.com/jedisct1/libhydrogen.wiki.git, file
+  "Public-key-signatures.md" at commit
+  705149f9c8db1f400775477adb6f9c2254103dca, 2024‑05‑06.
 
   [POSIX] "The Open Group Base Specifications Issue 8"
   https://pubs.opengroup.org/onlinepubs/9799919799/
@@ -247,5 +252,9 @@ B. History
 
    Rev.6, 2026‑08‑22: Made enclosing standards own non‐anonymous key
    selection and authenticated key‐continuity exceptions.
+
+   Rev.7, 2026‑08‑22: Defined the Type 0 failure boundary, delegated
+   SignedTLV error disposition to enclosing standards, and pinned the
+   current normative dependencies.
 
 **********************************************************************

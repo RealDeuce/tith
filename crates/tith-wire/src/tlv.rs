@@ -150,6 +150,7 @@ pub fn parse_sequence(mut bytes: &[u8]) -> Result<Vec<OwnedTlv>, FramingError> {
 pub struct TlvReader<R> {
 	inner: R,
 	remaining: u64,
+	invalid_type: bool,
 }
 
 impl<R: Read> TlvReader<R> {
@@ -158,6 +159,7 @@ impl<R: Read> TlvReader<R> {
 		Self {
 			inner,
 			remaining: 0,
+			invalid_type: false,
 		}
 	}
 
@@ -181,6 +183,9 @@ impl<R: Read> TlvReader<R> {
 	}
 
 	pub fn read_next(&mut self) -> Result<Option<TlvValue<'_, R>>, FramingError> {
+		if self.invalid_type {
+			return Err(FramingError::InvalidType);
+		}
 		if self.remaining != 0 {
 			return Err(FramingError::UnconsumedValue(self.remaining));
 		}
@@ -188,6 +193,7 @@ impl<R: Read> TlvReader<R> {
 			return Ok(None);
 		};
 		if type_code == 0 {
+			self.invalid_type = true;
 			return Err(FramingError::InvalidType);
 		}
 		let length = self
@@ -344,5 +350,31 @@ mod tests {
 				Err(FramingError::Integer(IntegerError::NonCanonical))
 			));
 		}
+	}
+
+	#[test]
+	fn type_zero_is_never_produced_and_terminates_its_sequence() {
+		assert!(matches!(
+			TlvHeader::new(0, 0),
+			Err(FramingError::InvalidType)
+		));
+		assert!(matches!(
+			OwnedTlv::new(0, Vec::new()),
+			Err(FramingError::InvalidType)
+		));
+
+		let first = OwnedTlv::new(1, Vec::new()).unwrap().encode();
+		let later = OwnedTlv::new(2, Vec::new()).unwrap().encode();
+		let bytes = [first.as_slice(), &[0, 0], later.as_slice()].concat();
+		assert!(matches!(
+			parse_sequence(&bytes),
+			Err(FramingError::InvalidType)
+		));
+
+		let mut reader = TlvReader::new(bytes.as_slice());
+		reader.read_next().unwrap().unwrap().skip().unwrap();
+		assert!(matches!(reader.read_next(), Err(FramingError::InvalidType)));
+		assert!(matches!(reader.read_next(), Err(FramingError::InvalidType)));
+		assert_eq!(reader.into_inner(), &[0, 2, 0][..]);
 	}
 }

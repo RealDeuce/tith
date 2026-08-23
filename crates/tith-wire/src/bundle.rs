@@ -1,99 +1,18 @@
-//! TTS-0003 signed containers and TTS-0005 bundles.
+//! TTS-0005 bundles built from the TTS-0003 common values.
 
-use std::fmt;
-use std::str::FromStr;
+use tith_crypto::{PublicKey, SecretKey, TlvHash, hash_tlv};
 
-use tith_crypto::{
-	CryptoError, PublicKey, SIGNATURE_BYTES, SecretKey, Signature, TlvHash, hash_tlv, sign_tlv,
-	verify_tlv,
+use crate::address::Address;
+pub use crate::common::{
+	KeyResolver, VerifiedSignedTlv, build_signed_tlv, unauthenticated_signed_data,
+	verify_signed_tlv,
 };
-
-use crate::address::{Address, AddressError};
+use crate::common::{address_value, concatenate, identity, public_key_value};
+pub use crate::error::BundleError;
 pub use crate::identity::Identity;
-use crate::integer::{IntegerError, decode_u64, encode_u64};
-use crate::tlv::{FramingError, OwnedTlv, parse_sequence};
+use crate::integer::{decode_u64, encode_u64};
+use crate::tlv::{OwnedTlv, parse_sequence};
 use crate::types;
-
-#[derive(Debug)]
-pub enum BundleError {
-	Framing(FramingError),
-	Address(AddressError),
-	Integer(IntegerError),
-	Crypto(CryptoError),
-	InvalidUtf8,
-	Duplicate(&'static str),
-	Missing(&'static str),
-	Unexpected(&'static str),
-	WrongLength(&'static str),
-	UnknownKey(Address),
-	InvalidSignature,
-	IncorrectHeaderHash,
-}
-
-impl fmt::Display for BundleError {
-	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-		match self {
-			Self::Framing(error) => write!(f, "bundle framing error: {error}"),
-			Self::Address(error) => write!(f, "invalid address: {error}"),
-			Self::Integer(error) => write!(f, "invalid integer value: {error}"),
-			Self::Crypto(error) => write!(f, "cryptographic error: {error}"),
-			Self::InvalidUtf8 => f.write_str("value is not valid UTF-8"),
-			Self::Duplicate(name) => write!(f, "duplicate {name}"),
-			Self::Missing(name) => write!(f, "missing required {name}"),
-			Self::Unexpected(name) => write!(f, "unexpected or misplaced {name}"),
-			Self::WrongLength(name) => write!(f, "{name} has the wrong length"),
-			Self::UnknownKey(address) => write!(f, "no public key for {address}"),
-			Self::InvalidSignature => f.write_str("signature verification failed"),
-			Self::IncorrectHeaderHash => f.write_str("payload has the wrong Header TLVHash"),
-		}
-	}
-}
-
-impl std::error::Error for BundleError {}
-
-impl From<FramingError> for BundleError {
-	fn from(value: FramingError) -> Self {
-		Self::Framing(value)
-	}
-}
-
-impl From<AddressError> for BundleError {
-	fn from(value: AddressError) -> Self {
-		Self::Address(value)
-	}
-}
-
-impl From<IntegerError> for BundleError {
-	fn from(value: IntegerError) -> Self {
-		Self::Integer(value)
-	}
-}
-
-impl From<CryptoError> for BundleError {
-	fn from(value: CryptoError) -> Self {
-		Self::Crypto(value)
-	}
-}
-
-pub trait KeyResolver {
-	fn public_key(&self, address: &Address) -> Option<PublicKey>;
-}
-
-impl<F> KeyResolver for F
-where
-	F: Fn(&Address) -> Option<PublicKey>,
-{
-	fn public_key(&self, address: &Address) -> Option<PublicKey> {
-		self(address)
-	}
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct VerifiedSignedTlv {
-	pub encoded: Vec<u8>,
-	pub identity: Identity,
-	pub data: Vec<OwnedTlv>,
-}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Bundle {
@@ -108,140 +27,6 @@ pub struct Bundle {
 	pub header: VerifiedSignedTlv,
 	pub payloads: Vec<VerifiedSignedTlv>,
 	pub unknown_top_level: Vec<OwnedTlv>,
-}
-
-fn address_value(value: &OwnedTlv) -> Result<Address, BundleError> {
-	let text = std::str::from_utf8(&value.value).map_err(|_| BundleError::InvalidUtf8)?;
-	Address::from_str(text).map_err(Into::into)
-}
-
-fn public_key_value(value: &OwnedTlv) -> Result<PublicKey, BundleError> {
-	PublicKey::try_from(value.value.as_slice()).map_err(|_| BundleError::WrongLength("PublicKey"))
-}
-
-fn signature_value(value: &OwnedTlv) -> Result<Signature, BundleError> {
-	let bytes: [u8; SIGNATURE_BYTES] = value
-		.value
-		.as_slice()
-		.try_into()
-		.map_err(|_| BundleError::WrongLength("Signature"))?;
-	Ok(Signature::from_bytes(bytes))
-}
-
-fn identity(
-	address_tlv: &OwnedTlv,
-	public_key_tlv: Option<&OwnedTlv>,
-	resolver: &impl KeyResolver,
-) -> Result<Identity, BundleError> {
-	let address = address_value(address_tlv)?;
-	let public_key = if address.is_anonymous() {
-		public_key_tlv
-			.ok_or(BundleError::Missing("PublicKey for anonymous address"))
-			.and_then(public_key_value)?
-	} else {
-		if public_key_tlv.is_some() {
-			return Err(BundleError::Unexpected(
-				"PublicKey for non-anonymous address",
-			));
-		}
-		resolver
-			.public_key(&address)
-			.ok_or_else(|| BundleError::UnknownKey(address.clone()))?
-	};
-	Ok(Identity {
-		address,
-		public_key,
-	})
-}
-
-fn signed_tlv_parts(
-	value: &OwnedTlv,
-) -> Result<(Option<OwnedTlv>, Option<OwnedTlv>, OwnedTlv, OwnedTlv), BundleError> {
-	if value.type_code != types::SIGNED_TLV {
-		return Err(BundleError::Unexpected("non-SignedTLV"));
-	}
-	let children = parse_sequence(&value.value)?;
-	let mut index = 0;
-	let origin = children
-		.first()
-		.filter(|child| child.type_code == types::ORIGIN)
-		.cloned();
-	let public_key = if let Some(origin) = origin.as_ref() {
-		index += 1;
-		let address = address_value(origin)?;
-		let next = children.get(index);
-		if address.is_anonymous() {
-			let key = next
-				.filter(|child| child.type_code == types::PUBLIC_KEY)
-				.ok_or(BundleError::Missing("PublicKey after anonymous Origin"))?
-				.clone();
-			index += 1;
-			Some(key)
-		} else {
-			if next.is_some_and(|child| child.type_code == types::PUBLIC_KEY) {
-				return Err(BundleError::Unexpected(
-					"PublicKey after non-anonymous Origin",
-				));
-			}
-			None
-		}
-	} else {
-		None
-	};
-	let mut signed_data = None;
-	let mut signature = None;
-	let mut stage = 0;
-	for child in children.into_iter().skip(index) {
-		match child.type_code {
-			types::SIGNED_DATA if stage == 0 && signed_data.is_none() => {
-				signed_data = Some(child);
-				stage = 1;
-			}
-			types::SIGNATURE if stage == 1 && signature.is_none() => {
-				signature = Some(child);
-				stage = 2;
-			}
-			type_code if types::is_defined(type_code) => {
-				return Err(BundleError::Unexpected("defined SignedTLV child"));
-			}
-			_ => {}
-		}
-	}
-	let signed_data = signed_data.ok_or(BundleError::Missing("SignedData"))?;
-	let signature = signature.ok_or(BundleError::Missing("Signature"))?;
-	Ok((origin, public_key, signed_data, signature))
-}
-
-pub fn verify_signed_tlv(
-	value: &OwnedTlv,
-	inherited: Option<&Identity>,
-	resolver: &impl KeyResolver,
-) -> Result<VerifiedSignedTlv, BundleError> {
-	let (origin_tlv, public_key_tlv, signed_data, signature_tlv) = signed_tlv_parts(value)?;
-	let identity = if let Some(origin_tlv) = origin_tlv.as_ref() {
-		identity(origin_tlv, public_key_tlv.as_ref(), resolver)?
-	} else {
-		if public_key_tlv.is_some() {
-			return Err(BundleError::Unexpected("PublicKey without Origin"));
-		}
-		inherited
-			.cloned()
-			.ok_or(BundleError::Missing("applicable Origin"))?
-	};
-	let signature = signature_value(&signature_tlv)?;
-	if !verify_tlv(&signed_data.value, &signature, &identity.public_key)? {
-		return Err(BundleError::InvalidSignature);
-	}
-	Ok(VerifiedSignedTlv {
-		encoded: value.encode(),
-		identity,
-		data: parse_sequence(&signed_data.value)?,
-	})
-}
-
-pub fn unauthenticated_signed_data(value: &OwnedTlv) -> Result<Vec<OwnedTlv>, BundleError> {
-	let (_, _, signed_data, _) = signed_tlv_parts(value)?;
-	parse_sequence(&signed_data.value).map_err(Into::into)
 }
 
 impl Bundle {
@@ -488,43 +273,6 @@ fn validate_header(
 		requested_destination_key,
 		decode_u64(&timestamp.value)?,
 	))
-}
-
-fn concatenate(values: &[OwnedTlv]) -> Vec<u8> {
-	let capacity = values.iter().map(OwnedTlv::encoded_len).sum();
-	let mut output = Vec::with_capacity(capacity);
-	for value in values {
-		value.write_to(&mut output).expect("Vec writes cannot fail");
-	}
-	output
-}
-
-pub fn build_signed_tlv(
-	data: &[OwnedTlv],
-	origin: Option<&Identity>,
-	secret: &SecretKey,
-) -> Result<OwnedTlv, BundleError> {
-	let data_bytes = concatenate(data);
-	let signature = sign_tlv(&data_bytes, secret)?;
-	let mut children = Vec::new();
-	if let Some(origin) = origin {
-		children.push(OwnedTlv::new(
-			types::ORIGIN,
-			origin.address.to_string().into_bytes(),
-		)?);
-		if origin.address.is_anonymous() {
-			children.push(OwnedTlv::new(
-				types::PUBLIC_KEY,
-				origin.public_key.as_bytes().to_vec(),
-			)?);
-		}
-	}
-	children.push(OwnedTlv::new(types::SIGNED_DATA, data_bytes)?);
-	children.push(OwnedTlv::new(
-		types::SIGNATURE,
-		signature.as_bytes().to_vec(),
-	)?);
-	OwnedTlv::new(types::SIGNED_TLV, concatenate(&children)).map_err(Into::into)
 }
 
 pub fn build_bundle(
@@ -791,41 +539,6 @@ mod tests {
 		assert!(matches!(
 			Bundle::parse(&encoded, &|_: &Address| None),
 			Err(BundleError::InvalidSignature)
-		));
-	}
-
-	#[test]
-	fn signed_tlv_carries_an_anonymous_origin_key() {
-		let keys = SigningKeyPair::from_seed(&[5; 32]).unwrap();
-		let origin = Identity {
-			address: Address::anonymous("p2p".into()).unwrap(),
-			public_key: keys.public,
-		};
-		let data = [OwnedTlv::new(200, b"extension".to_vec()).unwrap()];
-		let signed = build_signed_tlv(&data, Some(&origin), &keys.secret).unwrap();
-		let mut children = parse_sequence(&signed.value).unwrap();
-		children.insert(2, OwnedTlv::new(201, b"wrapper".to_vec()).unwrap());
-		let signed = OwnedTlv::new(types::SIGNED_TLV, concatenate(&children)).unwrap();
-		let verified = verify_signed_tlv(&signed, None, &|_: &Address| None).unwrap();
-		assert_eq!(verified.identity, origin);
-		assert_eq!(verified.data, data);
-	}
-
-	#[test]
-	fn unknown_value_cannot_separate_an_anonymous_origin_and_key() {
-		let keys = SigningKeyPair::from_seed(&[6; 32]).unwrap();
-		let origin = Address::anonymous("p2p".into()).unwrap();
-		let children = [
-			OwnedTlv::new(types::ORIGIN, origin.to_string().into_bytes()).unwrap(),
-			OwnedTlv::new(200, Vec::new()).unwrap(),
-			OwnedTlv::new(types::PUBLIC_KEY, keys.public.as_bytes().to_vec()).unwrap(),
-			OwnedTlv::new(types::SIGNED_DATA, Vec::new()).unwrap(),
-			OwnedTlv::new(types::SIGNATURE, vec![0; SIGNATURE_BYTES]).unwrap(),
-		];
-		let signed = OwnedTlv::new(types::SIGNED_TLV, concatenate(&children)).unwrap();
-		assert!(matches!(
-			verify_signed_tlv(&signed, None, &|_: &Address| None),
-			Err(BundleError::Missing("PublicKey after anonymous Origin"))
 		));
 	}
 
