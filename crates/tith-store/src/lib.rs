@@ -9,7 +9,7 @@ use std::sync::Arc;
 use redb::{Database, ReadableDatabase, ReadableTable, TableDefinition};
 use tith_crypto::{CryptoError, PublicKey, TlvHash, hash_inbound_item, random_bytes};
 pub use tith_wire::item::ItemAuthentication;
-use tith_wire::item::SignedItemIdentity;
+use tith_wire::item::{SignedItemIdentity, SignedItemKind};
 use tith_wire::{tlv::parse_sequence, types};
 
 mod outbound;
@@ -223,8 +223,12 @@ impl InboundStore {
 			return Err(StoreError::InvalidPayload);
 		}
 		if let Some(identity) = duplicate_identity
-			&& (identity.type_code != parsed[0].type_code
-				|| matches!(kind, ItemKind::FileRequest)
+			&& (Some(identity.kind)
+				!= match kind {
+					ItemKind::Message => Some(SignedItemKind::Message),
+					ItemKind::File => Some(SignedItemKind::File),
+					ItemKind::FileRequest => None,
+				} || matches!(kind, ItemKind::FileRequest)
 				|| !matches!(
 					value.authentication,
 					ItemAuthentication::OriginValid | ItemAuthentication::SignedOriginValid
@@ -609,7 +613,13 @@ pub(crate) fn random_identifier(prefix: char) -> Result<String, StoreError> {
 
 fn encode_duplicate_identity(value: &SignedItemIdentity) -> Vec<u8> {
 	let mut output = Vec::new();
-	put_u64(&mut output, value.type_code);
+	put_u64(
+		&mut output,
+		match value.kind {
+			SignedItemKind::Message => types::MESSAGE,
+			SignedItemKind::File => types::FILE,
+		},
+	);
 	put_string(&mut output, &value.signer.address.to_string());
 	output.extend_from_slice(value.signer.public_key.as_bytes());
 	output.extend_from_slice(value.signature.as_bytes());
@@ -1056,13 +1066,27 @@ mod tests {
 			.unwrap()
 			.encode();
 		let identity = SignedItemIdentity {
-			type_code: types::MESSAGE,
+			kind: SignedItemKind::Message,
 			signer: Identity {
 				address: "fidonet#1/2".parse().unwrap(),
 				public_key: PublicKey::from_bytes([9; 32]),
 			},
 			signature: Signature::from_bytes([10; 64]),
 		};
+		let encoded = encode_duplicate_identity(&identity);
+		let message_prefix = types::MESSAGE.to_be_bytes();
+		assert!(encoded.starts_with(&message_prefix));
+		let file_identity = SignedItemIdentity {
+			kind: SignedItemKind::File,
+			..identity.clone()
+		};
+		let file_encoded = encode_duplicate_identity(&file_identity);
+		let file_prefix = types::FILE.to_be_bytes();
+		assert!(file_encoded.starts_with(&file_prefix));
+		assert_eq!(
+			&encoded[message_prefix.len()..],
+			&file_encoded[file_prefix.len()..]
+		);
 		let inbound = || NewInbound {
 			application: "tosser",
 			local_identity: "fidonet#1/1",

@@ -1,11 +1,13 @@
-name: Qualify TTS-0003
+name: Qualify TSP-0016 for TTS-0009
 
 on:
   push:
     paths:
-      - "standards/TTS-0003.txt"
+      - "standards/TSP-0016.txt"
       - "standards/TTS-0002.txt"
+      - "standards/TTS-0003.txt"
       - "standards/TTS-0004.txt"
+      - "standards/TTS-0007.txt"
       - "crates/tith-crypto/src/public_key.rs"
       - "crates/tith-crypto/src/signature.rs"
       - "crates/tith-wire/src/address.rs"
@@ -16,11 +18,15 @@ on:
       - "crates/tith-wire/src/item.rs"
       - "crates/tith-wire/src/item_format.rs"
       - "crates/tith-wire/src/item_types.rs"
+      - "crates/tith-wire/src/signed_integer.rs"
       - "crates/tith-wire/src/tlv.rs"
       - "crates/tith-wire/src/type_code.rs"
       - "crates/tith-wire/src/types.rs"
+      - "crates/tith-store/src/lib.rs"
+      - "crates/tithd/src/accept.rs"
+      - "crates/tithd/src/submission.rs"
       - "qualification/check_source_line_coverage.py"
-      - ".github/workflows/qualify-tts-0003.yml"
+      - ".github/workflows/qualify-tts-0009.yml"
   workflow_dispatch:
 
 permissions:
@@ -45,26 +51,18 @@ jobs:
       - name: Exercise the complete reference implementation
         run: cargo test --workspace
 
-      - name: Exercise the TTS-0003 conformance surface
+      - name: Exercise the TSP-0016 conformance surface
         run: |
           cargo +nightly-2026-08-20 llvm-cov clean --workspace
-          cargo +nightly-2026-08-20 llvm-cov --branch \
-            --package tith-crypto --package tith-wire --lib \
-            --json --output-path tts-0003-coverage.json
+          cargo +nightly-2026-08-20 llvm-cov --branch --workspace --json --output-path tts-0016-coverage.json
 
       - name: Report source coverage
         run: cargo +nightly-2026-08-20 llvm-cov report --branch --text --show-missing-lines
 
       - name: Require complete conformance coverage
         run: |
-          sha256sum tts-0003-coverage.json
+          sha256sum tts-0016-coverage.json
           python3 qualification/check_source_line_coverage.py \
-            tts-0003-coverage.json \
-            crates/tith-crypto/src/public_key.rs \
-            crates/tith-crypto/src/signature.rs \
-            crates/tith-wire/src/address.rs \
-            crates/tith-wire/src/common.rs \
-            crates/tith-wire/src/error.rs \
-            crates/tith-wire/src/identity.rs \
-            crates/tith-wire/src/integer.rs \
-            crates/tith-wire/src/type_code.rs
+            tts-0016-coverage.json \
+            crates/tith-wire/src/item.rs \
+            crates/tith-wire/src/item_format.rs

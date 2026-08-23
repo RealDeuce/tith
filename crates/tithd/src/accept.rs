@@ -427,9 +427,13 @@ impl Acceptance<'_> {
 /// `RequestIdentifier` and Via timestamp and so is never byte-identical, while
 /// its identity is exactly what TTS-0005 section 7 says does not change.
 fn relay_identity(signed: &SignedItemIdentity) -> Result<SubmissionIdentity, Box<dyn Error>> {
+	let type_code = match signed.kind {
+		tith_wire::item::SignedItemKind::Message => tith_wire::types::MESSAGE,
+		tith_wire::item::SignedItemKind::File => tith_wire::types::FILE,
+	};
 	let idempotency_key = format!(
 		"{} {} {} {}",
-		signed.type_code,
+		type_code,
 		signed.signer.address,
 		STANDARD_NO_PAD.encode(signed.signer.public_key.as_bytes()),
 		STANDARD_NO_PAD.encode(signed.signature.as_bytes())

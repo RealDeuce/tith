@@ -7,6 +7,8 @@ on:
       - "crates/tith-store/src/lib.rs"
       - "crates/tith-store/src/outbound.rs"
       - "crates/tith-router/src/lib.rs"
+      - "crates/tith-wire/src/item.rs"
+      - "crates/tith-wire/src/item_format.rs"
       - "crates/tithd/src/accept.rs"
       - "crates/tithd/src/deliver.rs"
       - "crates/tithd/src/mail.rs"

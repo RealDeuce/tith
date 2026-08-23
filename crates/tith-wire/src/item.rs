@@ -10,6 +10,11 @@ use tith_crypto::{
 use crate::address::Address;
 use crate::bundle::{BundleError, Identity, KeyResolver, VerifiedSignedTlv};
 use crate::integer::{decode_i64, decode_u64, decode_u64_prefix};
+pub use crate::item_format::{
+	AreaData, AttachmentData, ItemModel, ItemModelKind, MessageData, SignedItemKind,
+	StandaloneFileData,
+};
+use crate::item_format::{filename_has_path_component, filename_is_portable};
 use crate::tlv::{OwnedTlv, parse_sequence};
 use crate::types;
 
@@ -43,7 +48,7 @@ pub enum ItemAuthentication {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SignedItemIdentity {
-	pub type_code: u64,
+	pub kind: SignedItemKind,
 	pub signer: Identity,
 	pub signature: Signature,
 }
@@ -105,13 +110,6 @@ impl RejectionReason {
 	}
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct AttachmentData {
-	pub filename: String,
-	pub timestamp: Option<u64>,
-	pub contents: Vec<u8>,
-}
-
 /// The FTS-0001.016 `AttributeWord` bit which marks attached files.
 ///
 /// TSP-0016 section 4 type 101 keeps this bit out of `LegacyAttributes`, so it
@@ -127,43 +125,6 @@ pub const LEGACY_ATTRIBUTE_FILE_ATTACHED: u64 = 1 << 4;
 /// legacy bookkeeping or transport controls rather than Message data.
 pub const LEGACY_ATTRIBUTES_SIGNED_MASK: u64 =
 	(1 << 0) | (1 << 1) | (1 << 12) | (1 << 13) | (1 << 14);
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct MessageData {
-	pub destination: Option<Identity>,
-	pub timestamp: u64,
-	pub to_user: String,
-	pub from_user: String,
-	pub subject: String,
-	pub text: String,
-	pub area: Option<String>,
-	pub attachments: Vec<AttachmentData>,
-	pub legacy_attributes: Option<u64>,
-	pub timestamp_offset: Option<i64>,
-	pub tear_line: Option<String>,
-	pub origin_line: Option<String>,
-	pub message_id: Option<String>,
-	pub reply_to: Option<(Address, String)>,
-	pub additional_kludge_lines: Vec<String>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct StandaloneFileData {
-	pub filename: String,
-	pub timestamp: Option<u64>,
-	pub contents: Vec<u8>,
-	/// The distribution area, or `None` for a peer-addressed File.
-	///
-	/// TSP-0016 section 3.2 marks Area, Via, and `SeenBy` `F`, "for a file
-	/// that is part of a distribution network". A File which is not one carries
-	/// none of the three, and the enclosing Bundle Destination addresses it.
-	pub area: Option<String>,
-	pub short_description: Option<String>,
-	pub long_description_lines: Vec<String>,
-	pub tear_line: Option<String>,
-	pub magic_word: Option<String>,
-	pub replaces: Option<String>,
-}
 
 pub fn build_originated_message(
 	data: &MessageData,
@@ -346,10 +307,8 @@ fn message_signed_children(
 		signed.push(area_value(area)?);
 	}
 	for attachment in &data.attachments {
-		let mut children = vec![OwnedTlv::new(
-			types::FILENAME,
-			attachment.filename.as_bytes().to_vec(),
-		)?];
+		let mut children = Vec::new();
+		push_filename(&mut children, attachment.filename.as_deref())?;
 		if let Some(timestamp) = attachment.timestamp {
 			children.push(OwnedTlv::new(
 				types::TIMESTAMP,
@@ -357,6 +316,14 @@ fn message_signed_children(
 			)?);
 		}
 		children.push(OwnedTlv::new(types::CONTENTS, attachment.contents.clone())?);
+		push_file_metadata(
+			&mut children,
+			attachment.short_description.as_deref(),
+			&attachment.long_description_lines,
+			attachment.tear_line.as_deref(),
+			attachment.magic_word.as_deref(),
+			attachment.replaces.as_deref(),
+		)?;
 		signed.push(OwnedTlv::new(types::FILE, concatenate(&children))?);
 	}
 	if let Some(value) = data.legacy_attributes {
@@ -384,6 +351,12 @@ fn message_signed_children(
 		let mut value = OwnedTlv::new(types::ADDRESS, address.to_string().into_bytes())?.encode();
 		value.extend_from_slice(identifier.as_bytes());
 		signed.push(OwnedTlv::new(types::REPLY_TO, value)?);
+	}
+	if let Some(value) = &data.original_character_set {
+		signed.push(OwnedTlv::new(
+			types::ORIGINAL_CHARACTER_SET,
+			value.as_bytes().to_vec(),
+		)?);
 	}
 	Ok(signed)
 }
@@ -426,6 +399,9 @@ fn finish_message(
 		signed.push(value);
 	}
 	for value in &data.additional_kludge_lines {
+		if value.contains('\u{0001}') {
+			return Err(BundleError::Unexpected("Control-A in AdditionalKludgeLine"));
+		}
 		signed.push(OwnedTlv::new(
 			types::ADDITIONAL_KLUDGE_LINE,
 			value.as_bytes().to_vec(),
@@ -447,7 +423,8 @@ pub fn build_originated_file(
 		.signer
 		.as_ref()
 		.ok_or(BundleError::Missing("File signing identity"))?;
-	let mut signed = vec![OwnedTlv::new(types::FILENAME, data.filename.into_bytes())?];
+	let mut signed = Vec::new();
+	push_filename(&mut signed, data.filename.as_deref())?;
 	if let Some(timestamp) = data.timestamp {
 		signed.push(OwnedTlv::new(
 			types::TIMESTAMP,
@@ -460,24 +437,14 @@ pub fn build_originated_file(
 		signed.push(area_value(area)?);
 	}
 	push_provenance(&mut signed, provenance)?;
-	if let Some(value) = data.short_description {
-		signed.push(OwnedTlv::new(types::SHORT_DESCRIPTION, value.into_bytes())?);
-	}
-	for value in data.long_description_lines {
-		signed.push(OwnedTlv::new(
-			types::LONG_DESCRIPTION_LINE,
-			value.into_bytes(),
-		)?);
-	}
-	for (type_code, value) in [
-		(types::TEAR_LINE, data.tear_line),
-		(types::MAGIC_WORD, data.magic_word),
-		(types::REPLACES, data.replaces),
-	] {
-		if let Some(value) = value {
-			signed.push(OwnedTlv::new(type_code, value.into_bytes())?);
-		}
-	}
+	push_file_metadata(
+		&mut signed,
+		data.short_description.as_deref(),
+		&data.long_description_lines,
+		data.tear_line.as_deref(),
+		data.magic_word.as_deref(),
+		data.replaces.as_deref(),
+	)?;
 	let signature = sign_tlv(&concatenate(&signed), secret)?;
 	signed.push(OwnedTlv::new(
 		types::SIGNATURE,
@@ -518,6 +485,7 @@ pub fn build_file_request(
 	newer_than: Option<u64>,
 	request_identifier: u64,
 ) -> Result<OwnedTlv, BundleError> {
+	validate_produced_filename(filename)?;
 	let mut children = vec![OwnedTlv::new(
 		types::FILENAME,
 		filename.as_bytes().to_vec(),
@@ -632,9 +600,76 @@ fn push_provenance(
 	push_identity(output, types::SIGNED_ORIGIN, signer)
 }
 
-fn area_value(name: &str) -> Result<OwnedTlv, BundleError> {
-	let child = OwnedTlv::new(types::AREA_NAME, name.as_bytes().to_vec())?;
-	OwnedTlv::new(types::AREA, child.encode()).map_err(Into::into)
+fn area_value(area: &AreaData) -> Result<OwnedTlv, BundleError> {
+	let mut children = vec![OwnedTlv::new(
+		types::AREA_NAME,
+		area.name.as_bytes().to_vec(),
+	)?];
+	if let Some(description) = &area.description {
+		children.push(OwnedTlv::new(
+			types::AREA_DESCRIPTION,
+			description.as_bytes().to_vec(),
+		)?);
+	}
+	OwnedTlv::new(types::AREA, concatenate(&children)).map_err(Into::into)
+}
+
+fn validate_produced_filename(value: &str) -> Result<(), BundleError> {
+	if filename_has_path_component(value) {
+		return Err(BundleError::Unexpected("Filename path component"));
+	}
+	if !filename_is_portable(value) {
+		return Err(BundleError::Unexpected(
+			"Filename code point discouraged for production",
+		));
+	}
+	Ok(())
+}
+
+fn push_filename(output: &mut Vec<OwnedTlv>, value: Option<&str>) -> Result<(), BundleError> {
+	if let Some(value) = value {
+		validate_produced_filename(value)?;
+		output.push(OwnedTlv::new(types::FILENAME, value.as_bytes().to_vec())?);
+	}
+	Ok(())
+}
+
+fn push_file_metadata(
+	output: &mut Vec<OwnedTlv>,
+	short_description: Option<&str>,
+	long_description_lines: &[String],
+	tear_line: Option<&str>,
+	magic_word: Option<&str>,
+	replaces: Option<&str>,
+) -> Result<(), BundleError> {
+	if let Some(value) = short_description {
+		if value.contains(['\r', '\n']) {
+			return Err(BundleError::Unexpected("newline in ShortDescription"));
+		}
+		output.push(OwnedTlv::new(
+			types::SHORT_DESCRIPTION,
+			value.as_bytes().to_vec(),
+		)?);
+	}
+	for value in long_description_lines {
+		if value.contains(['\r', '\n']) {
+			return Err(BundleError::Unexpected("newline in LongDescriptionLine"));
+		}
+		output.push(OwnedTlv::new(
+			types::LONG_DESCRIPTION_LINE,
+			value.as_bytes().to_vec(),
+		)?);
+	}
+	for (type_code, value) in [
+		(types::TEAR_LINE, tear_line),
+		(types::MAGIC_WORD, magic_word),
+		(types::REPLACES, replaces),
+	] {
+		if let Some(value) = value {
+			output.push(OwnedTlv::new(type_code, value.as_bytes().to_vec())?);
+		}
+	}
+	Ok(())
 }
 
 /// One `SeenBy` holding the whole collection, or nothing when it is empty.
@@ -887,15 +922,16 @@ fn encoded_prefix(values: &[OwnedTlv], end: usize) -> Vec<u8> {
 	encoded
 }
 
-fn validate_area(value: &OwnedTlv) -> Result<String, BundleError> {
+fn validate_area(value: &OwnedTlv) -> Result<AreaData, BundleError> {
 	let children = parse_sequence(&value.value)?;
 	let mut cursor = Cursor::new(&children);
 	let name = text(cursor.take(types::AREA_NAME, "AreaName")?.1)?.to_owned();
-	if let Some((_, description)) = cursor.optional(types::AREA_DESCRIPTION) {
-		text(description)?;
-	}
+	let description = cursor
+		.optional(types::AREA_DESCRIPTION)
+		.map(|(_, description)| text(description).map(str::to_owned))
+		.transpose()?;
 	cursor.finish()?;
-	Ok(name)
+	Ok(AreaData { name, description })
 }
 
 /// One decoded Via, whose parts a legacy converter needs separately.
@@ -1040,10 +1076,15 @@ fn validate_message(
 	if let Some((_, value)) = cursor.optional(types::TIMESTAMP_OFFSET) {
 		decode_i64(&value.value)?;
 	}
+	let mut echo_control = false;
 	for type_code in [types::TEAR_LINE, types::ORIGIN_LINE, types::MESSAGE_ID] {
 		if let Some((_, value)) = cursor.optional(type_code) {
 			text(value)?;
+			echo_control |= matches!(type_code, types::TEAR_LINE | types::ORIGIN_LINE);
 		}
+	}
+	if destination.is_some() && echo_control {
+		return Err(BundleError::Unexpected("a NetMail TearLine or OriginLine"));
 	}
 	if let Some((_, reply)) = cursor.optional(types::REPLY_TO) {
 		read_reply_to(reply)?;
@@ -1067,7 +1108,7 @@ fn validate_message(
 			)?;
 			let authentication = item_authentication(&provenance, authenticated);
 			let duplicate_identity = authenticated.then_some(SignedItemIdentity {
-				type_code: types::MESSAGE,
+				kind: SignedItemKind::Message,
 				signer: signer.clone(),
 				signature,
 			});
@@ -1102,7 +1143,9 @@ fn validate_message(
 		text(seen_by)?;
 	}
 	for (_, line) in cursor.repeated(types::ADDITIONAL_KLUDGE_LINE) {
-		text(line)?;
+		if text(line)?.contains('\u{0001}') {
+			return Err(BundleError::Unexpected("Control-A in AdditionalKludgeLine"));
+		}
 	}
 	cursor.finish()?;
 	Ok(ValidatedItem {
@@ -1119,7 +1162,7 @@ fn validate_message(
 		rejection: None,
 		provenance: Some(provenance),
 		destination,
-		area,
+		area: area.map(|value| value.name),
 		raw: value.clone(),
 	})
 }
@@ -1133,7 +1176,7 @@ fn validate_file(
 	let mut cursor = Cursor::new(&children);
 	if let Some((_, filename)) = cursor.optional(types::FILENAME) {
 		let filename = text(filename)?;
-		if filename.contains(['/', '\\']) {
+		if filename_has_path_component(filename) {
 			return Err(BundleError::Unexpected("Filename path component"));
 		}
 	}
@@ -1154,6 +1197,9 @@ fn validate_file(
 		.optional(types::AREA)
 		.map(|(_, value)| validate_area(value))
 		.transpose()?;
+	if !standalone && area.is_some() {
+		return Err(BundleError::Unexpected("attached File Area"));
+	}
 	let origin_value = cursor.optional(types::ORIGIN).map(|(_, value)| value);
 	if standalone && origin_value.is_none() {
 		return Err(BundleError::Missing("standalone File Origin"));
@@ -1250,7 +1296,7 @@ fn validate_file(
 		read_via(via)?;
 	}
 	for (_, seen_by) in seen_by {
-		text(seen_by)?;
+		seen_by_addresses(seen_by)?;
 	}
 	cursor.finish()?;
 	Ok(request_identifier.map(|request_identifier| ValidatedItem {
@@ -1258,7 +1304,7 @@ fn validate_file(
 		request_identifier,
 		duplicate_identity: signature.filter(|(_, authenticated)| *authenticated).map(
 			|(signature, _)| SignedItemIdentity {
-				type_code: types::FILE,
+				kind: SignedItemKind::File,
 				signer: provenance
 					.as_ref()
 					.expect("standalone file has Origin")
@@ -1275,7 +1321,7 @@ fn validate_file(
 		rejection: None,
 		provenance,
 		destination: None,
-		area,
+		area: area.map(|value| value.name),
 		raw: value.clone(),
 	}))
 }
@@ -1309,7 +1355,7 @@ fn validate_file_request(value: &OwnedTlv) -> Result<ValidatedItem, BundleError>
 	let children = parse_sequence(&value.value)?;
 	let mut cursor = Cursor::new(&children);
 	let filename = text(cursor.take(types::FILENAME, "Filename")?.1)?;
-	if filename.contains(['/', '\\']) {
+	if filename_has_path_component(filename) {
 		return Err(BundleError::Unexpected("Filename path component"));
 	}
 	if let Some((_, timestamp)) = cursor.optional(types::TIMESTAMP) {
@@ -1596,31 +1642,65 @@ pub struct ReadMessage {
 /// model without changing either its signed or unsigned serialization.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MessageModel {
-	children: Vec<OwnedTlv>,
+	item: ItemModel,
+}
+
+impl ItemModel {
+	/// Parses one TTS-0005-carried item while retaining every encoded child.
+	pub fn parse(value: &OwnedTlv, resolver: &impl KeyResolver) -> Result<Self, BundleError> {
+		let kind = match value.type_code {
+			types::MESSAGE => {
+				validate_message(value, resolver)?;
+				ItemModelKind::Message
+			}
+			types::FILE => {
+				validate_file(value, true, resolver)?;
+				ItemModelKind::StandaloneFile
+			}
+			types::FILE_REQUEST => {
+				validate_file_request(value)?;
+				ItemModelKind::FileRequest
+			}
+			_ => return Err(BundleError::Unexpected("ItemModel item kind")),
+		};
+		Ok(Self {
+			kind,
+			children: parse_sequence(&value.value)?,
+		})
+	}
+
+	/// Re-encodes the exact ordered model with the TTS-0005 outer Type.
+	#[must_use]
+	pub fn to_tlv(&self) -> OwnedTlv {
+		let type_code = match self.kind {
+			ItemModelKind::Message => types::MESSAGE,
+			ItemModelKind::StandaloneFile => types::FILE,
+			ItemModelKind::FileRequest => types::FILE_REQUEST,
+		};
+		OwnedTlv::new(type_code, self.encode_value())
+			.expect("already parsed item children remain representable")
+	}
 }
 
 impl MessageModel {
 	/// Parses and structurally validates a Message while retaining every child.
 	pub fn parse(value: &OwnedTlv, resolver: &impl KeyResolver) -> Result<Self, BundleError> {
-		validate_message(value, resolver)?;
-		Ok(Self {
-			children: parse_sequence(&value.value)?,
-		})
+		let item = ItemModel::parse(value, resolver)?;
+		if item.kind() != ItemModelKind::Message {
+			return Err(BundleError::Unexpected("MessageModel item kind"));
+		}
+		Ok(Self { item })
 	}
 
 	#[must_use]
 	pub fn children(&self) -> &[OwnedTlv] {
-		&self.children
+		self.item.children()
 	}
 
 	/// Re-encodes the exact ordered child model as one Message.
 	#[must_use]
 	pub fn to_tlv(&self) -> OwnedTlv {
-		OwnedTlv::new(
-			types::MESSAGE,
-			encoded_prefix(&self.children, self.children.len()),
-		)
-		.expect("already parsed Message children remain representable")
+		self.item.to_tlv()
 	}
 }
 
@@ -1710,14 +1790,10 @@ pub fn read_message(
 		.optional(types::REPLY_TO)
 		.map(|(_, value)| read_reply_to(value))
 		.transpose()?;
-	// OriginalCharacterSet is a signed child with no MessageData field. A
-	// converter which meets one cannot reproduce the signed region, so it is
-	// refused here rather than dropped silently.
-	if cursor.optional(types::ORIGINAL_CHARACTER_SET).is_some() {
-		return Err(BundleError::Unexpected(
-			"OriginalCharacterSet has no conversion",
-		));
-	}
+	let original_character_set = cursor
+		.optional(types::ORIGINAL_CHARACTER_SET)
+		.map(|(_, value)| text(value).map(str::to_owned))
+		.transpose()?;
 	let (signature, signed_region) = read_signature(&mut cursor, &children)?;
 	let request_identifier = decode_u64(
 		&cursor
@@ -1757,6 +1833,7 @@ pub fn read_message(
 			origin_line,
 			message_id,
 			reply_to,
+			original_character_set,
 			additional_kludge_lines,
 		},
 		signing: ItemSigning {
@@ -1781,13 +1858,10 @@ pub fn read_standalone_file(value: &OwnedTlv) -> Result<ReadFile, BundleError> {
 	}
 	let children = parse_sequence(&value.value)?;
 	let mut cursor = Cursor::new(&children);
-	let filename = text(
-		cursor
-			.optional(types::FILENAME)
-			.ok_or(BundleError::Missing("standalone File Filename"))?
-			.1,
-	)?
-	.to_owned();
+	let filename = cursor
+		.optional(types::FILENAME)
+		.map(|(_, value)| text(value).map(str::to_owned))
+		.transpose()?;
 	let timestamp = cursor
 		.optional(types::TIMESTAMP)
 		.map(|(_, value)| decode_u64(&value.value))
@@ -1940,7 +2014,10 @@ fn read_signature(
 fn read_attachment(value: &OwnedTlv) -> Result<AttachmentData, BundleError> {
 	let children = parse_sequence(&value.value)?;
 	let mut cursor = Cursor::new(&children);
-	let filename = text(cursor.take(types::FILENAME, "attached Filename")?.1)?.to_owned();
+	let filename = cursor
+		.optional(types::FILENAME)
+		.map(|(_, value)| text(value).map(str::to_owned))
+		.transpose()?;
 	let timestamp = cursor
 		.optional(types::TIMESTAMP)
 		.map(|(_, value)| decode_u64(&value.value))
@@ -1950,11 +2027,37 @@ fn read_attachment(value: &OwnedTlv) -> Result<AttachmentData, BundleError> {
 		.1
 		.value
 		.clone();
+	let short_description = cursor
+		.optional(types::SHORT_DESCRIPTION)
+		.map(|(_, value)| text(value).map(str::to_owned))
+		.transpose()?;
+	let mut long_description_lines = Vec::new();
+	for (_, value) in cursor.repeated(types::LONG_DESCRIPTION_LINE) {
+		long_description_lines.push(text(value)?.to_owned());
+	}
+	let mut optional = [types::TEAR_LINE, types::MAGIC_WORD, types::REPLACES]
+		.into_iter()
+		.map(|type_code| {
+			cursor
+				.optional(type_code)
+				.map(|(_, value)| text(value).map(str::to_owned))
+				.transpose()
+		})
+		.collect::<Result<Vec<_>, _>>()?
+		.into_iter();
+	let tear_line = optional.next().expect("three optional values");
+	let magic_word = optional.next().expect("three optional values");
+	let replaces = optional.next().expect("three optional values");
 	cursor.finish()?;
 	Ok(AttachmentData {
 		filename,
 		timestamp,
 		contents,
+		short_description,
+		long_description_lines,
+		tear_line,
+		magic_word,
+		replaces,
 	})
 }
 
@@ -2021,6 +2124,13 @@ mod tests {
 			child.write_to(&mut bytes).unwrap();
 		}
 		OwnedTlv::new(type_code, bytes).unwrap()
+	}
+
+	fn area(name: &str) -> AreaData {
+		AreaData {
+			name: name.to_owned(),
+			description: None,
+		}
 	}
 
 	#[test]
@@ -2250,6 +2360,7 @@ mod tests {
 				origin_line: None,
 				message_id: None,
 				reply_to: None,
+				original_character_set: None,
 				additional_kludge_lines: Vec::new(),
 			},
 			&provenance,
@@ -2302,6 +2413,7 @@ mod tests {
 				origin_line: None,
 				message_id: None,
 				reply_to: None,
+				original_character_set: None,
 				additional_kludge_lines: Vec::new(),
 			},
 			&ItemProvenance {
@@ -2363,7 +2475,7 @@ mod tests {
 				from_user: "Me".to_owned(),
 				subject: "Hello".to_owned(),
 				text: "Body\n".to_owned(),
-				area: Some("SYNCHRONET".to_owned()),
+				area: Some(area("SYNCHRONET")),
 				attachments: Vec::new(),
 				legacy_attributes: None,
 				timestamp_offset: None,
@@ -2371,6 +2483,7 @@ mod tests {
 				origin_line: None,
 				message_id: None,
 				reply_to: None,
+				original_character_set: None,
 				additional_kludge_lines: Vec::new(),
 			},
 			&provenance,
@@ -2413,10 +2526,10 @@ mod tests {
 		};
 		let file = build_originated_file(
 			StandaloneFileData {
-				filename: "test.zip".to_owned(),
+				filename: Some("test.zip".to_owned()),
 				timestamp: None,
 				contents: b"file".to_vec(),
-				area: Some("FILES".to_owned()),
+				area: Some(area("FILES")),
 				short_description: None,
 				long_description_lines: Vec::new(),
 				tear_line: None,
@@ -2466,14 +2579,24 @@ mod tests {
 			area: None,
 			attachments: vec![
 				AttachmentData {
-					filename: "work.zip".to_owned(),
+					filename: Some("work.zip".to_owned()),
 					timestamp: Some(1_755_400_000),
 					contents: b"payload".to_vec(),
+					short_description: Some("First attachment".to_owned()),
+					long_description_lines: vec!["Long description".to_owned()],
+					tear_line: Some("Created by test".to_owned()),
+					magic_word: Some("WORK".to_owned()),
+					replaces: Some("old*.zip".to_owned()),
 				},
 				AttachmentData {
-					filename: "other.zip".to_owned(),
+					filename: None,
 					timestamp: None,
 					contents: b"second".to_vec(),
+					short_description: None,
+					long_description_lines: Vec::new(),
+					tear_line: None,
+					magic_word: None,
+					replaces: None,
 				},
 			],
 			// Bit 4 is not representable here and TearLine and OriginLine are
@@ -2485,6 +2608,7 @@ mod tests {
 			origin_line: None,
 			message_id: Some("1:104/36 1a2b3c4d".to_owned()),
 			reply_to: Some(("fidonet#1:104/1".parse().unwrap(), "deadbeef".to_owned())),
+			original_character_set: Some("CP437 2".to_owned()),
 			additional_kludge_lines: vec!["FLAGS KFS".to_owned()],
 		};
 		let message = build_originated_message(
@@ -2529,8 +2653,12 @@ mod tests {
 		// The two EchoMail-only values invert the same way.
 		let echo = MessageData {
 			destination: None,
-			area: Some("SYNCHRONET".to_owned()),
+			area: Some(AreaData {
+				name: "SYNCHRONET".to_owned(),
+				description: Some("A discussion area".to_owned()),
+			}),
 			reply_to: None,
+			original_character_set: None,
 			tear_line: Some("TITH 0.1".to_owned()),
 			origin_line: Some("A board (1:104/36)".to_owned()),
 			..data
@@ -2580,6 +2708,7 @@ mod tests {
 				origin_line: None,
 				message_id: None,
 				reply_to: None,
+				original_character_set: None,
 				additional_kludge_lines: Vec::new(),
 			},
 			&provenance,
@@ -2657,6 +2786,7 @@ mod tests {
 				origin_line: None,
 				message_id: None,
 				reply_to: None,
+				original_character_set: None,
 				additional_kludge_lines: Vec::new(),
 			},
 			&ItemProvenance {
@@ -2698,10 +2828,10 @@ mod tests {
 		let signer_keys = SigningKeyPair::from_seed(&[84; 32]).unwrap();
 		let origin: Address = "fidonet#1:104/36".parse().unwrap();
 		let data = StandaloneFileData {
-			filename: "goodies.zip".to_owned(),
+			filename: Some("goodies.zip".to_owned()),
 			timestamp: Some(1_755_400_000),
 			contents: b"payload".to_vec(),
-			area: Some("SYNCDATA".to_owned()),
+			area: Some(area("SYNCDATA")),
 			short_description: Some("A file".to_owned()),
 			long_description_lines: vec!["First".to_owned(), "Second".to_owned()],
 			tear_line: Some("TITH 0.1".to_owned()),
@@ -2741,7 +2871,7 @@ mod tests {
 		let signer_keys = SigningKeyPair::from_seed(&[86; 32]).unwrap();
 		let origin: Address = "fidonet#1:104/36".parse().unwrap();
 		let data = StandaloneFileData {
-			filename: "0068002400.su0".to_owned(),
+			filename: None,
 			timestamp: Some(1_755_400_000),
 			contents: b"arcmail".to_vec(),
 			area: None,
@@ -2789,6 +2919,56 @@ mod tests {
 		assert_eq!(read.data, data);
 		assert!(read.vias.is_empty());
 		assert!(read.seen_by.is_empty());
+		let model = ItemModel::parse(&file, &resolver).unwrap();
+		assert_eq!(model.kind(), ItemModelKind::StandaloneFile);
+		assert_eq!(model.to_tlv().encode(), file.encode());
+		let mut extended_children = parse_sequence(&file.value).unwrap();
+		let signature = extended_children
+			.iter()
+			.position(|child| child.type_code == types::SIGNATURE)
+			.unwrap();
+		extended_children.insert(
+			signature,
+			OwnedTlv::new(200, b"signed extension".to_vec()).unwrap(),
+		);
+		extended_children.push(OwnedTlv::new(201, b"suffix extension".to_vec()).unwrap());
+		let extended = OwnedTlv::new(types::FILE, concatenate(&extended_children)).unwrap();
+		assert_eq!(
+			ItemModel::parse(&extended, &resolver)
+				.unwrap()
+				.to_tlv()
+				.encode(),
+			extended.encode()
+		);
+		for invalid in [
+			StandaloneFileData {
+				short_description: Some("two\nlines".to_owned()),
+				..data.clone()
+			},
+			StandaloneFileData {
+				long_description_lines: vec!["two\rlines".to_owned()],
+				..data.clone()
+			},
+		] {
+			assert!(
+				build_originated_file(
+					invalid,
+					&ItemProvenance {
+						origin: origin.clone(),
+						signer: Some(Identity {
+							address: origin.clone(),
+							public_key: signer_keys.public,
+						}),
+					},
+					&signer_keys.secret,
+					5,
+					1_755_500_001,
+					"tith 0.1",
+					&[],
+				)
+				.is_err()
+			);
+		}
 	}
 
 	#[test]
@@ -2812,6 +2992,9 @@ mod tests {
 			assert_eq!(read.filename, "nodediff.zip");
 			assert_eq!(read.timestamp, newer_than);
 			assert_eq!(read.request_identifier, 7);
+			let model = ItemModel::parse(&request, &|_: &Address| None).unwrap();
+			assert_eq!(model.kind(), ItemModelKind::FileRequest);
+			assert_eq!(model.to_tlv().encode(), request.encode());
 		}
 		// Renumbering for a new exchange works the same way it does for an item.
 		let renumbered =
@@ -2820,12 +3003,57 @@ mod tests {
 			read_file_request(&renumbered).unwrap().request_identifier,
 			3
 		);
+		let mut children = parse_sequence(&renumbered.value).unwrap();
+		children.insert(
+			0,
+			OwnedTlv::new(200, b"leading extension".to_vec()).unwrap(),
+		);
+		children.push(OwnedTlv::new(201, b"trailing extension".to_vec()).unwrap());
+		let extended = OwnedTlv::new(types::FILE_REQUEST, concatenate(&children)).unwrap();
+		assert_eq!(
+			ItemModel::parse(&extended, &|_: &Address| None)
+				.unwrap()
+				.to_tlv()
+				.encode(),
+			extended.encode()
+		);
 	}
 
 	#[test]
-	fn reading_refuses_an_item_it_cannot_represent() {
-		// OriginalCharacterSet is signed but has no MessageData field, so a
-		// converter must refuse rather than drop it and claim a round trip.
+	fn filename_production_avoids_the_exact_list_but_consumption_accepts_it() {
+		assert!(matches!(
+			build_file_request("bad:name", None, 1),
+			Err(BundleError::Unexpected(
+				"Filename code point discouraged for production"
+			))
+		));
+
+		let discouraged = container(
+			types::FILE_REQUEST,
+			&[
+				OwnedTlv::new(types::FILENAME, b"bad:name".to_vec()).unwrap(),
+				OwnedTlv::new(types::REQUEST_IDENTIFIER, crate::integer::encode_u64(1)).unwrap(),
+			],
+		);
+		assert!(validate_file_request(&discouraged).is_ok());
+
+		let path = container(
+			types::FILE_REQUEST,
+			&[
+				OwnedTlv::new(types::FILENAME, b"dir/file".to_vec()).unwrap(),
+				OwnedTlv::new(types::REQUEST_IDENTIFIER, crate::integer::encode_u64(1)).unwrap(),
+			],
+		);
+		assert!(matches!(
+			validate_file_request(&path),
+			Err(BundleError::Unexpected("Filename path component"))
+		));
+	}
+
+	#[test]
+	fn reading_preserves_original_character_set_and_refuses_other_item_kinds() {
+		// OriginalCharacterSet is an optional signed field and the semantic view
+		// must retain it rather than silently lose it.
 		let signer_keys = SigningKeyPair::from_seed(&[85; 32]).unwrap();
 		let origin: Address = "fidonet#1:104/36".parse().unwrap();
 		let message = build_originated_message(
@@ -2836,7 +3064,7 @@ mod tests {
 				from_user: "Me".to_owned(),
 				subject: "Hi".to_owned(),
 				text: "Text\n".to_owned(),
-				area: Some("SYNCHRONET".to_owned()),
+				area: Some(area("SYNCHRONET")),
 				attachments: Vec::new(),
 				legacy_attributes: None,
 				timestamp_offset: None,
@@ -2844,6 +3072,7 @@ mod tests {
 				origin_line: None,
 				message_id: None,
 				reply_to: None,
+				original_character_set: None,
 				additional_kludge_lines: Vec::new(),
 			},
 			&ItemProvenance {
@@ -2870,13 +3099,17 @@ mod tests {
 			OwnedTlv::new(types::ORIGINAL_CHARACTER_SET, b"CP437 2".to_vec()).unwrap(),
 		);
 		let altered = OwnedTlv::new(types::MESSAGE, concatenate(&children)).unwrap();
-		assert!(matches!(
-			read_message(&altered, &|_: &Address| None),
-			Err(BundleError::Unexpected(_))
-		));
+		assert_eq!(
+			read_message(&altered, &|_: &Address| None)
+				.unwrap()
+				.data
+				.original_character_set
+				.as_deref(),
+			Some("CP437 2")
+		);
 
-		// A File is not a Message and vice versa.
-		assert!(read_message(&altered.clone(), &|_: &Address| None).is_err());
+		// The File and FileRequest semantic readers reject a Message.
+		assert!(read_standalone_file(&altered).is_err());
 		assert!(read_standalone_file(&message).is_err());
 		assert!(read_file_request(&message).is_err());
 	}
@@ -2903,7 +3136,7 @@ mod tests {
 				from_user: "Me".to_owned(),
 				subject: "Hi".to_owned(),
 				text: "Body\n".to_owned(),
-				area: Some("SYNCHRONET".to_owned()),
+				area: Some(area("SYNCHRONET")),
 				attachments: Vec::new(),
 				legacy_attributes: None,
 				timestamp_offset: None,
@@ -2911,6 +3144,7 @@ mod tests {
 				origin_line: None,
 				message_id: None,
 				reply_to: None,
+				original_character_set: None,
 				additional_kludge_lines: Vec::new(),
 			},
 			&provenance,
@@ -3009,6 +3243,13 @@ mod tests {
 				Err(BundleError::Unexpected("attached File provenance"))
 			));
 		}
+		let mut children = base.to_vec();
+		children.push(area_value(&area("FILES")).unwrap());
+		let file = OwnedTlv::new(types::FILE, concatenate(&children)).unwrap();
+		assert!(matches!(
+			validate_file(&file, false, &|_: &Address| None),
+			Err(BundleError::Unexpected("attached File Area"))
+		));
 	}
 
 	#[test]
@@ -3062,6 +3303,7 @@ mod tests {
 			origin_line: None,
 			message_id: None,
 			reply_to: None,
+			original_character_set: None,
 			additional_kludge_lines: Vec::new(),
 		};
 		let build = |data: MessageData| {
@@ -3080,7 +3322,7 @@ mod tests {
 			.is_ok()
 		);
 
-		let cases: [(MessageData, &str); 7] = [
+		let cases: [(MessageData, &str); 8] = [
 			(
 				MessageData {
 					legacy_attributes: Some(0),
@@ -3130,6 +3372,13 @@ mod tests {
 				},
 				"a NetMail TearLine or OriginLine",
 			),
+			(
+				MessageData {
+					additional_kludge_lines: vec!["BAD\u{0001}VALUE".to_owned()],
+					..netmail()
+				},
+				"Control-A in AdditionalKludgeLine",
+			),
 		];
 		for (data, expected) in cases {
 			match build(data) {
@@ -3145,11 +3394,36 @@ mod tests {
 			Err(BundleError::Unexpected("a NetMail TearLine or OriginLine"))
 		));
 
+		let valid = build(netmail()).unwrap();
+		let mut children = parse_sequence(&valid.value).unwrap();
+		let signature = children
+			.iter()
+			.position(|child| child.type_code == types::SIGNATURE)
+			.unwrap();
+		children.insert(
+			signature,
+			OwnedTlv::new(types::TEAR_LINE, b"legacy display".to_vec()).unwrap(),
+		);
+		let invalid = OwnedTlv::new(types::MESSAGE, concatenate(&children)).unwrap();
+		assert!(matches!(
+			validate_message(&invalid, &|_: &Address| Some(keys.public)),
+			Err(BundleError::Unexpected("a NetMail TearLine or OriginLine"))
+		));
+
+		let mut children = parse_sequence(&valid.value).unwrap();
+		children
+			.push(OwnedTlv::new(types::ADDITIONAL_KLUDGE_LINE, b"BAD\x01VALUE".to_vec()).unwrap());
+		let invalid = OwnedTlv::new(types::MESSAGE, concatenate(&children)).unwrap();
+		assert!(matches!(
+			validate_message(&invalid, &|_: &Address| Some(keys.public)),
+			Err(BundleError::Unexpected("Control-A in AdditionalKludgeLine"))
+		));
+
 		// EchoMail keeps both: they are its own control information.
 		assert!(
 			build(MessageData {
 				destination: None,
-				area: Some("SYNCHRONET".to_owned()),
+				area: Some(area("SYNCHRONET")),
 				tear_line: Some("tosser".to_owned()),
 				origin_line: Some("A board (1:1/100)".to_owned()),
 				..netmail()

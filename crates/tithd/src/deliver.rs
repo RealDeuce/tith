@@ -1025,6 +1025,7 @@ mod tests {
 				origin_line: None,
 				message_id: None,
 				reply_to: None,
+				original_character_set: None,
 				additional_kludge_lines: Vec::new(),
 			},
 			&ItemProvenance {

@@ -312,7 +312,11 @@ fn plan_message(
 	let mut objects = Vec::new();
 	for attachment in &read.data.attachments {
 		let identity = ledger.next_identity("object")?;
-		let name = transfer_name(&attachment.filename, truncate(identity));
+		let filename = attachment
+			.filename
+			.as_deref()
+			.expect("legacy conversion required every attachment Filename");
+		let name = transfer_name(filename, truncate(identity));
 		objects.push(Publication {
 			name,
 			contents: attachment.contents.clone(),
@@ -396,9 +400,19 @@ fn plan_file(
 	let read =
 		read_standalone_file(item).map_err(|error| InboundError::Payload(error.to_string()))?;
 	let action = configuration.policy.action(claim.authentication);
+	let Some(filename) = read.data.filename.as_deref() else {
+		let refusal = Refusal::Unconvertible(
+			"a standalone File without Filename has no legacy publication name".to_owned(),
+		);
+		let disposition = configuration.refusals.disposition(&refusal);
+		return Ok(Some(Outcome::Refuse {
+			refusal,
+			disposition,
+		}));
+	};
 
 	let identity = ledger.next_identity("object")?;
-	let name = transfer_name(&read.data.filename, truncate(identity));
+	let name = transfer_name(filename, truncate(identity));
 	let notice = match action {
 		Action::DeliverWarn => Some(administrative_notice(
 			claim,
@@ -505,7 +519,7 @@ fn plan_file(
 	let distribution = if forwardable {
 		Some(
 			context
-				.area_tag(read.data.area.as_deref().expect("area checked above"))
+				.area_tag(&read.data.area.as_ref().expect("area checked above").name)
 				.map_err(|error| InboundError::Payload(error.to_string()))?
 				.to_owned(),
 		)
@@ -811,7 +825,7 @@ mod tests {
 	use tith_wire::Address;
 	use tith_wire::bundle::Identity;
 	use tith_wire::item::{
-		ItemProvenance, MessageData, StandaloneFileData, build_originated_file,
+		AreaData, ItemProvenance, MessageData, StandaloneFileData, build_originated_file,
 		build_originated_message,
 	};
 
@@ -881,6 +895,7 @@ End
 				origin_line: None,
 				message_id: Some("fidonet#1:104/1 1a2b3c4d".to_owned()),
 				reply_to: None,
+				original_character_set: None,
 				additional_kludge_lines: Vec::new(),
 			},
 			&ItemProvenance {
@@ -911,7 +926,10 @@ End
 				from_user: "Sender".to_owned(),
 				subject: "Hello".to_owned(),
 				text: "Body\n".to_owned(),
-				area: Some("SYNCHRONET".to_owned()),
+				area: Some(AreaData {
+					name: "SYNCHRONET".to_owned(),
+					description: None,
+				}),
 				attachments: Vec::new(),
 				legacy_attributes: None,
 				timestamp_offset: None,
@@ -919,6 +937,7 @@ End
 				origin_line: Some("A board (1:104/1)".to_owned()),
 				message_id: Some("fidonet#1:104/1 1a2b3c4d".to_owned()),
 				reply_to: None,
+				original_character_set: None,
 				additional_kludge_lines: Vec::new(),
 			},
 			&ItemProvenance {
@@ -943,10 +962,13 @@ End
 		let origin: Address = "fidonet#1:104/1".parse().unwrap();
 		build_originated_file(
 			StandaloneFileData {
-				filename: "work.zip".to_owned(),
+				filename: Some("work.zip".to_owned()),
 				timestamp: Some(1_755_400_000),
 				contents: b"file payload".to_vec(),
-				area: Some("SYNCHRONET".to_owned()),
+				area: Some(AreaData {
+					name: "SYNCHRONET".to_owned(),
+					description: None,
+				}),
 				short_description: Some("A file".to_owned()),
 				long_description_lines: Vec::new(),
 				tear_line: None,

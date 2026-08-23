@@ -1,5 +1,12 @@
 //! Type assignments from TTS-0003, TTS-0005, and TSP-0016.
 
+pub use crate::item_types::{
+	ADDITIONAL_KLUDGE_LINE, AREA, AREA_DESCRIPTION, AREA_NAME, CONTENTS, FILENAME, FROM_USER_NAME,
+	LEGACY_ATTRIBUTES, LONG_DESCRIPTION_LINE, MAGIC_WORD, MESSAGE_ID, MESSAGE_TEXT, ORIGIN_LINE,
+	ORIGINAL_CHARACTER_SET, REPLACES, REPLY_TO, REQUEST_IDENTIFIER, SEEN_BY, SHORT_DESCRIPTION,
+	SUBJECT, TEAR_LINE, TIMESTAMP_OFFSET, TO_USER_NAME, VIA,
+};
+
 pub const ORIGIN: u64 = 1;
 pub const SIGNATURE: u64 = 2;
 pub const SIGNED_DATA: u64 = 3;
@@ -20,31 +27,7 @@ pub const POLL_FILES: u64 = 70;
 pub const POLL_FILE_REQUESTS: u64 = 71;
 pub const PUBLIC_KEY_REQUEST: u64 = 72;
 
-pub const FILENAME: u64 = 96;
-pub const CONTENTS: u64 = 97;
-pub const REQUEST_IDENTIFIER: u64 = 98;
 pub const TLV_HASH: u64 = 99;
-pub const LEGACY_ATTRIBUTES: u64 = 101;
-pub const TIMESTAMP_OFFSET: u64 = 102;
-pub const TO_USER_NAME: u64 = 103;
-pub const FROM_USER_NAME: u64 = 104;
-pub const SUBJECT: u64 = 105;
-pub const MESSAGE_TEXT: u64 = 106;
-pub const AREA: u64 = 107;
-pub const AREA_NAME: u64 = 108;
-pub const AREA_DESCRIPTION: u64 = 109;
-pub const TEAR_LINE: u64 = 110;
-pub const ORIGIN_LINE: u64 = 111;
-pub const SEEN_BY: u64 = 112;
-pub const VIA: u64 = 113;
-pub const MESSAGE_ID: u64 = 114;
-pub const REPLY_TO: u64 = 115;
-pub const ORIGINAL_CHARACTER_SET: u64 = 116;
-pub const ADDITIONAL_KLUDGE_LINE: u64 = 117;
-pub const SHORT_DESCRIPTION: u64 = 118;
-pub const LONG_DESCRIPTION_LINE: u64 = 119;
-pub const MAGIC_WORD: u64 = 120;
-pub const REPLACES: u64 = 121;
 
 #[must_use]
 pub const fn is_defined(type_code: u64) -> bool {

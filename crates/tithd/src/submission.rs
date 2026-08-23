@@ -28,8 +28,8 @@ use tith_store::{
 use tith_wire::address::Address;
 use tith_wire::bundle::{Identity, KeyResolver};
 use tith_wire::item::{
-	AttachmentData, ItemProvenance, MessageData, MessageSuffix, StandaloneFileData, ViaData,
-	build_file_request, build_originated_file, build_originated_message_for_delivery,
+	AreaData, AttachmentData, ItemProvenance, MessageData, MessageSuffix, StandaloneFileData,
+	ViaData, build_file_request, build_originated_file, build_originated_message_for_delivery,
 	build_retained_message, forward_item, validate_item,
 };
 
@@ -335,9 +335,14 @@ impl SubmissionEngine {
 			}
 			let record = ingested.record(SourceKind::Attachment, index + 1);
 			attachments.push(AttachmentData {
-				filename: ingested.filename.clone(),
+				filename: Some(ingested.filename.clone()),
 				timestamp: ingested.timestamp,
 				contents: ingested.contents,
+				short_description: None,
+				long_description_lines: Vec::new(),
+				tear_line: None,
+				magic_word: None,
+				replaces: None,
 			});
 			sources.push(record);
 		}
@@ -458,8 +463,10 @@ impl SubmissionEngine {
 			} else {
 				message_text(&message.message_text)
 			},
-			area: (message.kind == MessageKind::EchoMail)
-				.then(|| message.destination_or_area.clone()),
+			area: (message.kind == MessageKind::EchoMail).then(|| AreaData {
+				name: message.destination_or_area.clone(),
+				description: None,
+			}),
 			attachments,
 			legacy_attributes: message.legacy_attributes,
 			timestamp_offset: message.timestamp_offset,
@@ -467,6 +474,7 @@ impl SubmissionEngine {
 			origin_line: message.origin_line.clone(),
 			message_id: message.message_id.clone(),
 			reply_to,
+			original_character_set: None,
 			additional_kludge_lines: message.additional_kludge_lines.clone(),
 		};
 		if data.additional_kludge_lines.iter().any(|line| {
@@ -555,7 +563,10 @@ impl SubmissionEngine {
 		let area = match &file.target {
 			FileTarget::Area(area) => {
 				validate_area_name(area)?;
-				Some(area.clone())
+				Some(AreaData {
+					name: area.clone(),
+					description: None,
+				})
 			}
 			FileTarget::Peer(_) => None,
 		};
@@ -582,7 +593,7 @@ impl SubmissionEngine {
 		};
 		let item = build_originated_file(
 			StandaloneFileData {
-				filename: ingested.filename.clone(),
+				filename: Some(ingested.filename.clone()),
 				timestamp: ingested.timestamp,
 				contents: ingested.contents,
 				area,
@@ -1784,6 +1795,7 @@ mod tests {
 				origin_line: None,
 				message_id: Some("fidonet#1:104/99 12345678".to_owned()),
 				reply_to: None,
+				original_character_set: None,
 				additional_kludge_lines: Vec::new(),
 			},
 			&ItemProvenance {
@@ -1914,7 +1926,10 @@ mod tests {
 				from_user: "Author".to_owned(),
 				subject: "Hello".to_owned(),
 				text: "Body\n".to_owned(),
-				area: Some("SYNCHRONET".to_owned()),
+				area: Some(AreaData {
+					name: "SYNCHRONET".to_owned(),
+					description: None,
+				}),
 				attachments: Vec::new(),
 				legacy_attributes: None,
 				timestamp_offset: None,
@@ -1922,6 +1937,7 @@ mod tests {
 				origin_line: None,
 				message_id: None,
 				reply_to: None,
+				original_character_set: None,
 				additional_kludge_lines: Vec::new(),
 			},
 			&ItemProvenance {

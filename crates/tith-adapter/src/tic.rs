@@ -109,11 +109,11 @@ pub fn to_tic(
 	let area = file
 		.data
 		.area
-		.as_deref()
+		.as_ref()
 		.ok_or(ConvertError::Unrepresentable(
 			"a TIC for a File with no Area",
 		))?;
-	push("Area", context.area_tag(area)?)?;
+	push("Area", context.area_tag(&area.name)?)?;
 	push(
 		"Origin",
 		&address::five_dimensional(&context.legacy_address(&file.signing.origin)?)?,
@@ -131,8 +131,15 @@ pub fn to_tic(
 		));
 	}
 	push("File", &options.transfer_name)?;
-	if file.data.filename != options.transfer_name {
-		push("Lfile", &file.data.filename)?;
+	let filename = file
+		.data
+		.filename
+		.as_deref()
+		.ok_or(ConvertError::Unrepresentable(
+			"a TIC for a File without Filename",
+		))?;
+	if filename != options.transfer_name {
+		push("Lfile", filename)?;
 	}
 	push("Size", &file.data.contents.len().to_string())?;
 	if let Some(timestamp) = file.data.timestamp {
@@ -197,7 +204,7 @@ mod tests {
 	use tith_wire::Address;
 	use tith_wire::bundle::Identity;
 	use tith_wire::item::{
-		ItemProvenance, StandaloneFileData, build_originated_file, read_standalone_file,
+		AreaData, ItemProvenance, StandaloneFileData, build_originated_file, read_standalone_file,
 	};
 
 	fn context() -> Context {
@@ -217,10 +224,13 @@ mod tests {
 		let origin: Address = "fidonet#1:104/36".parse().unwrap();
 		let item = build_originated_file(
 			StandaloneFileData {
-				filename: filename.to_owned(),
+				filename: Some(filename.to_owned()),
 				timestamp: Some(1_755_400_000),
 				contents: b"payload".to_vec(),
-				area: Some("SYNCDATA".to_owned()),
+				area: Some(AreaData {
+					name: "SYNCDATA".to_owned(),
+					description: None,
+				}),
 				short_description: Some("A file".to_owned()),
 				long_description_lines: vec!["First".to_owned(), "Second".to_owned()],
 				tear_line: Some("TITH 0.1".to_owned()),
@@ -289,12 +299,12 @@ mod tests {
 
 	#[test]
 	fn an_unsafe_filename_is_replaced_and_recorded_as_lfile() {
-		let name = transfer_name("../etc/passwd and more.tar.gz", 0x0068_0024);
+		let name = transfer_name("longfilename.tar.gz", 0x0068_0024);
 		assert_eq!(name, "00680024.gz");
 		assert!(is_safe_eight_three(&name));
 
 		let tic = to_tic(
-			&file("../etc/passwd and more.tar.gz"),
+			&file("longfilename.tar.gz"),
 			&context(),
 			&TicOptions {
 				transfer_name: name.clone(),
@@ -303,7 +313,7 @@ mod tests {
 		)
 		.unwrap();
 		assert!(tic.contains(&format!("File {name}\r\n")));
-		assert!(tic.contains("Lfile ../etc/passwd and more.tar.gz\r\n"));
+		assert!(tic.contains("Lfile longfilename.tar.gz\r\n"));
 	}
 
 	#[test]

@@ -408,8 +408,14 @@ fn build(
 	}
 	controls.push(parse_control(&format!("TZUTC: {}", timezone(offset)?))?);
 	for attachment in &data.attachments {
-		validate_file_spec(&attachment.filename)?;
-		controls.push(parse_control(&format!("ASSOC: {}", attachment.filename))?);
+		let filename = attachment
+			.filename
+			.as_deref()
+			.ok_or(ConvertError::Unrepresentable(
+				"an attached File without Filename",
+			))?;
+		validate_file_spec(filename)?;
+		controls.push(parse_control(&format!("ASSOC: {filename}"))?);
 	}
 	if data.area.is_some() {
 		controls.push(parse_control(&spth(read, context)?)?);
@@ -452,7 +458,12 @@ fn build(
 		let list = data
 			.attachments
 			.iter()
-			.map(|attachment| attachment.filename.clone())
+			.map(|attachment| {
+				attachment
+					.filename
+					.clone()
+					.expect("attachment filenames checked above")
+			})
 			.collect::<Vec<_>>()
 			.join(" ");
 		if !data.subject.is_empty() {
@@ -477,8 +488,8 @@ fn build(
 		text: body,
 		area: data
 			.area
-			.as_deref()
-			.map(|name| context.area_tag(name).map(str::to_owned))
+			.as_ref()
+			.map(|area| context.area_tag(&area.name).map(str::to_owned))
 			.transpose()?,
 	})
 }
@@ -910,7 +921,7 @@ fn finish_reconstruction(
 			));
 		}
 		for (name, attachment) in listed.iter().zip(&read.data.attachments) {
-			if *name != attachment.filename {
+			if Some(*name) != attachment.filename.as_deref() {
 				return Err(ConvertError::Unrepresentable("a reordered FileList"));
 			}
 			let mut file = OwnedTlv::new(types::FILENAME, name.as_bytes().to_vec())
@@ -1035,7 +1046,8 @@ mod tests {
 	use tith_crypto::SigningKeyPair;
 	use tith_wire::bundle::Identity;
 	use tith_wire::item::{
-		AttachmentData, ItemProvenance, MessageData, build_originated_message, read_message,
+		AreaData, AttachmentData, ItemProvenance, MessageData, build_originated_message,
+		read_message,
 	};
 
 	fn context() -> Context {
@@ -1145,6 +1157,7 @@ mod tests {
 			origin_line: None,
 			message_id: Some("fidonet#1:104/36 1a2b3c4d".to_owned()),
 			reply_to: None,
+			original_character_set: None,
 			additional_kludge_lines: Vec::new(),
 		}
 	}
@@ -1224,14 +1237,24 @@ mod tests {
 		let data = netmail(
 			vec![
 				AttachmentData {
-					filename: "work.zip".to_owned(),
+					filename: Some("work.zip".to_owned()),
 					timestamp: Some(1_755_400_000),
 					contents: b"payload".to_vec(),
+					short_description: None,
+					long_description_lines: Vec::new(),
+					tear_line: None,
+					magic_word: None,
+					replaces: None,
 				},
 				AttachmentData {
-					filename: "other.zip".to_owned(),
+					filename: Some("other.zip".to_owned()),
 					timestamp: None,
 					contents: b"second".to_vec(),
+					short_description: None,
+					long_description_lines: Vec::new(),
+					tear_line: None,
+					magic_word: None,
+					replaces: None,
 				},
 			],
 			"",
@@ -1385,7 +1408,10 @@ mod tests {
 			from_user: "Sender".to_owned(),
 			subject: "Hello".to_owned(),
 			text: "Body line one\nline two\n".to_owned(),
-			area: Some("SYNCHRONET".to_owned()),
+			area: Some(AreaData {
+				name: "SYNCHRONET".to_owned(),
+				description: None,
+			}),
 			attachments: Vec::new(),
 			legacy_attributes: None,
 			timestamp_offset: Some(-25_200),
@@ -1393,6 +1419,7 @@ mod tests {
 			origin_line: Some("A board (1:104/36)".to_owned()),
 			message_id: Some("fidonet#1:104/36 1a2b3c4d".to_owned()),
 			reply_to: None,
+			original_character_set: None,
 			additional_kludge_lines: Vec::new(),
 		}
 	}

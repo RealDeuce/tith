@@ -9,6 +9,8 @@ mod error;
 pub mod identity;
 pub mod integer;
 pub mod item;
+pub mod item_format;
+pub mod item_types;
 mod signed_integer;
 pub mod tlv;
 mod type_code;
@@ -23,5 +25,9 @@ pub use item::{
 	ReadMessage, Rejection, RejectionReason, SignedItemIdentity, ValidatedItem, ViaData, item_vias,
 	read_file_request, read_message, read_standalone_file, set_request_identifier,
 	validate_payload,
+};
+pub use item_format::{
+	AreaData, AttachmentData, ItemModel, ItemModelKind, MessageData, SignedItemKind,
+	StandaloneFileData, filename_is_portable, replaces_matches,
 };
 pub use tlv::{FramingError, OwnedTlv, TlvHeader, TlvReader, TlvValue};
