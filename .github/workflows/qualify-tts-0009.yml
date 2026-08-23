@@ -16,7 +16,9 @@ on:
       - "crates/tith-wire/src/identity.rs"
       - "crates/tith-wire/src/integer.rs"
       - "crates/tith-wire/src/item.rs"
+      - "crates/tith-wire/src/item_carrier.rs"
       - "crates/tith-wire/src/item_format.rs"
+      - "crates/tith-wire/src/item_format_impl.rs"
       - "crates/tith-wire/src/item_types.rs"
       - "crates/tith-wire/src/signed_integer.rs"
       - "crates/tith-wire/src/tlv.rs"
@@ -64,5 +66,5 @@ jobs:
           sha256sum tts-0016-coverage.json
           python3 qualification/check_source_line_coverage.py \
             tts-0016-coverage.json \
-            crates/tith-wire/src/item.rs \
+            crates/tith-wire/src/item_format_impl.rs \
             crates/tith-wire/src/item_format.rs

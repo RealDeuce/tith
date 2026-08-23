@@ -5,6 +5,7 @@ on:
     paths:
       - "crates/tith-wire/src/address.rs"
       - "crates/tith-wire/src/item.rs"
+      - "crates/tith-wire/src/item_format_impl.rs"
       - "crates/tith-wire/src/item_format.rs"
       - "crates/tith-wire/src/bundle.rs"
       - "crates/tith-wire/src/common.rs"
