@@ -472,6 +472,12 @@ mod tests {
 
 	#[test]
 	fn streaming_integer_and_value_io_failures_are_explicit() {
+		assert!(
+			TlvReader::new(controlled(&[]))
+				.read_next()
+				.unwrap()
+				.is_none()
+		);
 		for bytes in [&[0x80][..], &[1][..], &[0x80; 10][..]] {
 			assert!(TlvReader::new(bytes).read_next().is_err());
 		}

@@ -38,10 +38,15 @@ jobs:
       - name: Install pinned coverage driver
         run: cargo install cargo-llvm-cov --version 0.9.0 --locked
 
+      - name: Exercise the complete reference implementation
+        run: cargo test --workspace
+
       - name: Exercise the TTS-0003 conformance surface
         run: |
           cargo +nightly-2026-08-20 llvm-cov clean --workspace
-          cargo +nightly-2026-08-20 llvm-cov --branch --workspace --json --output-path tts-0003-coverage.json
+          cargo +nightly-2026-08-20 llvm-cov --branch \
+            --package tith-crypto --package tith-wire --lib \
+            --json --output-path tts-0003-coverage.json
 
       - name: Report source coverage
         run: cargo +nightly-2026-08-20 llvm-cov report --branch --text --show-missing-lines
