@@ -8,6 +8,7 @@ on:
       - "crates/tith-wire/src/signed_integer.rs"
       - "crates/tith-wire/src/integer.rs"
       - "qualification/check_source_coverage.py"
+      - ".github/workflows/rust.yml"
       - ".github/workflows/qualify-tts-0007.yml"
   workflow_dispatch:
 
