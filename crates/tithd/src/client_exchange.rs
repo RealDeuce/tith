@@ -93,7 +93,8 @@ impl Outbound {
 		session.initial_sent()?;
 
 		let received = (|| -> Result<(Vec<OwnedTlv>, usize, bool), Box<dyn Error>> {
-			let mut reader = TlvReader::new(stream.try_clone()?);
+			let mut input = stream.try_clone()?;
+			let mut reader = TlvReader::new(&mut input as &mut dyn Read);
 			let reply = read_header(&mut reader, None, self)?
 				.ok_or("peer closed before sending a Reply Header")?;
 			session.reply_header_received(&reply.bundle)?;
@@ -112,13 +113,14 @@ impl Outbound {
 						session.responses_received(&payload.responses)?;
 						require_open_for_requests(keep_open, &payload.requests)?;
 						if keep_open {
-							returned += self.dispatch_returned(
+							let dispatched = self.dispatch_returned(
 								&payload.requests,
 								payload.response_to,
 								local,
 								&reply.bundle.origin,
 								&mut answers,
 							)?;
+							returned += dispatched;
 						}
 						if payload.close_after_reply {
 							close_after_reply = true;
@@ -138,13 +140,10 @@ impl Outbound {
 		if keep_open {
 			// TTS-0005 section 6: one Accepted or Rejected for every value the
 			// peer returned, in a Reply Bundle of our own.
-			let final_reply = build_bundle(
-				&local.identity,
-				&local.secret,
-				destination,
-				crate::now(),
-				vec![answers],
-			)?;
+			let payloads = vec![answers];
+			let origin = &local.identity;
+			let secret = &local.secret;
+			let final_reply = build_bundle(origin, secret, destination, crate::now(), payloads)?;
 			let mut io = StreamIo(stream.try_clone()?);
 			send_bundle(&mut io, &final_reply, false)?;
 			session.final_reply_sent()?;

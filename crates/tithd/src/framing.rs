@@ -35,8 +35,8 @@ pub struct IncomingBundle {
 ///
 /// Returns an error when the stream does not begin with Origin, when it ends
 /// before the Header `SignedTLV`, or when the Bundle does not parse and verify.
-pub fn read_header<R: Read>(
-	reader: &mut TlvReader<R>,
+pub fn read_header(
+	reader: &mut TlvReader<&mut dyn Read>,
 	first: Option<OwnedTlv>,
 	resolver: &impl KeyResolver,
 ) -> Result<Option<IncomingBundle>, Box<dyn Error>> {

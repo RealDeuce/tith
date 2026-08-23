@@ -667,7 +667,8 @@ mod tests {
 			transaction(stream, &server_mailer).is_ok()
 		});
 		let mut client = TcpStream::connect(address).unwrap();
-		let mut reader = TlvReader::new(client.try_clone().unwrap());
+		let mut input = client.try_clone().unwrap();
+		let mut reader = TlvReader::new(&mut input as &mut dyn Read);
 		client.write_all(&initial).unwrap();
 		client.flush().unwrap();
 		let response = read_header(&mut reader, None, mailer.as_ref())
@@ -685,7 +686,6 @@ mod tests {
 			assert_eq!(error.kind(), std::io::ErrorKind::NotConnected);
 		}
 		drop(response);
-		drop(reader);
 		let completed = server.join().unwrap();
 		drop(mailer);
 		fs::remove_file(database).unwrap();
@@ -706,6 +706,9 @@ mod tests {
 				Vec::new(),
 			)
 			.unwrap()
+		}));
+		assert!(!server_client_reply_result(|peer, secret, _, _| {
+			build_bundle(peer, secret, peer, 2, Vec::new()).unwrap()
 		}));
 		assert!(!server_client_reply_result(|peer, secret, local, _| {
 			let mut reply = build_bundle(peer, secret, local, 2, Vec::new()).unwrap();
@@ -826,6 +829,18 @@ mod tests {
 		probe.extend_from_slice(&OwnedTlv::new(31, b"extra".to_vec()).unwrap().encode());
 		let (_, completed) = exchange(&probe, &mailer);
 		assert!(!completed);
+		let wrong_address: Address = "fidonet#1/99".parse().unwrap();
+		let wrong_destination = tith_wire::bundle::build_public_key_probe(
+			&peer,
+			&peer_keys.secret,
+			&wrong_address,
+			Some(local.public_key),
+			1,
+			2,
+		)
+		.unwrap();
+		let (_, completed) = exchange(&wrong_destination, &mailer);
+		assert!(!completed);
 
 		let request = build_bundle(
 			&peer,
@@ -843,6 +858,11 @@ mod tests {
 		let mut extended = request;
 		extended.extend_from_slice(&OwnedTlv::new(31, b"extension".to_vec()).unwrap().encode());
 		let (_, completed) = exchange(&extended, &mailer);
+		assert!(completed);
+
+		let empty_payload =
+			build_bundle(&peer, &peer_keys.secret, &local, 1, vec![Vec::new()]).unwrap();
+		let (_, completed) = exchange(&empty_payload, &mailer);
 		assert!(completed);
 		drop(mailer);
 		fs::remove_file(database).unwrap();
@@ -1399,6 +1419,39 @@ mod tests {
 		job_id.clone()
 	}
 
+	fn submit_peer_file(node: &Node, destination: &str, key: &str) -> String {
+		let source = node.database.with_extension(format!("{key}.bin"));
+		fs::write(&source, b"held file\n").unwrap();
+		let engine = crate::submission::SubmissionEngine::new(
+			Arc::clone(&node.mailer.configuration),
+			Arc::clone(&node.mailer.nodelist),
+			[crate::submission::LocalSigner {
+				reference: node.mailer.local_ref.clone(),
+				identity: node.mailer.local.clone(),
+				secret: Arc::clone(&node.mailer.local_secret),
+			}],
+		);
+		let request = tith_ipc::SubmissionRequest::parse(
+			format!(
+				"TITH-IPC 1\nSubmit-Items\nJob Peer-File\nApplication \"tosser\"\nIdempotency-Key \"{key}\"\nOrigin \"{}\"\nDestination \"{destination}\"\nNext-Hop Passive\nFile\nSource-Path {}\nWire-Filename \"held.bin\"\nEnd\nEnd\nEnd\n",
+				node.mailer.local.address,
+				tith_ipc::quote(&source.to_string_lossy())
+			)
+			.as_bytes(),
+		)
+		.unwrap();
+		let store = node.mailer.store.outbound().unwrap();
+		let tith_store::BatchCommit::Committed(outcomes) = engine.submit(&request, &store).unwrap()
+		else {
+			panic!("commit expected")
+		};
+		fs::remove_file(source).unwrap();
+		let tith_store::CommitOutcome::New { job_id, .. } = &outcomes[0] else {
+			panic!("new job expected")
+		};
+		job_id.clone()
+	}
+
 	fn job_state(node: &Node, job_id: &str) -> tith_store::JobState {
 		node.mailer
 			.store
@@ -1899,7 +1952,8 @@ mod tests {
 			transaction(stream, &server_mailer).unwrap();
 		});
 		let mut client = TcpStream::connect(address).unwrap();
-		let mut reader = TlvReader::new(client.try_clone().unwrap());
+		let mut input = client.try_clone().unwrap();
+		let mut reader = TlvReader::new(&mut input as &mut dyn Read);
 
 		let poll = container(
 			types::POLL_MESSAGES,
@@ -1958,7 +2012,6 @@ mod tests {
 			response_kind(&third_bytes, mailer.as_ref()),
 			ItemKind::Accepted
 		);
-		drop(reader);
 		drop(client);
 		server.join().unwrap();
 
@@ -1971,6 +2024,115 @@ mod tests {
 		));
 		drop(mailer);
 		fs::remove_file(database).unwrap();
+	}
+
+	#[test]
+	fn a_server_poll_can_precede_the_last_outstanding_response() {
+		let (mailer, peer_keys, peer, local, database) = setup();
+		let node = Node {
+			mailer: Arc::clone(&mailer),
+			database,
+		};
+		submit(
+			&node,
+			&peer.address.to_string(),
+			"Passive \"@remote\"",
+			"held-a",
+		);
+		submit(
+			&node,
+			&peer.address.to_string(),
+			"Passive \"@remote\"",
+			"held-b",
+		);
+		submit_peer_file(&node, &peer.address.to_string(), "held-file");
+
+		let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+		let address = listener.local_addr().unwrap();
+		let server_mailer = Arc::clone(&mailer);
+		let server = std::thread::spawn(move || {
+			let (stream, _) = listener.accept().unwrap();
+			transaction(stream, &server_mailer).unwrap();
+		});
+		let mut client = TcpStream::connect(address).unwrap();
+		let mut input = client.try_clone().unwrap();
+		let mut reader = TlvReader::new(&mut input as &mut dyn Read);
+		let poll = container(
+			types::POLL_MESSAGES,
+			&[OwnedTlv::new(types::REQUEST_IDENTIFIER, encode_u64(1)).unwrap()],
+		);
+		let initial = build_bundle(&peer, &peer_keys.secret, &local, 1, vec![vec![poll]]).unwrap();
+		client.write_all(&initial).unwrap();
+		client.flush().unwrap();
+		let initial_reply = read_header(&mut reader, None, mailer.as_ref())
+			.unwrap()
+			.unwrap();
+		let initial_payload = reader.read_next().unwrap().unwrap().read_owned().unwrap();
+		let initial_hash = hash_tlv(&initial_payload.encode()).unwrap();
+		let mut initial_bytes = initial_reply.prefix;
+		initial_bytes.extend_from_slice(&initial_payload.encode());
+		let returned = Bundle::parse(&initial_bytes, mailer.as_ref()).unwrap();
+		let returned = validate_payload(&returned.payloads[0], mailer.as_ref()).unwrap();
+		let identifiers = returned
+			.iter()
+			.filter(|item| item.kind == ItemKind::NetMail)
+			.map(|item| item.request_identifier)
+			.collect::<Vec<_>>();
+		assert_eq!(identifiers.len(), 2);
+
+		let poll_files = container(
+			types::POLL_FILES,
+			&[OwnedTlv::new(types::REQUEST_IDENTIFIER, encode_u64(20)).unwrap()],
+		);
+		let ordinary = netmail(&peer, &peer_keys.secret, &local, 21);
+		let client_reply = build_bundle(
+			&peer,
+			&peer_keys.secret,
+			&local,
+			2,
+			vec![
+				vec![accepted(identifiers[0], initial_hash).unwrap(), poll_files],
+				vec![accepted(identifiers[1], initial_hash).unwrap(), ordinary],
+			],
+		)
+		.unwrap();
+		client.write_all(&client_reply).unwrap();
+		client.flush().unwrap();
+
+		let reply = read_header(&mut reader, None, mailer.as_ref())
+			.unwrap()
+			.unwrap();
+		let poll_response = reader.read_next().unwrap().unwrap().read_owned().unwrap();
+		let ordinary_response = reader.read_next().unwrap().unwrap().read_owned().unwrap();
+		let mut response_bytes = reply.prefix;
+		response_bytes.extend_from_slice(&poll_response.encode());
+		response_bytes.extend_from_slice(&ordinary_response.encode());
+		let response = Bundle::parse(&response_bytes, mailer.as_ref()).unwrap();
+		let polled = validate_payload(&response.payloads[0], mailer.as_ref()).unwrap();
+		let file = polled
+			.iter()
+			.find(|item| item.kind == ItemKind::File)
+			.unwrap();
+		let final_reply = build_bundle(
+			&peer,
+			&peer_keys.secret,
+			&local,
+			3,
+			vec![vec![
+				accepted(
+					file.request_identifier,
+					hash_tlv(&poll_response.encode()).unwrap(),
+				)
+				.unwrap(),
+			]],
+		)
+		.unwrap();
+		client.write_all(&final_reply).unwrap();
+		client.shutdown(Shutdown::Write).unwrap();
+		drop(client);
+		server.join().unwrap();
+		drop(mailer);
+		drop(node);
 	}
 
 	fn final_reply_fixture() -> (
@@ -2022,7 +2184,8 @@ mod tests {
 			&[OwnedTlv::new(types::REQUEST_IDENTIFIER, encode_u64(10)).unwrap()],
 		);
 		let initial = build_bundle(&peer, &peer_keys.secret, &local, 1, vec![vec![poll]]).unwrap();
-		let mut initial_reader = TlvReader::new(Cursor::new(initial));
+		let mut initial_input = Cursor::new(initial);
+		let mut initial_reader = TlvReader::new(&mut initial_input as &mut dyn Read);
 		let request = read_header(&mut initial_reader, None, mailer.as_ref())
 			.unwrap()
 			.unwrap();
@@ -2048,7 +2211,8 @@ mod tests {
 		.unwrap();
 		let mut final_reply = final_reply;
 		final_reply.extend_from_slice(trailing);
-		let mut final_reader = TlvReader::new(Cursor::new(final_reply));
+		let mut final_input = Cursor::new(final_reply);
+		let mut final_reader = TlvReader::new(&mut final_input as &mut dyn Read);
 		let first = final_reader
 			.read_next()
 			.unwrap()
@@ -2084,7 +2248,8 @@ mod tests {
 			transaction(stream, &server_mailer).is_ok()
 		});
 		let mut client = TcpStream::connect(address).unwrap();
-		let mut reader = TlvReader::new(client.try_clone().unwrap());
+		let mut input = client.try_clone().unwrap();
+		let mut reader = TlvReader::new(&mut input as &mut dyn Read);
 		let poll = container(
 			types::POLL_MESSAGES,
 			&[OwnedTlv::new(types::REQUEST_IDENTIFIER, encode_u64(1)).unwrap()],
@@ -2108,7 +2273,6 @@ mod tests {
 		if let Err(error) = client.shutdown(Shutdown::Write) {
 			assert_eq!(error.kind(), std::io::ErrorKind::NotConnected);
 		}
-		drop(reader);
 		let completed = server.join().unwrap();
 		drop(mailer);
 		drop(node);
@@ -2157,6 +2321,80 @@ mod tests {
 		)
 		.unwrap();
 		assert!(holds.is_empty());
+	}
+
+	#[test]
+	fn final_reply_helper_rejects_each_header_payload_and_top_level_boundary() {
+		let (node, peer_keys, peer, request, _, mut holds) = final_reply_fixture();
+		let wrong = build_bundle(
+			&node.mailer.local,
+			&node.mailer.local_secret,
+			&peer,
+			2,
+			Vec::new(),
+		)
+		.unwrap();
+		let mut wrong_input = Cursor::new(wrong);
+		let mut wrong_reader = TlvReader::new(&mut wrong_input as &mut dyn Read);
+		let first = wrong_reader
+			.read_next()
+			.unwrap()
+			.unwrap()
+			.read_owned()
+			.unwrap();
+		assert!(
+			validate_final_reply(
+				&mut wrong_reader,
+				first,
+				&request,
+				node.mailer.as_ref(),
+				&mut holds,
+			)
+			.is_err()
+		);
+
+		let mut no_holds = Vec::new();
+		check_final_reply(
+			&node,
+			&peer_keys,
+			&peer,
+			&request,
+			&mut no_holds,
+			Vec::new(),
+			&[],
+		)
+		.unwrap();
+
+		let returned_poll = container(
+			types::POLL_MESSAGES,
+			&[OwnedTlv::new(types::REQUEST_IDENTIFIER, encode_u64(7)).unwrap()],
+		);
+		assert!(
+			check_final_reply(
+				&node,
+				&peer_keys,
+				&peer,
+				&request,
+				&mut holds,
+				vec![returned_poll],
+				&[],
+			)
+			.is_err()
+		);
+
+		let trailing = OwnedTlv::new(types::TIMESTAMP, vec![1]).unwrap().encode();
+		assert!(
+			check_final_reply(
+				&node,
+				&peer_keys,
+				&peer,
+				&request,
+				&mut holds,
+				Vec::new(),
+				&trailing,
+			)
+			.is_err()
+		);
 	}
 
 	#[test]

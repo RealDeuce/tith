@@ -4,8 +4,6 @@
 //! durable spool remain behind their existing policy and storage boundaries.
 
 use std::error::Error;
-#[cfg(test)]
-use std::io::Read;
 use std::io::Write;
 use std::net::{Shutdown, TcpStream};
 
@@ -34,9 +32,9 @@ pub(super) struct PollHold {
 	pub(super) claim: DeliveryClaim,
 }
 
-pub(super) fn transaction(stream: TcpStream, mailer: &Mailer) -> Result<(), Box<dyn Error>> {
+pub(super) fn transaction(mut stream: TcpStream, mailer: &Mailer) -> Result<(), Box<dyn Error>> {
 	let mut writer = stream.try_clone()?;
-	let mut reader = TlvReader::new(stream);
+	let mut reader = TlvReader::new(&mut stream as &mut dyn std::io::Read);
 	let request = read_header(&mut reader, None, mailer)?.ok_or("empty mail connection")?;
 	let first = reader
 		.read_next()?
@@ -52,18 +50,19 @@ pub(super) fn transaction(stream: TcpStream, mailer: &Mailer) -> Result<(), Box<
 		let mut encoded = request.prefix.clone();
 		encoded.extend_from_slice(&value.encode());
 		let probe = Bundle::parse(&encoded, mailer)?;
-		if let Some((request_identifier, response_to)) = probe.public_key_request()? {
-			if reader.read_next()?.is_some() {
-				return Err("PublicKeyRequest must be the sole request in its Bundle".into());
-			}
-			return answer_public_key_request(
-				&mut writer,
-				&request,
-				request_identifier,
-				response_to,
-				mailer,
-			);
+		let (request_identifier, response_to) = probe
+			.public_key_request()?
+			.ok_or("classified PublicKeyRequest has no request")?;
+		if reader.read_next()?.is_some() {
+			return Err("PublicKeyRequest must be the sole request in its Bundle".into());
 		}
+		return answer_public_key_request(
+			&mut writer,
+			&request,
+			request_identifier,
+			response_to,
+			mailer,
+		);
 	}
 	let reply =
 		ServerReply::for_request(&request.bundle, &mailer.local, &mailer.local_secret, now())?;
@@ -99,17 +98,18 @@ fn answer_public_key_request(
 	if request.bundle.destination.address != mailer.local.address {
 		return Err("PublicKeyRequest names a different local address".into());
 	}
+	let parameters = crate::public_key_response::Parameters {
+		destination: &request.bundle.origin,
+		requested: request.bundle.destination.public_key,
+		timestamp: now(),
+		identifier: request_identifier,
+		response_to,
+	};
 	let encoded = crate::public_key_response::build(
 		&mailer.local,
 		&mailer.local_secret,
 		&mailer.retired_secrets,
-		crate::public_key_response::Parameters {
-			destination: &request.bundle.origin,
-			requested: request.bundle.destination.public_key,
-			timestamp: now(),
-			identifier: request_identifier,
-			response_to,
-		},
+		parameters,
 	)?;
 	writer.write_all(&encoded)?;
 	writer.flush()?;
@@ -118,7 +118,7 @@ fn answer_public_key_request(
 }
 
 fn respond(
-	reader: &mut TlvReader<TcpStream>,
+	reader: &mut TlvReader<&mut dyn std::io::Read>,
 	writer: &mut TcpStream,
 	request: &IncomingBundle,
 	reply: &ServerReply,
@@ -138,7 +138,6 @@ fn respond(
 		};
 		match value.type_code {
 			types::SIGNED_TLV => {
-				let first_hold = holds.len();
 				let responses = payload_responses(&value, request, mailer, holds, false)?;
 				wait_for_client_reply |= responses.requires_return_bundle;
 				if !responses.values.is_empty() {
@@ -148,7 +147,8 @@ fn respond(
 					// The peer answers a returned value by naming the SignedTLV it
 					// arrived in, which is the one just written.
 					let signed_tlv_hash = hash_tlv(&encoded)?;
-					for hold in &mut holds[first_hold..] {
+					let first_new_hold = holds.len() - responses.new_holds;
+					for hold in &mut holds[first_new_hold..] {
 						hold.signed_tlv_hash = signed_tlv_hash;
 					}
 				}
@@ -176,7 +176,7 @@ fn respond(
 /// Server and new requests of its own. Each such Bundle can therefore produce
 /// another Server Reply; the loop has no round-count limit.
 fn respond_to_client_replies(
-	reader: &mut TlvReader<TcpStream>,
+	reader: &mut TlvReader<&mut dyn std::io::Read>,
 	writer: &mut TcpStream,
 	first: OwnedTlv,
 	initial: &IncomingBundle,
@@ -209,7 +209,6 @@ fn respond_to_client_replies(
 			let value = value.read_owned()?;
 			match value.type_code {
 				types::SIGNED_TLV => {
-					let first_hold = holds.len();
 					let responses = payload_responses(&value, &incoming, mailer, holds, true)?;
 					wait_for_client_reply |= responses.requires_return_bundle;
 					if !responses.values.is_empty() {
@@ -222,7 +221,8 @@ fn respond_to_client_replies(
 						writer.write_all(&encoded)?;
 						writer.flush()?;
 						let signed_tlv_hash = hash_tlv(&encoded)?;
-						for hold in &mut holds[first_hold..] {
+						let first_new_hold = holds.len() - responses.new_holds;
+						for hold in &mut holds[first_new_hold..] {
 							hold.signed_tlv_hash = signed_tlv_hash;
 						}
 					}
@@ -234,13 +234,6 @@ fn respond_to_client_replies(
 					}
 				}
 				types::ORIGIN => {
-					if !holds.is_empty() {
-						return Err(format!(
-							"Client Reply Bundle ended with {} response(s) missing",
-							holds.len()
-						)
-						.into());
-					}
 					require_continuation(wait_for_client_reply)?;
 					incoming = read_header(reader, Some(value), mailer)?
 						.ok_or("missing next Client Reply Bundle")?;
@@ -270,16 +263,14 @@ fn release_holds(holds: &[PollHold], mailer: &Mailer) -> Result<(), Box<dyn Erro
 	}
 	let outbound = mailer.store.outbound()?;
 	for hold in holds {
-		outbound.finish_delivery(
-			&hold.claim.job_id,
-			hold.claim.delivery_index,
-			&hold.claim.worker_token,
-			now(),
-			DeliveryOutcome::Deferred {
-				retry_at: now(),
-				result: "poll ended without a response for this value".to_owned(),
-			},
-		)?;
+		let job_id = &hold.claim.job_id;
+		let index = hold.claim.delivery_index;
+		let token = &hold.claim.worker_token;
+		let outcome = DeliveryOutcome::Deferred {
+			retry_at: now(),
+			result: "poll ended without a response for this value".to_owned(),
+		};
+		outbound.finish_delivery(job_id, index, token, now(), outcome)?;
 	}
 	Ok(())
 }
@@ -288,6 +279,7 @@ struct PayloadResponses {
 	values: Vec<OwnedTlv>,
 	close_after_reply: bool,
 	requires_return_bundle: bool,
+	new_holds: usize,
 }
 
 fn payload_responses(
@@ -310,6 +302,7 @@ fn payload_responses(
 	let mut responses = Vec::new();
 	let mut returned_identifier = 0u64;
 	let mut requires_return_bundle = false;
+	let mut new_holds = 0usize;
 	for request_value in payload.requests {
 		match request_value {
 			ReceivedRequest::Valid(item) => {
@@ -338,6 +331,7 @@ fn payload_responses(
 							relayed: false,
 							claim,
 						});
+						new_holds += 1;
 						let returned =
 							single_value(&holds.last().expect("hold was pushed").claim.item)?;
 						let relayed = crate::deliver::is_relay_delivery(
@@ -350,27 +344,41 @@ fn payload_responses(
 					}
 					responses.push(accepted(item.request_identifier, payload.response_to)?);
 				} else {
-					responses.push(mailer.acceptance().dispatch(
+					let response = mailer.acceptance().dispatch(
 						&item,
 						payload.response_to,
 						&request.bundle.origin,
-					)?);
+					)?;
+					responses.push(response);
 				}
 			}
-			ReceivedRequest::DataError { request_identifier } => responses.push(rejected(
-				request_identifier,
-				payload.response_to,
-				None,
-				RejectionReason::Permanent,
-				"request has a data error",
-			)?),
+			ReceivedRequest::DataError { request_identifier } => {
+				responses.push(data_error_response(
+					request_identifier,
+					payload.response_to,
+				)?);
+			}
 		}
 	}
 	Ok(PayloadResponses {
 		values: responses,
 		close_after_reply: payload.close_after_reply,
 		requires_return_bundle,
+		new_holds,
 	})
+}
+
+fn data_error_response(
+	request_identifier: u64,
+	response_to: TlvHash,
+) -> Result<OwnedTlv, tith_wire::bundle::BundleError> {
+	rejected(
+		request_identifier,
+		response_to,
+		None,
+		RejectionReason::Permanent,
+		"request has a data error",
+	)
 }
 
 /// The spool kinds a Poll value asks for.
@@ -397,12 +405,9 @@ fn poll_snapshot(
 	// An anonymous Origin is only identified together with its PublicKey, so the
 	// key is part of the match rather than the address alone.
 	let key = origin.address.is_anonymous().then_some(&origin.public_key);
-	Ok(mailer.store.outbound()?.claim_poll_snapshot(
-		&origin.address.to_string(),
-		key,
-		kinds,
-		now(),
-	)?)
+	let outbound = mailer.store.outbound()?;
+	let claims = outbound.claim_poll_snapshot(&origin.address.to_string(), key, kinds, now())?;
+	Ok(claims)
 }
 
 fn single_value(encoded: &[u8]) -> Result<OwnedTlv, Box<dyn Error>> {
@@ -414,8 +419,8 @@ fn single_value(encoded: &[u8]) -> Result<OwnedTlv, Box<dyn Error>> {
 }
 
 #[cfg(test)]
-pub(super) fn validate_final_reply<R: Read>(
-	reader: &mut TlvReader<R>,
+pub(super) fn validate_final_reply(
+	reader: &mut TlvReader<&mut dyn std::io::Read>,
 	first: OwnedTlv,
 	request: &IncomingBundle,
 	mailer: &Mailer,
@@ -480,13 +485,10 @@ fn resolve_hold(
 		ItemKind::Accepted => DeliveryOutcome::Delivered("accepted by poll".to_owned()),
 		_ => crate::deliver::rejection_outcome(item.rejection.as_ref(), now(), hold.relayed),
 	};
-	outbound.finish_delivery(
-		&hold.claim.job_id,
-		hold.claim.delivery_index,
-		&hold.claim.worker_token,
-		now(),
-		outcome,
-	)?;
+	let job_id = &hold.claim.job_id;
+	let index = hold.claim.delivery_index;
+	let token = &hold.claim.worker_token;
+	outbound.finish_delivery(job_id, index, token, now(), outcome)?;
 	holds.remove(position);
 	Ok(())
 }

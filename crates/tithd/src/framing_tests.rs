@@ -34,7 +34,8 @@ fn reads_a_header_from_the_stream_or_a_supplied_origin() {
 			.then_some(origin.public_key)
 			.or_else(|| (address == &destination.address).then_some(destination.public_key))
 	};
-	let mut reader = TlvReader::new(Cursor::new(encoded.clone()));
+	let mut input = Cursor::new(encoded.clone());
+	let mut reader = TlvReader::new(&mut input as &mut dyn std::io::Read);
 	let incoming = read_header(&mut reader, None, &resolver).unwrap().unwrap();
 	assert_eq!(incoming.bundle.origin, origin);
 	assert_eq!(incoming.bundle.destination, destination);
@@ -47,7 +48,8 @@ fn reads_a_header_from_the_stream_or_a_supplied_origin() {
 	for value in values {
 		value.write_to(&mut extended).unwrap();
 	}
-	let mut split = TlvReader::new(Cursor::new(extended));
+	let mut split_input = Cursor::new(extended);
+	let mut split = TlvReader::new(&mut split_input as &mut dyn std::io::Read);
 	let first = split.read_next().unwrap().unwrap().read_owned().unwrap();
 	let incoming = read_header(&mut split, Some(first), &resolver)
 		.unwrap()
@@ -59,20 +61,24 @@ fn reads_a_header_from_the_stream_or_a_supplied_origin() {
 fn distinguishes_clean_eof_from_each_invalid_prefix() {
 	let (_, origin, _) = fixture();
 	let resolver = |address: &Address| (address == &origin.address).then_some(origin.public_key);
-	let mut empty = TlvReader::new(Cursor::new(Vec::new()));
+	let mut empty_input = Cursor::new(Vec::new());
+	let mut empty = TlvReader::new(&mut empty_input as &mut dyn std::io::Read);
 	assert!(read_header(&mut empty, None, &resolver).unwrap().is_none());
 
 	let wrong = OwnedTlv::new(types::TIMESTAMP, vec![1]).unwrap();
-	let mut no_more = TlvReader::new(Cursor::new(Vec::new()));
+	let mut no_more_input = Cursor::new(Vec::new());
+	let mut no_more = TlvReader::new(&mut no_more_input as &mut dyn std::io::Read);
 	assert!(read_header(&mut no_more, Some(wrong), &resolver).is_err());
 
 	let origin_value =
 		OwnedTlv::new(types::ORIGIN, origin.address.to_string().into_bytes()).unwrap();
-	let mut no_header = TlvReader::new(Cursor::new(Vec::new()));
+	let mut no_header_input = Cursor::new(Vec::new());
+	let mut no_header = TlvReader::new(&mut no_header_input as &mut dyn std::io::Read);
 	assert!(read_header(&mut no_header, Some(origin_value.clone()), &resolver).is_err());
 
 	let mut truncated_bytes = OwnedTlv::new(types::SIGNED_TLV, vec![1]).unwrap().encode();
 	truncated_bytes.pop();
-	let mut truncated = TlvReader::new(Cursor::new(truncated_bytes));
+	let mut truncated_input = Cursor::new(truncated_bytes);
+	let mut truncated = TlvReader::new(&mut truncated_input as &mut dyn std::io::Read);
 	assert!(read_header(&mut truncated, Some(origin_value), &resolver).is_err());
 }
