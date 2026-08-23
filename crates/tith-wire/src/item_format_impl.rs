@@ -169,10 +169,10 @@ pub fn build_originated_message_for_delivery(
 	validate_originated_message_data(data)?;
 	let mut signed = message_signed_children(data, provenance)?;
 	let signature = sign_tlv(&concatenate(&signed), secret)?;
-	signed.push(OwnedTlv::new(
+	signed.push(assigned_tlv(
 		types::SIGNATURE,
 		signature.as_bytes().to_vec(),
-	)?);
+	));
 	finish_message(
 		data,
 		signed,
@@ -223,10 +223,10 @@ pub fn build_retained_message(
 			"retained Message Signature does not verify",
 		));
 	}
-	signed.push(OwnedTlv::new(
+	signed.push(assigned_tlv(
 		types::SIGNATURE,
 		signature.as_bytes().to_vec(),
-	)?);
+	));
 	finish_message(data, signed, suffix)
 }
 
@@ -292,28 +292,28 @@ fn message_signed_children(
 	let mut signed = Vec::new();
 	push_provenance(&mut signed, provenance)?;
 	if let Some(destination) = &data.destination {
-		push_identity(&mut signed, types::DESTINATION, destination)?;
+		push_identity(&mut signed, types::DESTINATION, destination);
 	}
 	signed.extend([
-		OwnedTlv::new(types::TIMESTAMP, crate::integer::encode_u64(data.timestamp))?,
-		OwnedTlv::new(types::TO_USER_NAME, data.to_user.as_bytes().to_vec())?,
-		OwnedTlv::new(types::FROM_USER_NAME, data.from_user.as_bytes().to_vec())?,
-		OwnedTlv::new(types::SUBJECT, data.subject.as_bytes().to_vec())?,
-		OwnedTlv::new(types::MESSAGE_TEXT, data.text.as_bytes().to_vec())?,
+		assigned_tlv(types::TIMESTAMP, crate::integer::encode_u64(data.timestamp)),
+		assigned_tlv(types::TO_USER_NAME, data.to_user.as_bytes().to_vec()),
+		assigned_tlv(types::FROM_USER_NAME, data.from_user.as_bytes().to_vec()),
+		assigned_tlv(types::SUBJECT, data.subject.as_bytes().to_vec()),
+		assigned_tlv(types::MESSAGE_TEXT, data.text.as_bytes().to_vec()),
 	]);
 	if let Some(area) = &data.area {
-		signed.push(area_value(area)?);
+		signed.push(area_value(area));
 	}
 	for attachment in &data.attachments {
 		let mut children = Vec::new();
 		push_filename(&mut children, attachment.filename.as_deref())?;
 		if let Some(timestamp) = attachment.timestamp {
-			children.push(OwnedTlv::new(
+			children.push(assigned_tlv(
 				types::TIMESTAMP,
 				crate::integer::encode_u64(timestamp),
-			)?);
+			));
 		}
-		children.push(OwnedTlv::new(types::CONTENTS, attachment.contents.clone())?);
+		children.push(assigned_tlv(types::CONTENTS, attachment.contents.clone()));
 		push_file_metadata(
 			&mut children,
 			attachment.short_description.as_deref(),
@@ -322,19 +322,19 @@ fn message_signed_children(
 			attachment.magic_word.as_deref(),
 			attachment.replaces.as_deref(),
 		)?;
-		signed.push(OwnedTlv::new(types::FILE, concatenate(&children))?);
+		signed.push(assigned_tlv(types::FILE, concatenate(&children)));
 	}
 	if let Some(value) = data.legacy_attributes {
-		signed.push(OwnedTlv::new(
+		signed.push(assigned_tlv(
 			types::LEGACY_ATTRIBUTES,
 			crate::integer::encode_u64(value),
-		)?);
+		));
 	}
 	if let Some(value) = data.timestamp_offset {
-		signed.push(OwnedTlv::new(
+		signed.push(assigned_tlv(
 			types::TIMESTAMP_OFFSET,
 			crate::integer::encode_i64(value),
-		)?);
+		));
 	}
 	for (type_code, value) in [
 		(types::TEAR_LINE, data.tear_line.as_ref()),
@@ -342,19 +342,19 @@ fn message_signed_children(
 		(types::MESSAGE_ID, data.message_id.as_ref()),
 	] {
 		if let Some(value) = value {
-			signed.push(OwnedTlv::new(type_code, value.as_bytes().to_vec())?);
+			signed.push(assigned_tlv(type_code, value.as_bytes().to_vec()));
 		}
 	}
 	if let Some((address, identifier)) = &data.reply_to {
-		let mut value = OwnedTlv::new(types::ADDRESS, address.to_string().into_bytes())?.encode();
+		let mut value = assigned_tlv(types::ADDRESS, address.to_string().into_bytes()).encode();
 		value.extend_from_slice(identifier.as_bytes());
-		signed.push(OwnedTlv::new(types::REPLY_TO, value)?);
+		signed.push(assigned_tlv(types::REPLY_TO, value));
 	}
 	if let Some(value) = &data.original_character_set {
-		signed.push(OwnedTlv::new(
+		signed.push(assigned_tlv(
 			types::ORIGINAL_CHARACTER_SET,
 			value.as_bytes().to_vec(),
-		)?);
+		));
 	}
 	Ok(signed)
 }
@@ -364,10 +364,10 @@ fn finish_message(
 	mut signed: Vec<OwnedTlv>,
 	suffix: &MessageSuffix<'_>,
 ) -> Result<OwnedTlv, BundleError> {
-	signed.push(OwnedTlv::new(
+	signed.push(assigned_tlv(
 		types::REQUEST_IDENTIFIER,
 		crate::integer::encode_u64(suffix.request_identifier),
-	)?);
+	));
 	for via in suffix.existing_vias {
 		let public_key = if via.address.is_anonymous() {
 			Some(
@@ -384,28 +384,28 @@ fn finish_message(
 			address: via.address.clone(),
 			public_key: public_key.unwrap_or(suffix.local_via.public_key),
 		};
-		signed.push(via_value(&identity, via.timestamp, &via.software)?);
+		signed.push(via_value(&identity, via.timestamp, &via.software));
 	}
 	signed.push(via_value(
 		suffix.local_via,
 		suffix.via_timestamp,
 		suffix.software,
-	)?);
+	));
 	// TSP-0016 section 3.1 makes Message SeenBy an optional singleton,
 	// and type 112 makes its value one Trimmed Collection. A File repeats it.
-	if let Some(value) = seen_by_value(suffix.seen_by)? {
+	if let Some(value) = seen_by_value(suffix.seen_by) {
 		signed.push(value);
 	}
 	for value in &data.additional_kludge_lines {
 		if value.contains('\u{0001}') {
 			return Err(BundleError::Unexpected("Control-A in AdditionalKludgeLine"));
 		}
-		signed.push(OwnedTlv::new(
+		signed.push(assigned_tlv(
 			types::ADDITIONAL_KLUDGE_LINE,
 			value.as_bytes().to_vec(),
-		)?);
+		));
 	}
-	OwnedTlv::new(types::MESSAGE, concatenate(&signed)).map_err(Into::into)
+	Ok(assigned_tlv(types::MESSAGE, concatenate(&signed)))
 }
 
 pub fn build_originated_file(
@@ -424,15 +424,15 @@ pub fn build_originated_file(
 	let mut signed = Vec::new();
 	push_filename(&mut signed, data.filename.as_deref())?;
 	if let Some(timestamp) = data.timestamp {
-		signed.push(OwnedTlv::new(
+		signed.push(assigned_tlv(
 			types::TIMESTAMP,
 			crate::integer::encode_u64(timestamp),
-		)?);
+		));
 	}
-	signed.push(OwnedTlv::new(types::CONTENTS, data.contents)?);
+	signed.push(assigned_tlv(types::CONTENTS, data.contents));
 	let distribution = data.area.is_some();
 	if let Some(area) = &data.area {
-		signed.push(area_value(area)?);
+		signed.push(area_value(area));
 	}
 	push_provenance(&mut signed, provenance)?;
 	push_file_metadata(
@@ -444,28 +444,28 @@ pub fn build_originated_file(
 		data.replaces.as_deref(),
 	)?;
 	let signature = sign_tlv(&concatenate(&signed), secret)?;
-	signed.push(OwnedTlv::new(
+	signed.push(assigned_tlv(
 		types::SIGNATURE,
 		signature.as_bytes().to_vec(),
-	)?);
-	signed.push(OwnedTlv::new(
+	));
+	signed.push(assigned_tlv(
 		types::REQUEST_IDENTIFIER,
 		crate::integer::encode_u64(request_identifier),
-	)?);
+	));
 	// Via and SeenBy are `F` values like Area, so a peer-addressed File carries
 	// neither. `validate_standalone_file` rejects one that does.
 	if distribution {
-		signed.push(via_value(effective_signer, via_timestamp, software)?);
+		signed.push(via_value(effective_signer, via_timestamp, software));
 		// TSP-0016 section 3.2 marks File SeenBy "F+", so unlike a Message it
 		// repeats. Each value is still its own Trimmed Collection.
 		for value in seen_by {
-			signed.push(OwnedTlv::new(
+			signed.push(assigned_tlv(
 				types::SEEN_BY,
 				value.to_string().into_bytes(),
-			)?);
+			));
 		}
 	}
-	OwnedTlv::new(types::FILE, concatenate(&signed)).map_err(Into::into)
+	Ok(assigned_tlv(types::FILE, concatenate(&signed)))
 }
 
 /// Builds one `FileRequest`.
@@ -484,21 +484,21 @@ pub fn build_file_request(
 	request_identifier: u64,
 ) -> Result<OwnedTlv, BundleError> {
 	validate_produced_filename(filename)?;
-	let mut children = vec![OwnedTlv::new(
+	let mut children = vec![assigned_tlv(
 		types::FILENAME,
 		filename.as_bytes().to_vec(),
-	)?];
+	)];
 	if let Some(timestamp) = newer_than {
-		children.push(OwnedTlv::new(
+		children.push(assigned_tlv(
 			types::TIMESTAMP,
 			crate::integer::encode_u64(timestamp),
-		)?);
+		));
 	}
-	children.push(OwnedTlv::new(
+	children.push(assigned_tlv(
 		types::REQUEST_IDENTIFIER,
 		crate::integer::encode_u64(request_identifier),
-	)?);
-	OwnedTlv::new(types::FILE_REQUEST, concatenate(&children)).map_err(Into::into)
+	));
+	Ok(assigned_tlv(types::FILE_REQUEST, concatenate(&children)))
 }
 
 /// Rebuilds the unsigned routing suffix of an authenticated distribution item.
@@ -519,26 +519,26 @@ pub fn forward_item(
 		.position(|child| child.type_code == types::SIGNATURE)
 		.ok_or(BundleError::Missing("Signature"))?;
 	let mut output = children[..=signature].to_vec();
-	output.push(OwnedTlv::new(
+	output.push(assigned_tlv(
 		types::REQUEST_IDENTIFIER,
 		crate::integer::encode_u64(request_identifier),
-	)?);
+	));
 	for child in &children[signature + 1..] {
 		if child.type_code == types::VIA || !types::is_defined(child.type_code) {
 			output.push(child.clone());
 		}
 	}
-	output.push(via_value(receiving_identity, via_timestamp, software)?);
+	output.push(via_value(receiving_identity, via_timestamp, software));
 	if item.type_code == types::MESSAGE {
-		if let Some(value) = seen_by_value(seen_by)? {
+		if let Some(value) = seen_by_value(seen_by) {
 			output.push(value);
 		}
 	} else {
 		for address in seen_by {
-			output.push(OwnedTlv::new(
+			output.push(assigned_tlv(
 				types::SEEN_BY,
 				address.to_string().into_bytes(),
-			)?);
+			));
 		}
 	}
 	for child in &children[signature + 1..] {
@@ -546,7 +546,7 @@ pub fn forward_item(
 			output.push(child.clone());
 		}
 	}
-	OwnedTlv::new(item.type_code, concatenate(&output)).map_err(Into::into)
+	Ok(assigned_tlv(item.type_code, concatenate(&output)))
 }
 
 fn concatenate(values: &[OwnedTlv]) -> Vec<u8> {
@@ -557,22 +557,29 @@ fn concatenate(values: &[OwnedTlv]) -> Vec<u8> {
 	output
 }
 
+/// Constructs a TLV whose Type is one of the nonzero assignments selected by
+/// the item grammar. The fallible public constructor exists for caller-supplied
+/// Types; every call in this module uses a fixed assigned Type or an outer Type
+/// already restricted to Message or File.
+fn assigned_tlv(type_code: u64, value: Vec<u8>) -> OwnedTlv {
+	OwnedTlv { type_code, value }
+}
+
 fn push_identity(
 	output: &mut Vec<OwnedTlv>,
 	type_code: u64,
 	identity: &Identity,
-) -> Result<(), BundleError> {
-	output.push(OwnedTlv::new(
+) {
+	output.push(assigned_tlv(
 		type_code,
 		identity.address.to_string().into_bytes(),
-	)?);
+	));
 	if identity.address.is_anonymous() {
-		output.push(OwnedTlv::new(
+		output.push(assigned_tlv(
 			types::PUBLIC_KEY,
 			identity.public_key.as_bytes().to_vec(),
-		)?);
+		));
 	}
-	Ok(())
 }
 
 fn push_provenance(
@@ -584,32 +591,34 @@ fn push_provenance(
 		.as_ref()
 		.ok_or(BundleError::Missing("item signing identity"))?;
 	if provenance.origin == signer.address {
-		return push_identity(output, types::ORIGIN, signer);
+		push_identity(output, types::ORIGIN, signer);
+		return Ok(());
 	}
 	if provenance.origin.is_anonymous() {
 		return Err(BundleError::Unexpected(
 			"anonymous Origin without its own PublicKey",
 		));
 	}
-	output.push(OwnedTlv::new(
+	output.push(assigned_tlv(
 		types::ORIGIN,
 		provenance.origin.to_string().into_bytes(),
-	)?);
-	push_identity(output, types::SIGNED_ORIGIN, signer)
+	));
+	push_identity(output, types::SIGNED_ORIGIN, signer);
+	Ok(())
 }
 
-fn area_value(area: &AreaData) -> Result<OwnedTlv, BundleError> {
-	let mut children = vec![OwnedTlv::new(
+fn area_value(area: &AreaData) -> OwnedTlv {
+	let mut children = vec![assigned_tlv(
 		types::AREA_NAME,
 		area.name.as_bytes().to_vec(),
-	)?];
+	)];
 	if let Some(description) = &area.description {
-		children.push(OwnedTlv::new(
+		children.push(assigned_tlv(
 			types::AREA_DESCRIPTION,
 			description.as_bytes().to_vec(),
-		)?);
+		));
 	}
-	OwnedTlv::new(types::AREA, concatenate(&children)).map_err(Into::into)
+	assigned_tlv(types::AREA, concatenate(&children))
 }
 
 fn validate_produced_filename(value: &str) -> Result<(), BundleError> {
@@ -627,7 +636,7 @@ fn validate_produced_filename(value: &str) -> Result<(), BundleError> {
 fn push_filename(output: &mut Vec<OwnedTlv>, value: Option<&str>) -> Result<(), BundleError> {
 	if let Some(value) = value {
 		validate_produced_filename(value)?;
-		output.push(OwnedTlv::new(types::FILENAME, value.as_bytes().to_vec())?);
+		output.push(assigned_tlv(types::FILENAME, value.as_bytes().to_vec()));
 	}
 	Ok(())
 }
@@ -644,19 +653,19 @@ fn push_file_metadata(
 		if value.contains(['\r', '\n']) {
 			return Err(BundleError::Unexpected("newline in ShortDescription"));
 		}
-		output.push(OwnedTlv::new(
+		output.push(assigned_tlv(
 			types::SHORT_DESCRIPTION,
 			value.as_bytes().to_vec(),
-		)?);
+		));
 	}
 	for value in long_description_lines {
 		if value.contains(['\r', '\n']) {
 			return Err(BundleError::Unexpected("newline in LongDescriptionLine"));
 		}
-		output.push(OwnedTlv::new(
+		output.push(assigned_tlv(
 			types::LONG_DESCRIPTION_LINE,
 			value.as_bytes().to_vec(),
-		)?);
+		));
 	}
 	for (type_code, value) in [
 		(types::TEAR_LINE, tear_line),
@@ -664,19 +673,19 @@ fn push_file_metadata(
 		(types::REPLACES, replaces),
 	] {
 		if let Some(value) = value {
-			output.push(OwnedTlv::new(type_code, value.as_bytes().to_vec())?);
+			output.push(assigned_tlv(type_code, value.as_bytes().to_vec()));
 		}
 	}
 	Ok(())
 }
 
 /// One `SeenBy` holding the whole collection, or nothing when it is empty.
-fn seen_by_value(addresses: &[Address]) -> Result<Option<OwnedTlv>, BundleError> {
+fn seen_by_value(addresses: &[Address]) -> Option<OwnedTlv> {
 	if addresses.is_empty() {
-		return Ok(None);
+		return None;
 	}
 	let value = crate::address::format_trimmed_collection(addresses);
-	Ok(Some(OwnedTlv::new(types::SEEN_BY, value.into_bytes())?))
+	Some(assigned_tlv(types::SEEN_BY, value.into_bytes()))
 }
 
 /// The addresses a `SeenBy` value names.
@@ -689,25 +698,25 @@ pub fn seen_by_addresses(value: &OwnedTlv) -> Result<Vec<Address>, BundleError> 
 		.map_err(|_| BundleError::Unexpected("SeenBy is not a Trimmed Collection of addresses"))
 }
 
-fn via_value(identity: &Identity, timestamp: u64, software: &str) -> Result<OwnedTlv, BundleError> {
+fn via_value(identity: &Identity, timestamp: u64, software: &str) -> OwnedTlv {
 	let mut children = Vec::new();
-	children.push(OwnedTlv::new(
+	children.push(assigned_tlv(
 		types::ADDRESS,
 		identity.address.to_string().into_bytes(),
-	)?);
+	));
 	if identity.address.is_anonymous() {
-		children.push(OwnedTlv::new(
+		children.push(assigned_tlv(
 			types::PUBLIC_KEY,
 			identity.public_key.as_bytes().to_vec(),
-		)?);
+		));
 	}
-	children.push(OwnedTlv::new(
+	children.push(assigned_tlv(
 		types::TIMESTAMP,
 		crate::integer::encode_u64(timestamp),
-	)?);
+	));
 	let mut value = concatenate(&children);
 	value.extend_from_slice(software.as_bytes());
-	OwnedTlv::new(types::VIA, value).map_err(Into::into)
+	assigned_tlv(types::VIA, value)
 }
 
 struct Cursor<'a> {
@@ -1352,7 +1361,7 @@ fn take_encoded_tlv(bytes: &[u8]) -> Result<(OwnedTlv, usize), BundleError> {
 			expected: length as u64,
 			received: bytes.len().saturating_sub(header) as u64,
 		})?;
-	Ok((OwnedTlv::new(type_code, value.to_vec())?, end))
+	Ok((assigned_tlv(type_code, value.to_vec()), end))
 }
 
 /// The signer-selecting values a legacy converter must carry across.
@@ -1430,8 +1439,7 @@ impl ItemModel {
 			ItemModelKind::StandaloneFile => types::FILE,
 			ItemModelKind::FileRequest => types::FILE_REQUEST,
 		};
-		OwnedTlv::new(type_code, self.encode_value())
-			.expect("already parsed item children remain representable")
+		assigned_tlv(type_code, self.encode_value())
 	}
 }
 
@@ -1930,7 +1938,7 @@ mod tests {
 				OwnedTlv::new(types::SUBJECT, Vec::new()).unwrap(),
 				OwnedTlv::new(types::MESSAGE_TEXT, b"Legacy".to_vec()).unwrap(),
 				OwnedTlv::new(types::REQUEST_IDENTIFIER, crate::integer::encode_u64(10)).unwrap(),
-				via_value(&origin, 1, "test").unwrap(),
+				via_value(&origin, 1, "test"),
 			],
 		);
 		let validated = validate_item(&message, &|address: &Address| {
@@ -2947,7 +2955,7 @@ mod tests {
 			));
 		}
 		let mut children = base.to_vec();
-		children.push(area_value(&area("FILES")).unwrap());
+		children.push(area_value(&area("FILES")));
 		let file = OwnedTlv::new(types::FILE, concatenate(&children)).unwrap();
 		assert!(matches!(
 			validate_file(&file, false, &|_: &Address| None),
