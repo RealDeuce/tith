@@ -185,7 +185,9 @@ mod tests {
 
 	use tith_crypto::SigningKeyPair;
 	use tith_wire::address::Address;
-	use tith_wire::bundle::{Identity, build_bundle};
+	use tith_wire::bundle::{
+		Identity, build_bundle, build_public_key_probe, build_public_key_reply,
+	};
 	use tith_wire::integer::encode_u64;
 	use tith_wire::item::{RejectionReason, accepted, accepted_public_key, rejected};
 	use tith_wire::tlv::OwnedTlv;
@@ -320,6 +322,19 @@ mod tests {
 			tracker.observe_reply(&unexpected, &resolver),
 			Err(ExchangeError::UnexpectedResponse)
 		));
+		let wrong_identifier_bytes = build_bundle(
+			&b,
+			&b_keys.secret,
+			&a,
+			2,
+			vec![vec![accepted(99, request_hash).unwrap()]],
+		)
+		.unwrap();
+		let wrong_identifier = Bundle::parse(&wrong_identifier_bytes, &resolver).unwrap();
+		assert!(matches!(
+			tracker.observe_reply(&wrong_identifier, &resolver),
+			Err(ExchangeError::UnexpectedResponse)
+		));
 		let wrong_key_bytes = build_bundle(
 			&b,
 			&b_keys.secret,
@@ -429,5 +444,90 @@ mod tests {
 				.unwrap()
 				.is_empty()
 		);
+	}
+
+	#[test]
+	fn response_accounting_covers_non_requests_public_keys_and_distinct_payloads() {
+		let a_keys = SigningKeyPair::from_seed(&[23; 32]).unwrap();
+		let b_keys = SigningKeyPair::from_seed(&[24; 32]).unwrap();
+		let a = Identity {
+			address: "fidonet#1/23".parse().unwrap(),
+			public_key: a_keys.public,
+		};
+		let b = Identity {
+			address: "fidonet#1/24".parse().unwrap(),
+			public_key: b_keys.public,
+		};
+		let resolver = |address: &Address| {
+			(address == &a.address)
+				.then_some(a.public_key)
+				.or_else(|| (address == &b.address).then_some(b.public_key))
+		};
+
+		let response_only_bytes = build_bundle(
+			&a,
+			&a_keys.secret,
+			&b,
+			1,
+			vec![vec![
+				accepted(1, tith_crypto::hash_tlv(b"response").unwrap()).unwrap(),
+			]],
+		)
+		.unwrap();
+		let response_only = Bundle::parse(&response_only_bytes, &resolver).unwrap();
+		let response_only_tracker = ResponseTracker::for_bundle(&response_only, &resolver).unwrap();
+		assert_eq!(response_only_tracker.expected(), 0);
+
+		let probe_bytes =
+			build_public_key_probe(&a, &a_keys.secret, &b.address, Some(b.public_key), 2, 7)
+				.unwrap();
+		let probe = Bundle::parse(&probe_bytes, &resolver).unwrap();
+		let mut probe_tracker = ResponseTracker::for_bundle(&probe, &resolver).unwrap();
+		let request = &probe_tracker.outstanding[0];
+		let reply_bytes = build_public_key_reply(
+			&b,
+			&b_keys.secret,
+			&a,
+			3,
+			request.request_identifier,
+			request.signed_tlv_hash,
+			b.public_key,
+		)
+		.unwrap();
+		let reply =
+			Bundle::parse_public_key_reply(&reply_bytes, &resolver, Some(b.public_key)).unwrap();
+		probe_tracker.observe_reply(&reply, &resolver).unwrap();
+		assert!(probe_tracker.is_complete());
+
+		let request_bytes = build_bundle(
+			&a,
+			&a_keys.secret,
+			&b,
+			4,
+			vec![
+				vec![container(
+					types::POLL_MESSAGES,
+					&[OwnedTlv::new(types::REQUEST_IDENTIFIER, encode_u64(8)).unwrap()],
+				)],
+				vec![container(
+					types::POLL_FILES,
+					&[OwnedTlv::new(types::REQUEST_IDENTIFIER, encode_u64(9)).unwrap()],
+				)],
+			],
+		)
+		.unwrap();
+		let request = Bundle::parse(&request_bytes, &resolver).unwrap();
+		let mut tracker = ResponseTracker::for_bundle(&request, &resolver).unwrap();
+		let first = tracker.outstanding[0].clone();
+		let second = tracker.outstanding[1].clone();
+		for response in [
+			accepted(first.request_identifier, first.signed_tlv_hash).unwrap(),
+			accepted(second.request_identifier, second.signed_tlv_hash).unwrap(),
+		] {
+			let bytes = build_bundle(&b, &b_keys.secret, &a, 5, vec![vec![response]]).unwrap();
+			let response = Bundle::parse(&bytes, &resolver).unwrap();
+			tracker.observe_reply(&response, &resolver).unwrap();
+		}
+		assert!(tracker.is_complete());
 	}
 }

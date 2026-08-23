@@ -14,6 +14,10 @@ use crate::integer::{decode_u64, encode_u64};
 use crate::tlv::{OwnedTlv, parse_sequence};
 use crate::types;
 
+fn assigned(type_code: u64, value: Vec<u8>) -> OwnedTlv {
+	OwnedTlv::new(type_code, value).expect("assigned TITH type is nonzero")
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Bundle {
 	pub encoded: Vec<u8>,
@@ -129,9 +133,6 @@ impl Bundle {
 			.filter(|value| value.type_code == types::SIGNED_TLV)
 			.ok_or(BundleError::Missing("Header SignedTLV"))?;
 		let header = verify_signed_tlv(header_tlv, Some(&origin), resolver)?;
-		if header.identity != origin {
-			return Err(BundleError::Unexpected("Header Origin"));
-		}
 		let (destination, requested_destination_key, timestamp) =
 			validate_header(&header.data, resolver)?;
 		let expected_hash = hash_tlv(&header.encoded)?;
@@ -292,34 +293,34 @@ pub fn build_bundle(
 	timestamp: u64,
 	payload_groups: Vec<Vec<OwnedTlv>>,
 ) -> Result<Vec<u8>, BundleError> {
-	let mut top = vec![OwnedTlv::new(
+	let mut top = vec![assigned(
 		types::ORIGIN,
 		origin.address.to_string().into_bytes(),
-	)?];
+	)];
 	if origin.address.is_anonymous() {
-		top.push(OwnedTlv::new(
+		top.push(assigned(
 			types::PUBLIC_KEY,
 			origin.public_key.as_bytes().to_vec(),
-		)?);
+		));
 	}
-	let mut header_data = vec![OwnedTlv::new(
+	let mut header_data = vec![assigned(
 		types::DESTINATION,
 		destination.address.to_string().into_bytes(),
-	)?];
+	)];
 	if destination.address.is_anonymous() {
-		header_data.push(OwnedTlv::new(
+		header_data.push(assigned(
 			types::PUBLIC_KEY,
 			destination.public_key.as_bytes().to_vec(),
-		)?);
+		));
 	}
-	header_data.push(OwnedTlv::new(types::TIMESTAMP, encode_u64(timestamp))?);
+	header_data.push(assigned(types::TIMESTAMP, encode_u64(timestamp)));
 	let header = build_signed_tlv(&header_data, None, origin_secret)?;
 	let header_hash = hash_tlv(&header.encode())?;
 	top.push(header);
 	for mut payload in payload_groups {
 		payload.insert(
 			0,
-			OwnedTlv::new(types::TLV_HASH, header_hash.as_bytes().to_vec())?,
+			assigned(types::TLV_HASH, header_hash.as_bytes().to_vec()),
 		);
 		top.push(build_signed_tlv(&payload, None, origin_secret)?);
 	}
@@ -341,28 +342,28 @@ pub fn build_public_key_probe(
 			"PublicKeyRequest for an anonymous Destination",
 		));
 	}
-	let mut top = vec![OwnedTlv::new(
+	let mut top = vec![assigned(
 		types::ORIGIN,
 		origin.address.to_string().into_bytes(),
-	)?];
+	)];
 	if origin.address.is_anonymous() {
-		top.push(OwnedTlv::new(
+		top.push(assigned(
 			types::PUBLIC_KEY,
 			origin.public_key.as_bytes().to_vec(),
-		)?);
+		));
 	}
-	let mut header_data = vec![OwnedTlv::new(
+	let mut header_data = vec![assigned(
 		types::DESTINATION,
 		destination.to_string().into_bytes(),
-	)?];
+	)];
 	if let Some(key) = requested_key {
-		header_data.push(OwnedTlv::new(types::PUBLIC_KEY, key.as_bytes().to_vec())?);
+		header_data.push(assigned(types::PUBLIC_KEY, key.as_bytes().to_vec()));
 	}
-	header_data.push(OwnedTlv::new(types::TIMESTAMP, encode_u64(timestamp))?);
+	header_data.push(assigned(types::TIMESTAMP, encode_u64(timestamp)));
 	let header = build_signed_tlv(&header_data, None, origin_secret)?;
 	let header_hash = hash_tlv(&header.encode())?;
 	let payload = [
-		OwnedTlv::new(types::TLV_HASH, header_hash.as_bytes().to_vec())?,
+		assigned(types::TLV_HASH, header_hash.as_bytes().to_vec()),
 		crate::item::public_key_request(request_identifier)?,
 	];
 	top.push(header);
@@ -385,30 +386,30 @@ pub fn build_public_key_reply(
 	response_to: TlvHash,
 	current_key: PublicKey,
 ) -> Result<Vec<u8>, BundleError> {
-	let mut top = vec![OwnedTlv::new(
+	let mut top = vec![assigned(
 		types::ORIGIN,
 		signing_origin.address.to_string().into_bytes(),
-	)?];
+	)];
 	// A probe reply always states its signing key, including for a non-anonymous Origin.
-	top.push(OwnedTlv::new(
+	top.push(assigned(
 		types::PUBLIC_KEY,
 		signing_origin.public_key.as_bytes().to_vec(),
-	)?);
-	let mut header_data = vec![OwnedTlv::new(
+	));
+	let mut header_data = vec![assigned(
 		types::DESTINATION,
 		destination.address.to_string().into_bytes(),
-	)?];
+	)];
 	if destination.address.is_anonymous() {
-		header_data.push(OwnedTlv::new(
+		header_data.push(assigned(
 			types::PUBLIC_KEY,
 			destination.public_key.as_bytes().to_vec(),
-		)?);
+		));
 	}
-	header_data.push(OwnedTlv::new(types::TIMESTAMP, encode_u64(timestamp))?);
+	header_data.push(assigned(types::TIMESTAMP, encode_u64(timestamp)));
 	let header = build_signed_tlv(&header_data, None, signing_secret)?;
 	let header_hash = hash_tlv(&header.encode())?;
 	let payload = [
-		OwnedTlv::new(types::TLV_HASH, header_hash.as_bytes().to_vec())?,
+		assigned(types::TLV_HASH, header_hash.as_bytes().to_vec()),
 		crate::item::accepted_public_key(request_identifier, response_to, current_key)?,
 	];
 	top.push(header);
@@ -430,36 +431,37 @@ pub fn build_public_key_unavailable_reply(
 	request_identifier: u64,
 	response_to: TlvHash,
 ) -> Result<Vec<u8>, BundleError> {
-	let mut top = vec![OwnedTlv::new(
+	let mut top = vec![assigned(
 		types::ORIGIN,
 		current_origin.address.to_string().into_bytes(),
-	)?];
-	top.push(OwnedTlv::new(
+	)];
+	top.push(assigned(
 		types::PUBLIC_KEY,
 		current_origin.public_key.as_bytes().to_vec(),
-	)?);
-	let mut header_data = vec![OwnedTlv::new(
+	));
+	let mut header_data = vec![assigned(
 		types::DESTINATION,
 		destination.address.to_string().into_bytes(),
-	)?];
+	)];
 	if destination.address.is_anonymous() {
-		header_data.push(OwnedTlv::new(
+		header_data.push(assigned(
 			types::PUBLIC_KEY,
 			destination.public_key.as_bytes().to_vec(),
-		)?);
+		));
 	}
-	header_data.push(OwnedTlv::new(types::TIMESTAMP, encode_u64(timestamp))?);
+	header_data.push(assigned(types::TIMESTAMP, encode_u64(timestamp)));
 	let header = build_signed_tlv(&header_data, None, current_secret)?;
 	let header_hash = hash_tlv(&header.encode())?;
 	let payload = [
-		OwnedTlv::new(types::TLV_HASH, header_hash.as_bytes().to_vec())?,
+		assigned(types::TLV_HASH, header_hash.as_bytes().to_vec()),
 		crate::item::rejected(
 			request_identifier,
 			response_to,
 			None,
 			crate::item::RejectionReason::Permanent,
 			"requested predecessor private key is unavailable",
-		)?,
+		)
+		.expect("a permanent refusal has no retry Timestamp"),
 	];
 	top.push(header);
 	top.push(build_signed_tlv(&payload, None, current_secret)?);
@@ -503,6 +505,7 @@ mod tests {
 			}
 		};
 		let parsed = Bundle::parse(&encoded, &resolver).unwrap();
+		assert_eq!(resolver(&"fidonet#99".parse().unwrap()), None);
 		assert_eq!(parsed.origin, origin);
 		assert_eq!(parsed.destination, destination);
 		assert_eq!(parsed.timestamp, 1_700_000_000);
@@ -593,9 +596,7 @@ mod tests {
 			build_bundle(&origin, &origin_keys.secret, &destination, 42, Vec::new()).unwrap();
 		let parsed = Bundle::parse(&encoded, &|_: &Address| None).unwrap();
 		assert_eq!(parsed.origin, origin);
-		if let Some(byte) = encoded.last_mut() {
-			*byte ^= 1;
-		}
+		*encoded.last_mut().unwrap() ^= 1;
 		assert!(matches!(
 			Bundle::parse(&encoded, &|_: &Address| None),
 			Err(BundleError::InvalidSignature)
@@ -630,6 +631,7 @@ mod tests {
 			}
 		};
 		let parsed = Bundle::parse(&encoded, &resolver).unwrap();
+		assert_eq!(resolver(&"fidonet#99".parse().unwrap()), None);
 		assert_eq!(parsed.unknown_top_level, vec![extension]);
 	}
 
@@ -671,6 +673,7 @@ mod tests {
 			}
 		};
 		let parsed = Bundle::parse(&concatenate(&top), &resolver).unwrap();
+		assert_eq!(resolver(&"fidonet#99".parse().unwrap()), None);
 		assert_eq!(parsed.destination, destination);
 		assert_eq!(parsed.timestamp, 9);
 	}
@@ -709,6 +712,7 @@ mod tests {
 			Bundle::parse(&concatenate(&top), &resolver),
 			Err(BundleError::Missing("initial payload Header TLVHash"))
 		));
+		assert_eq!(resolver(&"fidonet#99".parse().unwrap()), None);
 	}
 
 	#[test]
@@ -812,6 +816,7 @@ mod tests {
 				))
 			));
 		}
+		assert_eq!(resolver(&"fidonet#99".parse().unwrap()), None);
 	}
 
 	#[test]
@@ -901,6 +906,7 @@ mod tests {
 			.unwrap(),
 			OwnedTlv::new(types::TIMESTAMP, encode_u64(1)).unwrap(),
 		];
+		assert_eq!(resolver(&"fidonet#99".parse().unwrap()), None);
 
 		assert!(matches!(
 			Bundle::parse(&[], &resolver),

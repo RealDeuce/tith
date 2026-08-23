@@ -1,5 +1,9 @@
 // TTS-0005 request, response, and payload-carrier operations.
 
+fn carrier_value(type_code: u64, value: Vec<u8>) -> OwnedTlv {
+	OwnedTlv::new(type_code, value).expect("assigned TITH type is nonzero")
+}
+
 #[derive(Debug)]
 pub struct PayloadError {
 	pub item_index: usize,
@@ -143,13 +147,16 @@ fn validate_response(value: &OwnedTlv, accepted: bool) -> Result<ValidatedItem, 
 
 pub fn accepted(request_identifier: u64, response_to: TlvHash) -> Result<OwnedTlv, BundleError> {
 	let children = [
-		OwnedTlv::new(
+		carrier_value(
 			types::REQUEST_IDENTIFIER,
 			crate::integer::encode_u64(request_identifier),
-		)?,
-		OwnedTlv::new(types::TLV_HASH, response_to.as_bytes().to_vec())?,
+		),
+		carrier_value(types::TLV_HASH, response_to.as_bytes().to_vec()),
 	];
-	OwnedTlv::new(types::ACCEPTED, encoded_prefix(&children, children.len())).map_err(Into::into)
+	Ok(carrier_value(
+		types::ACCEPTED,
+		encoded_prefix(&children, children.len()),
+	))
 }
 
 /// Builds an Accepted response which certifies the server's current key for a
@@ -160,23 +167,26 @@ pub fn accepted_public_key(
 	public_key: PublicKey,
 ) -> Result<OwnedTlv, BundleError> {
 	let children = [
-		OwnedTlv::new(
+		carrier_value(
 			types::REQUEST_IDENTIFIER,
 			crate::integer::encode_u64(request_identifier),
-		)?,
-		OwnedTlv::new(types::TLV_HASH, response_to.as_bytes().to_vec())?,
-		OwnedTlv::new(types::PUBLIC_KEY, public_key.as_bytes().to_vec())?,
+		),
+		carrier_value(types::TLV_HASH, response_to.as_bytes().to_vec()),
+		carrier_value(types::PUBLIC_KEY, public_key.as_bytes().to_vec()),
 	];
-	OwnedTlv::new(types::ACCEPTED, encoded_prefix(&children, children.len())).map_err(Into::into)
+	Ok(carrier_value(
+		types::ACCEPTED,
+		encoded_prefix(&children, children.len()),
+	))
 }
 
 /// Builds the sole request in a native public-key discovery probe.
 pub fn public_key_request(request_identifier: u64) -> Result<OwnedTlv, BundleError> {
-	let child = OwnedTlv::new(
+	let child = carrier_value(
 		types::REQUEST_IDENTIFIER,
 		crate::integer::encode_u64(request_identifier),
-	)?;
-	OwnedTlv::new(types::PUBLIC_KEY_REQUEST, child.encode()).map_err(Into::into)
+	);
+	Ok(carrier_value(types::PUBLIC_KEY_REQUEST, child.encode()))
 }
 
 pub fn rejected(
@@ -192,19 +202,23 @@ pub fn rejected(
 		));
 	}
 	let mut value = Vec::new();
-	OwnedTlv::new(
+	carrier_value(
 		types::REQUEST_IDENTIFIER,
 		crate::integer::encode_u64(request_identifier),
-	)?
-	.write_to(&mut value)?;
-	OwnedTlv::new(types::TLV_HASH, response_to.as_bytes().to_vec())?.write_to(&mut value)?;
+	)
+	.write_to(&mut value)
+	.expect("Vec writes cannot fail");
+	carrier_value(types::TLV_HASH, response_to.as_bytes().to_vec())
+		.write_to(&mut value)
+		.expect("Vec writes cannot fail");
 	if let Some(timestamp) = timestamp {
-		OwnedTlv::new(types::TIMESTAMP, crate::integer::encode_u64(timestamp))?
-			.write_to(&mut value)?;
+		carrier_value(types::TIMESTAMP, crate::integer::encode_u64(timestamp))
+			.write_to(&mut value)
+			.expect("Vec writes cannot fail");
 	}
 	value.extend_from_slice(&crate::integer::encode_u64(reason as u64));
 	value.extend_from_slice(description.as_bytes());
-	OwnedTlv::new(types::REJECTED, value).map_err(Into::into)
+	Ok(carrier_value(types::REJECTED, value))
 }
 
 #[must_use]

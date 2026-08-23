@@ -139,6 +139,20 @@ mod carrier_tests {
 			false
 		)
 		.is_err());
+		let non_timestamp_reason = validate_response(
+			&raw_rejected(
+				types::REQUEST_IDENTIFIER,
+				types::TLV_HASH,
+				vec![0; 32],
+				vec![1, 0],
+			),
+			false,
+		)
+		.unwrap();
+		assert_eq!(
+			non_timestamp_reason.rejection.unwrap().reason,
+			RejectionReason::Permanent
+		);
 		let mut timestamp_and_permanent = OwnedTlv::new(types::TIMESTAMP, vec![1])
 			.unwrap()
 			.encode();
@@ -219,5 +233,35 @@ mod carrier_tests {
 		};
 		let error = validate_payload(&payload, &|_: &Address| None).unwrap_err();
 		assert_eq!(error.item_index, 2);
+
+		let non_requests = VerifiedSignedTlv {
+			data: vec![
+				OwnedTlv::new(types::TLV_HASH, vec![0; 32]).unwrap(),
+				accepted(1, TlvHash::from_bytes([1; 32])).unwrap(),
+				accepted(1, TlvHash::from_bytes([2; 32])).unwrap(),
+			],
+			..payload.clone()
+		};
+		assert_eq!(
+			validate_payload(&non_requests, &|_: &Address| None)
+				.unwrap()
+				.len(),
+			2
+		);
+
+		let distinct_requests = VerifiedSignedTlv {
+			data: vec![
+				OwnedTlv::new(types::TLV_HASH, vec![0; 32]).unwrap(),
+				request(types::POLL_MESSAGES, 1),
+				request(types::POLL_FILES, 2),
+			],
+			..payload
+		};
+		assert_eq!(
+			validate_payload(&distinct_requests, &|_: &Address| None)
+				.unwrap()
+				.len(),
+			2
+		);
 	}
 }
