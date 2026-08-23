@@ -6,6 +6,23 @@ import pathlib
 import sys
 
 
+def uncovered_lines(entry: dict) -> list[int]:
+	"""Reconstruct uncovered source lines from LLVM's ordered segments."""
+	executable: set[int] = set()
+	covered: set[int] = set()
+	segments = entry.get("segments", [])
+	for index, segment in enumerate(segments[:-1]):
+		line, _, count, has_count, _, is_gap = segment
+		if not has_count or is_gap:
+			continue
+		next_line = segments[index + 1][0]
+		for source_line in range(line, next_line + 1):
+			executable.add(source_line)
+			if count:
+				covered.add(source_line)
+	return sorted(executable - covered)
+
+
 def main() -> int:
 	if len(sys.argv) < 3:
 		raise SystemExit("usage: check_source_line_coverage.py REPORT SOURCE...")
@@ -36,9 +53,7 @@ def main() -> int:
 				failed = True
 		print(f"{source}: " + ", ".join(parts))
 		if summary["lines"]["covered"] != summary["lines"]["count"]:
-			for segment in matches[0].get("segments", []):
-				if segment[3] and segment[2] == 0 and not segment[5]:
-					print(f"{source}: zero-count segment {segment}")
+			print(f"{source}: reconstructed uncovered lines {uncovered_lines(matches[0])}")
 		if summary["branches"]["covered"] != summary["branches"]["count"]:
 			for branch in matches[0].get("branches", []):
 				if branch[4] == 0 or branch[5] == 0:
