@@ -711,7 +711,7 @@ fn publication_names_and_one_frame_zstandard_are_exact() {
 	assert!(AlternatePublicationName::new(" pfx", "other", 42).is_err());
 	assert!(AlternatePublicationName::new("fidonet", "other", 0).is_err());
 
-	let text = b"Zone\t1\tNode\tLocation\tSysop\t\t\t\t\t\t\n";
+	let text = b";A publication\nZone\t1\tNode\tLocation\tSysop\t\t\t\t\t\t\n";
 	let encoded = compress_zstd_frame(Cursor::new(text), Vec::new()).unwrap();
 	let decoded = decompress_zstd_frame(BufReader::new(Cursor::new(&encoded)), Vec::new()).unwrap();
 	assert_eq!(decoded, text);
@@ -728,6 +728,10 @@ fn publication_names_and_one_frame_zstandard_are_exact() {
 
 	assert_eq!(
 		decompress_zstd_frame(BufReader::new(Cursor::new(CLI_FRAME)), Vec::new()).unwrap(),
+		b"hello\n"
+	);
+	assert_eq!(
+		decompress_zstd_frame(BufReader::new(Cursor::new(CLI_FRAME.to_vec())), Vec::new()).unwrap(),
 		b"hello\n"
 	);
 	for (name, invalid) in [
