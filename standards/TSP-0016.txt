@@ -3,7 +3,7 @@ TITH                                              THIS ISN'T THAT HARD
 **********************************************************************
 
 Publication:  TSP‑0016
-Revision:     1
+Revision:     2
 Title:        Item Format
 Author(s):    Stephen Hurd
 Date:         2026‑08‑22
@@ -214,10 +214,9 @@ Contents
   The value is a UTF‑8 string containing the name of the file.  No
   restrictions are placed on the value of this string, but the name
   MUST NOT contain additional path components.  Software SHOULD NOT
-  use values that are not allowed by common operating systems.
-  Commonly this means no control characters (U+00 to U+1F, and U+7F),
-  and none of U+22 ('"'), U+2A ('*'), U+2F ('/'), U+3A (':'),
-  U+3C ('<'), U+3D ('>'), U+3F ('?'), U+5C ('\'), or U+7C ('|').
+  use U+0000–U+001F, U+007F, U+0022 ('"'), U+002A ('*'), U+002F
+  ('/'), U+003A (':'), U+003C ('<'), U+003E ('>'), U+003F ('?'),
+  U+005C ('\'), or U+007C ('|') in a Filename.
 
   97. Contents
   ────────────
@@ -301,8 +300,9 @@ Contents
   108. AreaName
   ─────────────
   Contains a UTF‑8 value which specifies which area the message is in.
-  This likely has a lot of legacy restrictions that are outside the
-  scope of this item format.
+  This item format places no additional restrictions on the value.
+  A conversion standard defines any restrictions imposed by its target
+  legacy representation or software.
 
   109. AreaDescription
   ─────────────────────
@@ -316,9 +316,11 @@ Contents
 
   111. OriginLine
   ───────────────
-  Contains a small amount of information about the system where the
-  message originated.  The string SHOULD end with the node address in
-  parentheses.  The " * Origin: " part is not included.
+  Contains a UTF‑8 line about the system where the message originated.
+  The " * Origin: " part is not included.
+
+  Legacy standards define the presentation and address conventions of
+  an Origin line.  They are not requirements on this native value.
 
   112. SeenBy
   ────────────
@@ -346,8 +348,9 @@ Contents
 
   114. MessageID
   ───────────────
-  Contains a UTF‑8 string that uniquely identifies the message and the
-  Origin system.
+  Contains an opaque UTF‑8 identifier associated with the message and
+  the Origin system.  Its producer or using standard defines its
+  generation and uniqueness requirements.
 
   115. ReplyTo
   ────────────
@@ -369,14 +372,19 @@ Contents
 
   118. ShortDescription
   ───────────────────────
-  Contains a UTF‑8 string which describes the File.  This SHOULD be no
-  more than 45 characters and MUST NOT contain newlines.
+  Contains a UTF‑8 string which describes the File.  It MUST NOT
+  contain newlines.
+
+  Legacy software commonly expects a description of approximately 45
+  characters, but the exact interpretation varies by program.
 
   119. LongDescriptionLine
   ─────────────────────────
   Contains a UTF‑8 string for each line of a multi‑line description.
-  Each line SHOULD be no more than 45 characters and MUST NOT contain
-  newlines.
+  It MUST NOT contain newlines.
+
+  Legacy software commonly expects each line to be approximately 45
+  characters, but the exact interpretation varies by program.
 
   120. MagicWord
   ───────────────
@@ -385,9 +393,14 @@ Contents
 
   121. Replaces
   ──────────────
-  Contains a UTF‑8 string with wildcard characters '*' and '?' to
-  select files this replaces.  Configuration around sources and
-  signatures is outside this item format.
+  Contains a case‑sensitive whole‑Filename pattern.  Matching is over
+  Unicode scalar values.  U+002A ('*') matches zero or more scalar
+  values, U+003F ('?') matches exactly one scalar value, and every
+  other scalar value matches itself.
+
+  The processor supplies the set of candidate files.  Local policy
+  decides what replacement action, if any, is allowed.  Candidate
+  selection and replacement policy are outside this item format.
 
 
 5. Item Authentication and Identity
@@ -501,17 +514,21 @@ A. References
   [FSC‑0068.001] "A Proposed Replacement For FTS-0004", FTSC,
   1992‑12‑13.
 
-  [TTS‑0002] "Type Length Value Encoding", TITH, 2026‑08‑16.
+  [TTS‑0002] "Type Length Value Encoding", TITH, 2026‑08‑22.
 
   [TTS‑0003] "Common TLV Types", TITH, 2026‑08‑22.
 
   [TTS‑0004] "Node Addresses", TITH, 2026‑08‑21.
 
-  [TTS‑0007] "Signed Integer Encoding", TITH, 2026‑08‑16.
+  [TTS‑0007] "Signed Integer Encoding", TITH, 2026‑08‑22.
 
 
 B. History
 ──────────
+
+   Rev.2, 2026‑08‑22: Defined exact Replaces matching and portable
+   Filename guidance, separated legacy metadata conventions from the
+   native data model, and updated integer standard references.
 
    Rev.1, 2026‑08‑22: Initial Release.  Extracted the Message, File,
    and FileRequest child‑TLV sequences, item authentication, and stable
