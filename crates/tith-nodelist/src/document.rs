@@ -189,9 +189,7 @@ impl Nodelist {
 	pub fn read<R: BufRead>(domain: &str, reader: R) -> Result<Self, NodelistError> {
 		let mut entries = BTreeMap::new();
 		for record in NodelistReader::distribution(domain.to_owned(), reader)? {
-			if let Record::Entry(entry) = record? {
-				entries.insert(entry.address.clone(), *entry);
-			}
+			insert_record(&mut entries, record?);
 		}
 		Ok(Self { entries })
 	}
@@ -213,6 +211,12 @@ impl Nodelist {
 	#[must_use]
 	pub fn is_empty(&self) -> bool {
 		self.entries.is_empty()
+	}
+}
+
+fn insert_record(entries: &mut BTreeMap<Address, Entry>, record: Record) {
+	if let Record::Entry(entry) = record {
+		entries.insert(entry.address.clone(), *entry);
 	}
 }
 
@@ -883,27 +887,37 @@ pub fn compress_zstd_frame<R: Read, W: Write>(mut input: R, output: W) -> io::Re
 
 /// Decodes exactly one ordinary Zstandard frame and rejects trailing bytes.
 pub fn decompress_zstd_frame<R: BufRead, W: Write>(input: R, mut output: W) -> io::Result<W> {
-	const ZSTANDARD_MAGIC: [u8; 4] = [0x28, 0xb5, 0x2f, 0xfd];
 	let mut input = input;
 	let mut magic = [0; 4];
 	input.read_exact(&mut magic)?;
+	require_zstandard_magic(magic)?;
+	let input = io::Cursor::new(magic).chain(input);
+	let mut decoder = zstd::stream::read::Decoder::with_buffer(input)?.single_frame();
+	io::copy(&mut decoder, &mut output)?;
+	let mut input = decoder.finish();
+	require_no_trailing_data(!input.fill_buf()?.is_empty())?;
+	Ok(output)
+}
+
+fn require_zstandard_magic(magic: [u8; 4]) -> io::Result<()> {
+	const ZSTANDARD_MAGIC: [u8; 4] = [0x28, 0xb5, 0x2f, 0xfd];
 	if magic != ZSTANDARD_MAGIC {
 		return Err(io::Error::new(
 			io::ErrorKind::InvalidData,
 			"publication does not begin with an ordinary Zstandard frame",
 		));
 	}
-	let input = io::Cursor::new(magic).chain(input);
-	let mut decoder = zstd::stream::read::Decoder::with_buffer(input)?.single_frame();
-	io::copy(&mut decoder, &mut output)?;
-	let mut input = decoder.finish();
-	if !input.fill_buf()?.is_empty() {
+	Ok(())
+}
+
+fn require_no_trailing_data(has_trailing_data: bool) -> io::Result<()> {
+	if has_trailing_data {
 		return Err(io::Error::new(
 			io::ErrorKind::InvalidData,
 			"data follows the first Zstandard frame",
 		));
 	}
-	Ok(output)
+	Ok(())
 }
 
 #[cfg(test)]
