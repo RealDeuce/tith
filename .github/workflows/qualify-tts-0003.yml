@@ -14,6 +14,7 @@ on:
       - "crates/tith-wire/src/identity.rs"
       - "crates/tith-wire/src/integer.rs"
       - "crates/tith-wire/src/tlv.rs"
+      - "crates/tith-wire/src/type_code.rs"
       - "crates/tith-wire/src/types.rs"
       - "qualification/check_source_line_coverage.py"
       - ".github/workflows/qualify-tts-0003.yml"
@@ -63,5 +64,5 @@ jobs:
             crates/tith-wire/src/error.rs \
             crates/tith-wire/src/identity.rs \
             crates/tith-wire/src/integer.rs \
-            crates/tith-wire/src/tlv.rs \
+            crates/tith-wire/src/type_code.rs \
             crates/tith-wire/src/types.rs

@@ -11,6 +11,7 @@ pub mod integer;
 pub mod item;
 mod signed_integer;
 pub mod tlv;
+mod type_code;
 pub mod types;
 
 pub use address::{Address, AddressError};

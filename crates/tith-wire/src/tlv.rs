@@ -4,6 +4,7 @@ use std::fmt;
 use std::io::{self, Read, Write};
 
 use crate::integer::{IntegerError, decode_u64_prefix, encode_u64};
+use crate::type_code::{SequenceTypeState, require_defined_type};
 
 #[derive(Debug)]
 pub enum FramingError {
@@ -77,11 +78,8 @@ pub struct TlvHeader {
 
 impl TlvHeader {
 	pub fn new(type_code: u64, length: u64) -> Result<Self, FramingError> {
-		if type_code == 0 {
-			Err(FramingError::InvalidType)
-		} else {
-			Ok(Self { type_code, length })
-		}
+		require_defined_type(type_code)?;
+		Ok(Self { type_code, length })
 	}
 
 	#[must_use]
@@ -137,9 +135,7 @@ pub fn parse_sequence(mut bytes: &[u8]) -> Result<Vec<OwnedTlv>, FramingError> {
 	let mut values = Vec::new();
 	while !bytes.is_empty() {
 		let (type_code, type_len) = decode_u64_prefix(bytes)?;
-		if type_code == 0 {
-			return Err(FramingError::InvalidType);
-		}
+		require_defined_type(type_code)?;
 		bytes = &bytes[type_len..];
 		let (length, length_len) = decode_u64_prefix(bytes)?;
 		bytes = &bytes[length_len..];
@@ -162,7 +158,7 @@ pub fn parse_sequence(mut bytes: &[u8]) -> Result<Vec<OwnedTlv>, FramingError> {
 pub struct TlvReader<R> {
 	inner: R,
 	remaining: u64,
-	invalid_type: bool,
+	type_state: SequenceTypeState,
 }
 
 impl<R: Read> TlvReader<R> {
@@ -171,7 +167,7 @@ impl<R: Read> TlvReader<R> {
 		Self {
 			inner,
 			remaining: 0,
-			invalid_type: false,
+			type_state: SequenceTypeState::new(),
 		}
 	}
 
@@ -197,19 +193,14 @@ impl<R: Read> TlvReader<R> {
 	}
 
 	pub fn read_next(&mut self) -> Result<Option<TlvValue<'_, R>>, FramingError> {
-		if self.invalid_type {
-			return Err(FramingError::InvalidType);
-		}
+		self.type_state.ensure_active()?;
 		if self.remaining != 0 {
 			return Err(FramingError::UnconsumedValue(self.remaining));
 		}
 		let Some(type_code) = self.read_integer(true)? else {
 			return Ok(None);
 		};
-		if type_code == 0 {
-			self.invalid_type = true;
-			return Err(FramingError::InvalidType);
-		}
+		self.type_state.accept(type_code)?;
 		let length = self
 			.read_integer(false)?
 			.expect("EOF is an error when allow_eof is false");
