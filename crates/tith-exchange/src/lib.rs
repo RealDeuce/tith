@@ -187,10 +187,11 @@ mod tests {
 	use tith_wire::address::Address;
 	use tith_wire::bundle::{
 		Identity, build_bundle, build_public_key_probe, build_public_key_reply,
+		build_public_key_unavailable_reply, build_signed_tlv,
 	};
 	use tith_wire::integer::encode_u64;
 	use tith_wire::item::{RejectionReason, accepted, accepted_public_key, rejected};
-	use tith_wire::tlv::OwnedTlv;
+	use tith_wire::tlv::{OwnedTlv, parse_sequence};
 	use tith_wire::types;
 
 	use super::*;
@@ -230,6 +231,14 @@ mod tests {
 			child.write_to(&mut bytes).unwrap();
 		}
 		OwnedTlv::new(type_code, bytes).unwrap()
+	}
+
+	fn concatenate(values: &[OwnedTlv]) -> Vec<u8> {
+		let mut bytes = Vec::new();
+		for value in values {
+			value.write_to(&mut bytes).unwrap();
+		}
+		bytes
 	}
 
 	#[test]
@@ -483,7 +492,7 @@ mod tests {
 				.unwrap();
 		let probe = Bundle::parse(&probe_bytes, &resolver).unwrap();
 		let mut probe_tracker = ResponseTracker::for_bundle(&probe, &resolver).unwrap();
-		let request = &probe_tracker.outstanding[0];
+		let request = probe_tracker.outstanding[0].clone();
 		let reply_bytes = build_public_key_reply(
 			&b,
 			&b_keys.secret,
@@ -498,6 +507,82 @@ mod tests {
 			Bundle::parse_public_key_reply(&reply_bytes, &resolver, Some(b.public_key)).unwrap();
 		probe_tracker.observe_reply(&reply, &resolver).unwrap();
 		assert!(probe_tracker.is_complete());
+
+		let no_advertised_key = build_bundle(
+			&b,
+			&b_keys.secret,
+			&a,
+			3,
+			vec![vec![
+				accepted_public_key(
+					request.request_identifier,
+					request.signed_tlv_hash,
+					b.public_key,
+				)
+				.unwrap(),
+			]],
+		)
+		.unwrap();
+		assert!(
+			Bundle::parse_public_key_reply(&no_advertised_key, &resolver, Some(b.public_key))
+				.is_err()
+		);
+
+		let mut reply_values = parse_sequence(&reply_bytes).unwrap();
+		assert!(
+			Bundle::parse_public_key_reply(
+				&concatenate(&reply_values[..3]),
+				&resolver,
+				Some(b.public_key)
+			)
+			.is_err()
+		);
+		let header_hash = tith_crypto::hash_tlv(&reply_values[2].encode()).unwrap();
+		let extended_payload = [
+			OwnedTlv::new(types::TLV_HASH, header_hash.as_bytes().to_vec()).unwrap(),
+			accepted_public_key(
+				request.request_identifier,
+				request.signed_tlv_hash,
+				b.public_key,
+			)
+			.unwrap(),
+			OwnedTlv::new(200, Vec::new()).unwrap(),
+		];
+		reply_values[3] = build_signed_tlv(&extended_payload, None, &b_keys.secret).unwrap();
+		assert!(
+			Bundle::parse_public_key_reply(
+				&concatenate(&reply_values),
+				&resolver,
+				Some(b.public_key)
+			)
+			.is_err()
+		);
+
+		let unavailable = build_public_key_unavailable_reply(
+			&b,
+			&b_keys.secret,
+			&a,
+			3,
+			request.request_identifier,
+			request.signed_tlv_hash,
+		)
+		.unwrap();
+		assert!(
+			Bundle::parse_public_key_reply(&unavailable, &resolver, Some(b.public_key)).is_err()
+		);
+
+		let other_keys = SigningKeyPair::from_seed(&[25; 32]).unwrap();
+		let mismatched = build_public_key_reply(
+			&b,
+			&b_keys.secret,
+			&a,
+			3,
+			request.request_identifier,
+			request.signed_tlv_hash,
+			other_keys.public,
+		)
+		.unwrap();
+		assert!(Bundle::parse_public_key_reply(&mismatched, &resolver, None).is_err());
 
 		let request_bytes = build_bundle(
 			&a,
@@ -521,8 +606,8 @@ mod tests {
 		let first = tracker.outstanding[0].clone();
 		let second = tracker.outstanding[1].clone();
 		for response in [
-			accepted(first.request_identifier, first.signed_tlv_hash).unwrap(),
 			accepted(second.request_identifier, second.signed_tlv_hash).unwrap(),
+			accepted(first.request_identifier, first.signed_tlv_hash).unwrap(),
 		] {
 			let bytes = build_bundle(&b, &b_keys.secret, &a, 5, vec![vec![response]]).unwrap();
 			let response = Bundle::parse(&bytes, &resolver).unwrap();

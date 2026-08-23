@@ -40,6 +40,16 @@ mod carrier_tests {
 			ItemKind::PollMessages
 		)
 		.is_err());
+		assert!(simple_request(
+			&request(types::POLL_MESSAGES, 128),
+			ItemKind::PollMessages
+		)
+		.is_ok());
+		let invalid_identifier = container(
+			types::POLL_MESSAGES,
+			&[OwnedTlv::new(types::REQUEST_IDENTIFIER, vec![0x80]).unwrap()],
+		);
+		assert!(simple_request(&invalid_identifier, ItemKind::PollMessages).is_err());
 		let extra = container(
 			types::POLL_MESSAGES,
 			&[
@@ -62,6 +72,13 @@ mod carrier_tests {
 			Some(key)
 		);
 		for malformed in [
+			container(
+				types::ACCEPTED,
+				&[
+					OwnedTlv::new(types::REQUEST_IDENTIFIER, vec![0x80]).unwrap(),
+					OwnedTlv::new(types::TLV_HASH, vec![0; 32]).unwrap(),
+				],
+			),
 			container(
 				types::ACCEPTED,
 				&[OwnedTlv::new(types::REQUEST_IDENTIFIER, vec![1]).unwrap()],

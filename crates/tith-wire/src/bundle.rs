@@ -60,7 +60,6 @@ impl Bundle {
 		if bundle.advertised_origin_key.is_none()
 			|| bundle.payloads.len() != 1
 			|| bundle.payloads[0].data.len() != 2
-			|| bundle.payloads[0].data[0].type_code != types::TLV_HASH
 			|| bundle.payloads[0].data[1].type_code != types::ACCEPTED
 		{
 			return Err(BundleError::Unexpected("PublicKeyRequest reply grammar"));
@@ -765,6 +764,73 @@ mod tests {
 		assert!(matches!(
 			Bundle::parse_public_key_reply(&mismatched, &resolver, None),
 			Err(BundleError::InvalidSignature)
+		));
+	}
+
+	#[test]
+	fn public_key_reply_requires_its_advertised_key_and_exact_payload_shape() {
+		let client_keys = SigningKeyPair::from_seed(&[41; 32]).unwrap();
+		let server_keys = SigningKeyPair::from_seed(&[42; 32]).unwrap();
+		let client = Identity {
+			address: "fidonet#1/41".parse().unwrap(),
+			public_key: client_keys.public,
+		};
+		let server = Identity {
+			address: "fidonet#1/42".parse().unwrap(),
+			public_key: server_keys.public,
+		};
+		let resolver = |address: &Address| {
+			(address == &client.address)
+				.then_some(client.public_key)
+				.or_else(|| (address == &server.address).then_some(server.public_key))
+		};
+		let response_to = hash_tlv(b"reply-shape").unwrap();
+
+		let no_advertised_key = build_bundle(
+			&server,
+			&server_keys.secret,
+			&client,
+			1,
+			vec![vec![
+				crate::item::accepted_public_key(1, response_to, server.public_key).unwrap(),
+			]],
+		)
+		.unwrap();
+		assert!(matches!(
+			Bundle::parse_public_key_reply(&no_advertised_key, &resolver, Some(server.public_key)),
+			Err(BundleError::Unexpected("PublicKeyRequest reply grammar"))
+		));
+
+		let valid = build_public_key_reply(
+			&server,
+			&server_keys.secret,
+			&client,
+			2,
+			1,
+			response_to,
+			server.public_key,
+		)
+		.unwrap();
+		let mut top = parse_sequence(&valid).unwrap();
+		assert!(matches!(
+			Bundle::parse_public_key_reply(
+				&concatenate(&top[..3]),
+				&resolver,
+				Some(server.public_key)
+			),
+			Err(BundleError::Unexpected("PublicKeyRequest reply grammar"))
+		));
+
+		let header_hash = hash_tlv(&top[2].encode()).unwrap();
+		let extended_payload = [
+			assigned(types::TLV_HASH, header_hash.as_bytes().to_vec()),
+			crate::item::accepted_public_key(1, response_to, server.public_key).unwrap(),
+			OwnedTlv::new(200, Vec::new()).unwrap(),
+		];
+		top[3] = build_signed_tlv(&extended_payload, None, &server_keys.secret).unwrap();
+		assert!(matches!(
+			Bundle::parse_public_key_reply(&concatenate(&top), &resolver, Some(server.public_key)),
+			Err(BundleError::Unexpected("PublicKeyRequest reply grammar"))
 		));
 	}
 
