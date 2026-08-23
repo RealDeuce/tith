@@ -1915,4 +1915,222 @@ mod tests {
 			));
 		}
 	}
+
+	#[test]
+	fn item_consumers_cover_each_remaining_negative_boundary() {
+		let keys = SigningKeyPair::from_seed(&[108; 32]).unwrap();
+		let origin: Address = "fidonet#1/108".parse().unwrap();
+		let signed_origin: Address = "fidonet#1/109".parse().unwrap();
+		let destination = Identity {
+			address: "fidonet#1/110".parse().unwrap(),
+			public_key: keys.public,
+		};
+		let provenance = ItemProvenance {
+			origin: origin.clone(),
+			signer: Some(Identity {
+				address: origin.clone(),
+				public_key: keys.public,
+			}),
+		};
+		let data = || MessageData {
+			destination: Some(destination.clone()),
+			timestamp: 1,
+			to_user: "You".to_owned(),
+			from_user: "Me".to_owned(),
+			subject: String::new(),
+			text: "Body\n".to_owned(),
+			area: None,
+			attachments: Vec::new(),
+			legacy_attributes: None,
+			timestamp_offset: None,
+			tear_line: None,
+			origin_line: None,
+			message_id: None,
+			reply_to: None,
+			original_character_set: None,
+			additional_kludge_lines: Vec::new(),
+		};
+		let suffix = MessageSuffix {
+			existing_vias: &[],
+			local_via: provenance.signer.as_ref().unwrap(),
+			request_identifier: 1,
+			via_timestamp: 1,
+			software: "test",
+			seen_by: &[],
+		};
+		for invalid in [
+			MessageData {
+				destination: None,
+				..data()
+			},
+			MessageData {
+				area: Some(area("AREA")),
+				..data()
+			},
+		] {
+			assert!(matches!(
+				build_retained_message(
+					&invalid,
+					&provenance,
+					Signature::from_bytes([0; SIGNATURE_BYTES]),
+					&suffix,
+				),
+				Err(BundleError::Unexpected("Message Destination/Area combination"))
+			));
+		}
+		let mut bad_attachment = data();
+		bad_attachment.attachments.push(AttachmentData {
+			filename: Some("file.txt".to_owned()),
+			timestamp: None,
+			contents: Vec::new(),
+			short_description: Some("bad\n".to_owned()),
+			long_description_lines: Vec::new(),
+			tear_line: None,
+			magic_word: None,
+			replaces: None,
+		});
+		assert!(build_originated_message(
+			&bad_attachment,
+			&provenance,
+			&keys.secret,
+			1,
+			1,
+			"test",
+			&[],
+		)
+		.is_err());
+
+		let origin_value = OwnedTlv::new(types::ORIGIN, origin.to_string().into_bytes()).unwrap();
+		let via = via_value(provenance.signer.as_ref().unwrap(), 1, "test");
+		let message_prefix = || {
+			vec![
+				origin_value.clone(),
+				OwnedTlv::new(
+					types::DESTINATION,
+					destination.address.to_string().into_bytes(),
+				)
+				.unwrap(),
+				OwnedTlv::new(types::TIMESTAMP, vec![1]).unwrap(),
+				OwnedTlv::new(types::TO_USER_NAME, Vec::new()).unwrap(),
+				OwnedTlv::new(types::FROM_USER_NAME, Vec::new()).unwrap(),
+				OwnedTlv::new(types::SUBJECT, Vec::new()).unwrap(),
+				OwnedTlv::new(types::MESSAGE_TEXT, Vec::new()).unwrap(),
+			]
+		};
+		let resolver = |address: &Address| (address != &origin).then_some(keys.public);
+
+		let mut invalid_signed_origin = vec![
+			origin_value.clone(),
+			OwnedTlv::new(types::SIGNED_ORIGIN, signed_origin.to_string().into_bytes()).unwrap(),
+		];
+		invalid_signed_origin.extend(message_prefix().into_iter().skip(1));
+		invalid_signed_origin.extend([
+			OwnedTlv::new(types::SIGNATURE, vec![0; SIGNATURE_BYTES]).unwrap(),
+			OwnedTlv::new(types::REQUEST_IDENTIFIER, vec![1]).unwrap(),
+			via.clone(),
+		]);
+		let validated = validate_message(
+			&container(types::MESSAGE, &invalid_signed_origin),
+			&resolver,
+		)
+		.unwrap();
+		assert_eq!(
+			validated.authentication,
+			Some(ItemAuthentication::SignedOriginInvalid)
+		);
+
+		let malformed_attachment = container(
+			types::FILE,
+			&[
+				OwnedTlv::new(types::CONTENTS, Vec::new()).unwrap(),
+				OwnedTlv::new(types::SHORT_DESCRIPTION, b"bad\n".to_vec()).unwrap(),
+			],
+		);
+		let malformed_reply = container(
+			types::REPLY_TO,
+			&[OwnedTlv::new(types::TIMESTAMP, vec![1]).unwrap()],
+		);
+		for extra in [malformed_attachment, malformed_reply] {
+			let mut children = message_prefix();
+			children.push(extra);
+			children.extend([
+				OwnedTlv::new(types::REQUEST_IDENTIFIER, vec![1]).unwrap(),
+				via.clone(),
+			]);
+			assert!(validate_message(&container(types::MESSAGE, &children), &resolver).is_err());
+		}
+
+		let mut malformed_message_id = message_prefix();
+		malformed_message_id.extend([
+			OwnedTlv::new(types::REQUEST_IDENTIFIER, vec![0x80]).unwrap(),
+			via.clone(),
+		]);
+		let malformed_message = container(types::MESSAGE, &malformed_message_id);
+		assert!(validate_message(&malformed_message, &resolver).is_err());
+		assert!(read_message(&malformed_message, &resolver).is_err());
+
+		let mut no_via = message_prefix();
+		no_via.push(OwnedTlv::new(types::REQUEST_IDENTIFIER, vec![1]).unwrap());
+		let no_via = container(types::MESSAGE, &no_via);
+		assert!(read_message(&no_via, &resolver).is_err());
+
+		let mut unsigned = message_prefix();
+		unsigned.extend([
+			OwnedTlv::new(types::REQUEST_IDENTIFIER, vec![1]).unwrap(),
+			via,
+		]);
+		assert!(read_message(&container(types::MESSAGE, &unsigned), &resolver)
+			.unwrap()
+			.signing
+			.signature
+			.is_none());
+
+		let malformed_file = container(
+			types::FILE,
+			&[
+				OwnedTlv::new(types::CONTENTS, Vec::new()).unwrap(),
+				origin_value.clone(),
+				OwnedTlv::new(types::TEAR_LINE, vec![0xff]).unwrap(),
+				OwnedTlv::new(types::REQUEST_IDENTIFIER, vec![0x80]).unwrap(),
+			],
+		);
+		assert!(validate_file(&malformed_file, true, &resolver).is_err());
+		assert!(read_standalone_file(&malformed_file).is_err());
+		let malformed_file_identifier = container(
+			types::FILE,
+			&[
+				OwnedTlv::new(types::CONTENTS, Vec::new()).unwrap(),
+				origin_value.clone(),
+				OwnedTlv::new(types::REQUEST_IDENTIFIER, vec![0x80]).unwrap(),
+			],
+		);
+		assert!(validate_file(&malformed_file_identifier, true, &resolver).is_err());
+		assert!(read_standalone_file(&malformed_file_identifier).is_err());
+
+		let malformed_request = container(
+			types::FILE_REQUEST,
+			&[
+				OwnedTlv::new(types::FILENAME, b"file.txt".to_vec()).unwrap(),
+				OwnedTlv::new(types::REQUEST_IDENTIFIER, vec![0x80]).unwrap(),
+			],
+		);
+		assert!(validate_file_request(&malformed_request).is_err());
+		assert!(read_file_request(&malformed_request).is_err());
+
+		let valid_file = container(
+			types::FILE,
+			&[
+				OwnedTlv::new(types::CONTENTS, Vec::new()).unwrap(),
+				origin_value,
+				OwnedTlv::new(types::REQUEST_IDENTIFIER, vec![1]).unwrap(),
+			],
+		);
+		assert!(MessageModel::parse(&valid_file, &resolver).is_err());
+		assert!(read_message(&valid_file, &resolver).is_err());
+		assert!(ItemModel::parse(
+			&OwnedTlv::new(types::POLL_MESSAGES, Vec::new()).unwrap(),
+			&resolver,
+		)
+		.is_err());
+	}
 }

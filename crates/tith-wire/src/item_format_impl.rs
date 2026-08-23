@@ -214,11 +214,12 @@ pub fn build_retained_message(
 		.ok_or(BundleError::Missing("Message signing identity"))?;
 	validate_originated_message_data(data)?;
 	let mut signed = message_signed_children(data, provenance)?;
-	if !verify_tlv(
+	let authenticated = verify_tlv(
 		&concatenate(&signed),
 		&signature,
 		&effective_signer.public_key,
-	)? {
+	)?;
+	if !authenticated {
 		return Err(BundleError::Unexpected(
 			"retained Message Signature does not verify",
 		));
@@ -232,9 +233,7 @@ pub fn build_retained_message(
 
 fn validate_originated_message_data(data: &MessageData) -> Result<(), BundleError> {
 	if data.destination.is_some() == data.area.is_some() {
-		return Err(BundleError::Unexpected(
-			"Message Destination/Area combination",
-		));
+		return Err(BundleError::Unexpected("Message Destination/Area combination"));
 	}
 	// TSP-0016 section 4 types 101 and 102: a zero conveys nothing that absence
 	// does not, so absence is the only representation of it. TSP-0003 section 4
