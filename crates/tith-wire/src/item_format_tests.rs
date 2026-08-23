@@ -2083,15 +2083,22 @@ mod tests {
 			OwnedTlv::new(types::REQUEST_IDENTIFIER, vec![1]).unwrap(),
 			via.clone(),
 		]);
-		let validated = validate_message(
-			&container(types::MESSAGE, &invalid_signed_origin),
-			&resolver,
-		)
-		.unwrap();
+		let invalid_signed_origin = container(types::MESSAGE, &invalid_signed_origin);
+		let validated = validate_message(&invalid_signed_origin, &resolver).unwrap();
 		assert_eq!(
 			validated.authentication,
 			Some(ItemAuthentication::SignedOriginInvalid)
 		);
+		assert!(read_message(&invalid_signed_origin, &resolver).is_ok());
+		let malformed_signed_origin_key = container(
+			types::MESSAGE,
+			&[
+				origin_value.clone(),
+				OwnedTlv::new(types::SIGNED_ORIGIN, b"p2p#-1".to_vec()).unwrap(),
+				OwnedTlv::new(types::PUBLIC_KEY, vec![0]).unwrap(),
+			],
+		);
+		assert!(read_message(&malformed_signed_origin_key, &resolver).is_err());
 
 		let malformed_attachment = container(
 			types::FILE,

@@ -1791,7 +1791,7 @@ fn read_signed_origin(cursor: &mut Cursor<'_>) -> Result<SignedOriginParts, Bund
 	let mut encoding = value.encode();
 	let key = conditional_public_key(cursor, &address)?;
 	if let Some(key) = key {
-		key.write_to(&mut encoding)?;
+		encoding.extend_from_slice(&key.encode());
 	}
 	Ok(SignedOriginParts {
 		address: Some(address),
