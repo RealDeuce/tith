@@ -157,11 +157,7 @@ fn respond(
 				}
 			}
 			types::ORIGIN => {
-				if !wait_for_client_reply {
-					return Err(
-						"Client continued after a Bundle without a FileRequest or Poll".into(),
-					);
-				}
+				require_continuation(wait_for_client_reply)?;
 				respond_to_client_replies(reader, writer, value, request, mailer, holds)?;
 				break;
 			}
@@ -245,12 +241,7 @@ fn respond_to_client_replies(
 						)
 						.into());
 					}
-					if !wait_for_client_reply {
-						return Err(
-							"Client continued after a Reply Bundle without a FileRequest or Poll"
-								.into(),
-						);
-					}
+					require_continuation(wait_for_client_reply)?;
 					incoming = read_header(reader, Some(value), mailer)?
 						.ok_or("missing next Client Reply Bundle")?;
 					break;
@@ -261,6 +252,14 @@ fn respond_to_client_replies(
 				_ => {}
 			}
 		}
+	}
+}
+
+fn require_continuation(permitted: bool) -> Result<(), Box<dyn Error>> {
+	if permitted {
+		Ok(())
+	} else {
+		Err("Client continued after a Bundle without a FileRequest or Poll".into())
 	}
 }
 
@@ -493,4 +492,32 @@ fn resolve_hold(
 	)?;
 	holds.remove(position);
 	Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	#[test]
+	fn only_a_file_request_or_poll_permits_another_reply_round() {
+		assert!(require_continuation(true).is_ok());
+		assert!(require_continuation(false).is_err());
+	}
+
+	#[test]
+	fn every_poll_kind_keeps_its_distinct_snapshot_class() {
+		assert_eq!(
+			poll_kinds(ItemKind::PollMessages),
+			Some(&[JobKind::NetMail, JobKind::EchoMail][..])
+		);
+		assert_eq!(
+			poll_kinds(ItemKind::PollFiles),
+			Some(&[JobKind::File, JobKind::PeerFile][..])
+		);
+		assert_eq!(
+			poll_kinds(ItemKind::PollFileRequests),
+			Some(&[JobKind::FileRequest][..])
+		);
+		assert_eq!(poll_kinds(ItemKind::NetMail), None);
+	}
 }

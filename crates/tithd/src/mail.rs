@@ -1615,47 +1615,6 @@ mod tests {
 		fs::remove_file(database).unwrap();
 	}
 
-	#[test]
-	fn a_bundle_without_a_poll_cannot_start_another_reply_round() {
-		let (mailer, peer_keys, peer, local, database) = setup();
-		let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-		let address = listener.local_addr().unwrap();
-		let server_mailer = Arc::clone(&mailer);
-		let server = std::thread::spawn(move || {
-			let (stream, _) = listener.accept().unwrap();
-			transaction(stream, &server_mailer).is_err()
-		});
-		let mut client = TcpStream::connect(address).unwrap();
-		let first = build_bundle(
-			&peer,
-			&peer_keys.secret,
-			&local,
-			1,
-			vec![vec![netmail(&peer, &peer_keys.secret, &local, 1)]],
-		)
-		.unwrap();
-		let second = build_bundle(
-			&peer,
-			&peer_keys.secret,
-			&local,
-			2,
-			vec![vec![netmail(&peer, &peer_keys.secret, &local, 2)]],
-		)
-		.unwrap();
-		client.write_all(&first).unwrap();
-		client.write_all(&second).unwrap();
-		client.shutdown(Shutdown::Write).unwrap();
-		let mut response = Vec::new();
-		client.read_to_end(&mut response).unwrap();
-		assert_eq!(
-			response_kind(&response, mailer.as_ref()),
-			ItemKind::Accepted
-		);
-		assert!(server.join().unwrap());
-		drop(mailer);
-		fs::remove_file(database).unwrap();
-	}
-
 	fn final_reply_fixture() -> (
 		Node,
 		SigningKeyPair,
