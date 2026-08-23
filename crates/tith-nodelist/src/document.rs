@@ -731,18 +731,7 @@ impl<W: Write> NodelistWriter<W> {
 	}
 
 	pub fn write_comment(&mut self, comment: &Comment) -> Result<(), NodelistError> {
-		if !comment
-			.interests
-			.bytes()
-			.all(|byte| byte.is_ascii_alphabetic())
-			|| comment
-				.text
-				.bytes()
-				.next()
-				.is_some_and(|byte| byte.is_ascii_alphabetic())
-		{
-			return Err(fail(self.line + 1, NodelistErrorKind::InvalidComment));
-		}
+		validate_comment(comment, self.line + 1)?;
 		let line = format!(";{}{}", comment.interests, comment.text);
 		self.line += 1;
 		self.validator.parse_line(self.line, &line)?;
@@ -772,11 +761,7 @@ impl<W: Write> NodelistWriter<W> {
 		);
 		self.line += 1;
 		let entry = self.validator.parse_data_line(self.line, &line)?;
-		if let PublicationSource::FirstPublicationFromAnonymousApplication(application_key) = source
-			&& entry.tith.as_ref().map(|service| service.public_key) != Some(application_key)
-		{
-			return Err(fail(self.line, NodelistErrorKind::ApplicationKeyMismatch));
-		}
+		validate_publication_source(&entry, source, self.line)?;
 		self.writer
 			.write_all(format!("{line}\n").as_bytes())
 			.map_err(|_| fail(self.line, NodelistErrorKind::Io))?;
@@ -784,14 +769,48 @@ impl<W: Write> NodelistWriter<W> {
 	}
 
 	pub fn finish(mut self) -> Result<W, NodelistError> {
-		if self.validator.requires_data && self.validator.first_data {
-			return Err(fail(self.line + 1, NodelistErrorKind::InvalidHierarchy));
-		}
+		validate_writer_finish(&self.validator, self.line + 1)?;
 		self.writer
 			.flush()
 			.map_err(|_| fail(self.line, NodelistErrorKind::Io))?;
 		Ok(self.writer)
 	}
+}
+
+fn validate_comment(comment: &Comment, line: usize) -> Result<(), NodelistError> {
+	if !comment
+		.interests
+		.bytes()
+		.all(|byte| byte.is_ascii_alphabetic())
+		|| comment
+			.text
+			.bytes()
+			.next()
+			.is_some_and(|byte| byte.is_ascii_alphabetic())
+	{
+		return Err(fail(line, NodelistErrorKind::InvalidComment));
+	}
+	Ok(())
+}
+
+fn validate_publication_source(
+	entry: &Entry,
+	source: PublicationSource,
+	line: usize,
+) -> Result<(), NodelistError> {
+	if let PublicationSource::FirstPublicationFromAnonymousApplication(application_key) = source
+		&& entry.tith.as_ref().map(|service| service.public_key) != Some(application_key)
+	{
+		return Err(fail(line, NodelistErrorKind::ApplicationKeyMismatch));
+	}
+	Ok(())
+}
+
+fn validate_writer_finish(validator: &Validator, line: usize) -> Result<(), NodelistError> {
+	if validator.requires_data && validator.first_data {
+		return Err(fail(line, NodelistErrorKind::InvalidHierarchy));
+	}
+	Ok(())
 }
 
 fn keyword_text(keyword: Keyword) -> &'static str {
