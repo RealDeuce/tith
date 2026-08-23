@@ -11,8 +11,10 @@ on:
       - "rust-toolchain.toml"
       - ".github/workflows/rust.yml"
       - "crates/tith-exchange/src/lib.rs"
+      - "crates/tith-exchange/src/error.rs"
       - "crates/tith-exchange/src/receive.rs"
       - "crates/tith-exchange/src/response.rs"
+      - "crates/tith-exchange/src/session.rs"
       - "crates/tithd/src/client_exchange.rs"
       - "crates/tithd/src/deliver.rs"
       - "crates/tithd/src/framing.rs"
@@ -60,9 +62,10 @@ jobs:
           sha256sum tts-0006-coverage.json
           python3 qualification/check_source_line_coverage.py \
             tts-0006-coverage.json \
-            crates/tith-exchange/src/lib.rs \
+            crates/tith-exchange/src/error.rs \
             crates/tith-exchange/src/receive.rs \
             crates/tith-exchange/src/response.rs \
+            crates/tith-exchange/src/session.rs \
             crates/tithd/src/client_exchange.rs \
             crates/tithd/src/framing.rs \
             crates/tithd/src/public_key_response.rs \

@@ -2,250 +2,23 @@
 
 #![forbid(unsafe_code)]
 
-use std::fmt;
-use std::io::{self, Read, Write};
-
-use tith_wire::bundle::{Bundle, BundleError};
-use tith_wire::item::PayloadError;
-
+mod error;
 mod receive;
 mod response;
+mod session;
+pub use error::*;
 pub use receive::*;
 pub use response::*;
-
-pub trait ExchangeIo: Read + Write {
-	fn shutdown_write(&mut self) -> io::Result<()>;
-}
-
-#[derive(Debug)]
-pub enum ExchangeError {
-	Crypto(tith_crypto::CryptoError),
-	Payload(PayloadError),
-	Bundle(BundleError),
-	WrongDestination,
-	WrongReplyOrigin,
-	WrongReplyDestination,
-	UnexpectedResponse,
-	UnexpectedRequest,
-	DuplicateResponse,
-	DuplicateRequestIdentifier,
-	InvalidRequestIdentifier,
-	InvalidResponse,
-	UnauthenticatedResponse,
-	UnexpectedPayloadValue,
-	IncompleteResponse { expected: usize, received: usize },
-	Io(io::Error),
-}
-
-impl fmt::Display for ExchangeError {
-	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-		match self {
-			Self::Crypto(error) => write!(f, "cryptographic error: {error}"),
-			Self::Payload(error) => write!(f, "invalid payload: {error}"),
-			Self::Bundle(error) => write!(f, "invalid bundle: {error}"),
-			Self::WrongDestination => f.write_str("Bundle has the wrong Destination"),
-			Self::WrongReplyOrigin => f.write_str("Reply Bundle has the wrong Origin"),
-			Self::WrongReplyDestination => f.write_str("Reply Bundle has the wrong Destination"),
-			Self::UnexpectedResponse => {
-				f.write_str("response does not identify an outstanding request")
-			}
-			Self::UnexpectedRequest => {
-				f.write_str("peer sent a request after the local write side was closed")
-			}
-			Self::DuplicateResponse => f.write_str("request received more than one response"),
-			Self::DuplicateRequestIdentifier => {
-				f.write_str("payload contains duplicate RequestIdentifiers")
-			}
-			Self::InvalidRequestIdentifier => f.write_str("request has no valid RequestIdentifier"),
-			Self::InvalidResponse => f.write_str("payload contains an invalid response"),
-			Self::UnauthenticatedResponse => {
-				f.write_str("unauthenticated SignedData contains a response")
-			}
-			Self::UnexpectedPayloadValue => {
-				f.write_str("payload contains an unexpected defined value")
-			}
-			Self::IncompleteResponse { expected, received } => {
-				write!(f, "response ended after {received} of {expected} requests")
-			}
-			Self::Io(error) => write!(f, "exchange I/O error: {error}"),
-		}
-	}
-}
-
-impl std::error::Error for ExchangeError {}
-
-impl From<tith_crypto::CryptoError> for ExchangeError {
-	fn from(value: tith_crypto::CryptoError) -> Self {
-		Self::Crypto(value)
-	}
-}
-
-impl From<PayloadError> for ExchangeError {
-	fn from(value: PayloadError) -> Self {
-		Self::Payload(value)
-	}
-}
-
-impl From<BundleError> for ExchangeError {
-	fn from(value: BundleError) -> Self {
-		Self::Bundle(value)
-	}
-}
-
-impl From<io::Error> for ExchangeError {
-	fn from(value: io::Error) -> Self {
-		Self::Io(value)
-	}
-}
-
-pub fn send_bundle(
-	io: &mut impl ExchangeIo,
-	encoded: &[u8],
-	keep_write_open: bool,
-) -> Result<(), ExchangeError> {
-	io.write_all(encoded)?;
-	io.flush()?;
-	if !keep_write_open {
-		io.shutdown_write()?;
-	}
-	Ok(())
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum SessionState {
-	Ready,
-	AwaitingReplyHeader,
-	AwaitingResponses,
-	MustSendReply,
-	Closing,
-	Complete,
-	Failed,
-}
-
-#[derive(Clone, Debug)]
-pub struct ClientSession {
-	state: SessionState,
-	tracker: ResponseTracker,
-}
-
-impl ClientSession {
-	#[must_use]
-	pub fn new(tracker: ResponseTracker) -> Self {
-		Self {
-			state: SessionState::Ready,
-			tracker,
-		}
-	}
-
-	#[must_use]
-	pub const fn state(&self) -> SessionState {
-		self.state
-	}
-
-	/// Whether this exchange owes the peer a final Reply Bundle.
-	///
-	/// TTS-0006 section 4 keeps the client's write side open only for a Bundle
-	/// which carries a `FileRequest` or a Poll, because only those get values back
-	/// which must themselves be responded to.
-	#[must_use]
-	pub fn requires_return_bundle(&self) -> bool {
-		self.tracker.requires_return_bundle()
-	}
-
-	/// The responses received so far, in request order.
-	#[must_use]
-	pub fn responses(&self) -> &[CompletedResponse] {
-		self.tracker.completed()
-	}
-
-	/// The requests sent in this round, in transmission order.
-	#[must_use]
-	pub fn requests(&self) -> &[OutstandingRequest] {
-		self.tracker.outstanding()
-	}
-
-	pub fn initial_sent(&mut self) -> Result<(), ExchangeError> {
-		if self.state != SessionState::Ready {
-			self.state = SessionState::Failed;
-			return Err(ExchangeError::UnexpectedResponse);
-		}
-		self.state = SessionState::AwaitingReplyHeader;
-		Ok(())
-	}
-
-	/// Validates the transport identities before any Reply payload is acted on.
-	pub fn reply_header_received(&mut self, reply: &Bundle) -> Result<(), ExchangeError> {
-		if self.state != SessionState::AwaitingReplyHeader {
-			self.state = SessionState::Failed;
-			return Err(ExchangeError::UnexpectedResponse);
-		}
-		if let Err(error) = self.tracker.validate_reply_identity(reply) {
-			self.state = SessionState::Failed;
-			return Err(error);
-		}
-		if self.tracker.is_complete() {
-			self.state = SessionState::Closing;
-		} else {
-			self.state = SessionState::AwaitingResponses;
-		}
-		Ok(())
-	}
-
-	/// Records the already authenticated responses in one received `SignedTLV`.
-	pub fn responses_received(
-		&mut self,
-		responses: &[tith_wire::item::ValidatedItem],
-	) -> Result<(), ExchangeError> {
-		if self.state != SessionState::AwaitingResponses {
-			self.state = SessionState::Failed;
-			return Err(ExchangeError::UnexpectedResponse);
-		}
-		if let Err(error) = self.tracker.observe_responses(responses) {
-			self.state = SessionState::Failed;
-			return Err(error);
-		}
-		if self.tracker.is_complete() {
-			self.state = if self.tracker.requires_return_bundle() {
-				SessionState::MustSendReply
-			} else {
-				SessionState::Closing
-			};
-		}
-		Ok(())
-	}
-
-	pub fn final_reply_sent(&mut self) -> Result<(), ExchangeError> {
-		if self.state != SessionState::MustSendReply {
-			self.state = SessionState::Failed;
-			return Err(ExchangeError::UnexpectedResponse);
-		}
-		self.state = SessionState::Closing;
-		Ok(())
-	}
-
-	pub fn closed(&mut self) -> Result<(), ExchangeError> {
-		if self.state == SessionState::Closing && self.tracker.is_complete() {
-			self.state = SessionState::Complete;
-			Ok(())
-		} else {
-			self.state = SessionState::Failed;
-			if self.tracker.is_complete() {
-				Err(ExchangeError::UnexpectedResponse)
-			} else {
-				self.tracker.require_complete()
-			}
-		}
-	}
-}
+pub use session::*;
 
 #[cfg(test)]
 mod tests {
-	use std::io::Cursor;
+	use std::io::{self, Cursor, Read, Write};
 
 	use tith_crypto::SigningKeyPair;
 	use tith_wire::address::Address;
 	use tith_wire::bundle::{
-		Identity, build_bundle, build_public_key_probe, build_public_key_reply,
+		Bundle, Identity, build_bundle, build_public_key_probe, build_public_key_reply,
 		build_public_key_unavailable_reply, build_signed_tlv,
 	};
 	use tith_wire::integer::encode_u64;
@@ -452,6 +225,16 @@ mod tests {
 				received: 0
 			})
 		));
+
+		let mut invalid_response = ClientSession::new(tracker.clone());
+		invalid_response.initial_sent().unwrap();
+		invalid_response.reply_header_received(&reply).unwrap();
+		let request_items = validate_payload(&request.payloads[0], &resolver).unwrap();
+		assert!(matches!(
+			invalid_response.responses_received(&request_items),
+			Err(ExchangeError::InvalidResponse)
+		));
+		assert_eq!(invalid_response.state(), SessionState::Failed);
 
 		let mut session = ClientSession::new(tracker);
 		assert!(session.requires_return_bundle());

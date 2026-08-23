@@ -187,17 +187,26 @@ impl Outbound {
 			count += 1;
 			answers.push(match request {
 				ReceivedRequest::Valid(item) => acceptance.dispatch(item, response_to, peer)?,
-				ReceivedRequest::DataError { request_identifier } => rejected(
-					*request_identifier,
-					response_to,
-					None,
-					RejectionReason::Permanent,
-					"request has a data error",
-				)?,
+				ReceivedRequest::DataError { request_identifier } => {
+					data_error_response(*request_identifier, response_to)?
+				}
 			});
 		}
 		Ok(count)
 	}
+}
+
+fn data_error_response(
+	request_identifier: u64,
+	response_to: TlvHash,
+) -> Result<OwnedTlv, BundleError> {
+	rejected(
+		request_identifier,
+		response_to,
+		None,
+		RejectionReason::Permanent,
+		"request has a data error",
+	)
 }
 
 fn require_open_for_requests(
@@ -284,6 +293,10 @@ fn normalize_shutdown(result: io::Result<()>) -> io::Result<()> {
 
 #[cfg(test)]
 mod tests {
+	use std::net::{TcpListener, TcpStream};
+
+	use tith_wire::item::{ItemKind, validate_item};
+
 	use super::*;
 
 	#[test]
@@ -319,6 +332,39 @@ mod tests {
 			Err(tith_exchange::ExchangeError::UnexpectedRequest)
 		));
 		assert!(require_open_for_requests(true, &[request]).is_ok());
+	}
+
+	#[test]
+	fn malformed_returned_data_gets_a_permanent_rejection() {
+		let response_to = TlvHash::from_bytes([4; 32]);
+		let encoded = data_error_response(7, response_to).unwrap();
+		let item = validate_item(&encoded, &|_: &tith_wire::address::Address| None)
+			.unwrap()
+			.unwrap();
+		assert_eq!(item.kind, ItemKind::Rejected);
+		assert_eq!(item.request_identifier, 7);
+		assert_eq!(item.response_to, Some(response_to));
+		assert_eq!(item.rejection.unwrap().reason, RejectionReason::Permanent);
+	}
+
+	#[test]
+	fn stream_binding_reads_and_writes_tcp_bytes() {
+		let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+		let address = listener.local_addr().unwrap();
+		let server = std::thread::spawn(move || {
+			let (mut stream, _) = listener.accept().unwrap();
+			let mut input = [0; 4];
+			stream.read_exact(&mut input).unwrap();
+			assert_eq!(&input, b"ping");
+			stream.write_all(b"pong").unwrap();
+		});
+		let mut io = StreamIo(TcpStream::connect(address).unwrap());
+		io.write_all(b"ping").unwrap();
+		io.flush().unwrap();
+		let mut output = [0; 4];
+		io.read_exact(&mut output).unwrap();
+		assert_eq!(&output, b"pong");
+		server.join().unwrap();
 	}
 
 	#[test]

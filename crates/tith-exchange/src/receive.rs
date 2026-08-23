@@ -123,9 +123,7 @@ pub fn receive_payload(
 				},
 			});
 		} else if matches!(item.type_code, types::ACCEPTED | types::REJECTED) {
-			responses.push(
-				validate_item(item, resolver)?.expect("response types always validate as items"),
-			);
+			responses.extend(validate_item(item, resolver)?);
 		} else if types::is_defined(item.type_code) {
 			return Err(ExchangeError::UnexpectedPayloadValue);
 		}
