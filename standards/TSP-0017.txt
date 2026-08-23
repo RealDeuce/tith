@@ -1,0 +1,201 @@
+**********************************************************************
+TITH                                              THIS ISN'T THAT HARD
+**********************************************************************
+
+Publication:  TSP‑0017
+Revision:     1
+Title:        Legacy Email Receipt Claims
+Author(s):    FTSC Members, Administrator, Honoured Guests and
+              Stephen Hurd
+Date:         2026‑08‑23
+═════════════════════════════════════════════════════════════════════
+
+Status of this document
+───────────────────────
+
+  This document is a TITH Standard Proposal (TSP) — it documents a
+  proposed standard and solicits discussion.  Until promoted to a TTS,
+  this is experimental only and does not describe required behaviour.
+
+  This document is released to the public domain, and may be used,
+  copied or modified for any purpose whatever.
+
+Abstract
+────────
+
+  This document defines the operational obligations asserted by the
+  TTS‑5001 ITX and ISE nodelist flags.  It requires their receipt
+  facilities to be enabled, sets the maximum receipt delay, and defines
+  the relationship between an ISE occurrence and its advertised
+  encodings.  It does not redefine either email tunnelling method or
+  put service operation back into the flag‑list grammar.
+
+Contents
+────────
+
+  1. Introduction
+  2. Applicability
+  3. Common Receipt Obligation
+  4. TransX
+  5. SEAT
+  6. Scope of the Claim
+  7. Feedback and Discussion
+
+  A. References
+  B. History
+
+═════════════════════════════════════════════════════════════════════
+
+
+1. Introduction
+───────────────
+
+  TTS‑5001 defines a flag as a canonical assertion and deliberately
+  leaves operation of the facility to another standard.  Its ITX and
+  ISE flags retain the FTS‑5001.006 meanings “TransX encoding with
+  return receipts” and “SEAT tunnelling with return receipts”.  The
+  older registry also required those receipts to be enabled and sent
+  within 24 hours, and recommended accompanying ISE with an advertised
+  transfer encoding.
+
+  Those are service requirements, not properties of a comma‑separated
+  flag list.  This proposal owns them without changing the spelling,
+  order, address resolution, or interpretation of any TTS‑5001 flag.
+
+
+2. Applicability
+────────────────
+
+  This document applies to every email endpoint at which a system
+  advertises ITX or ISE through a TTS‑5001 flag occurrence.  TTS‑5001
+  resolves an occurrence with no explicit address through addressed
+  IEM occurrences.  The obligations here apply independently at every
+  resulting effective address and at an explicitly addressed
+  occurrence.
+
+  A bare occurrence for which TTS‑5001 supplies no effective address
+  remains a capability assertion but supplies no reachable endpoint.
+  It does not make some unadvertised email address the default.
+
+  This document does not define SMTP, Internet mail addressing,
+  TransX encoding, or SEAT encoding.  It constrains the receipt
+  behavior of a system which has already selected and implemented the
+  advertised method.
+
+
+3. Common Receipt Obligation
+────────────────────────────
+
+  A system advertising ITX or ISE MUST enable that method's positive
+  receipt facility at every applicable endpoint.  It MUST
+  automatically submit the method‑defined positive receipt no later
+  than 24 elapsed hours after it has received a complete valid file.
+
+  A complete valid file is one for which every part required by the
+  method has arrived, the file has been reconstructed, and every
+  integrity check required by that method has succeeded.  Merely
+  receiving an email message, one part of a multipart file, or bytes
+  which fail a required integrity check does not start the 24‑hour
+  period.
+
+  Submission means handing the receipt to the configured outbound
+  email service for the sender address identified by the method.  This
+  proposal does not claim that Internet email delivers it within that
+  period.  A receipt acknowledges the identified file or file part; an
+  SMTP delivery notification or human reply which cannot be correlated
+  by the sending implementation is not that receipt.
+
+  A negative receipt, retransmission, duplicate, cancellation, or
+  malformed transfer remains subject to the selected method.  None is
+  a substitute for the required positive receipt after successful
+  receipt.
+
+
+4. TransX
+───────────
+
+  ITX selects TransX encoding and its acknowledgment facility.  A
+  positive receipt under section 3 is the TransX acknowledgment which
+  causes the paired sending implementation to record successful
+  delivery of the identified file.
+
+  FSP‑1012.003 names TransX as an email method with optional
+  acknowledgment messages but does not assign one interoperable
+  transfer or acknowledgment grammar.  This proposal does not invent a
+  second TransX representation.  Conformance is therefore assessed
+  using the paired TransX profile selected by the endpoints; that
+  profile does not become an implicit TITH standard.
+
+
+5. SEAT
+────────
+
+  ISE selects the SEAT protocol in FTS‑1025.001 with its level‑two
+  receipt facility enabled.  For each successfully decoded segment,
+  the positive receipt is:
+
+    Ftn-Receipt: <Ftn-Seg-Id> Ack
+
+  The field names, identifier, case handling, grouping of receipts,
+  and email representation are exactly those of FTS‑1025.001.  Every
+  segment of a complete valid file MUST have its positive receipt
+  submitted by the section 3 deadline.  A receipt MAY be submitted as
+  soon as its segment has been validated.
+
+  For every effective email address advertised by ISE, the same flag
+  list SHOULD contain an IUC or IMI occurrence which TTS‑5001 resolves
+  to that address.  It MAY contain both.  A method flag which resolves
+  only to another address does not satisfy this recommendation.
+
+
+6. Scope of the Claim
+─────────────────────
+
+  ITX or ISE asserts the section 3 behavior for as long as the flag is
+  published.  A system whose corresponding receiver or automatic
+  positive‑receipt path is disabled does not satisfy that assertion.
+
+  IUC and IMI by themselves do not assert a receipt service.  IEM,
+  EVY, EMA, and the Internet protocol flags likewise gain no receipt
+  requirement from this document.  This proposal defines no receipt
+  obligation for a temporary transport failure or a transfer which
+  never became a complete valid file.
+
+
+7. Feedback and Discussion
+───────────────────────────
+
+  The nodelist tells a sender which method and address a system claims.
+  This proposal tells the claimant what it must do after successful
+  receipt.  Keeping the two concerns separate lets TTS‑5001 remain a
+  stable registry and permits a receipt implementation to be tested
+  without treating flag parsing as service operation.
+
+  TransX remains less completely specified than SEAT.  That is an
+  interoperability limitation of the named legacy method, not
+  permission for TTS‑5001 to define an implementation by implication.
+
+
+A. References
+─────────────
+
+  [FSP‑1012.003] Revision 3, “Integration of IP-Nodes in the
+  nodelist”, FTSC, 1999‑06‑27.
+
+  [FTS‑1025.001] Revision 1, “Simple E-Mail Attach Transport
+  (S.E.A.T.)”, FTSC, 2004‑05‑15.
+
+  [FTS‑5001.006] Revision 6, “Nodelist flags and userflags”, FTSC,
+  2017‑08‑30.
+
+  [TTS‑5001] “Nodelist Flags”, TITH, 2026‑08‑23.
+
+
+B. History
+──────────
+
+   Rev.1, 2026‑08‑23: Initial Release.  Moved the ITX and ISE receipt
+   obligations and ISE encoding‑flag recommendation out of the
+   nodelist flag registry.
+
+**********************************************************************

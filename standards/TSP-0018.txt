@@ -1,0 +1,218 @@
+**********************************************************************
+TITH                                              THIS ISN'T THAT HARD
+**********************************************************************
+
+Publication:  TSP‑0018
+Revision:     1
+Title:        Legacy PING and TRACE Diagnostics
+Author(s):    FTSC Members, Administrator, Honoured Guests and
+              Stephen Hurd
+Date:         2026‑08‑23
+═════════════════════════════════════════════════════════════════════
+
+Status of this document
+───────────────────────
+
+  This document is a TITH Standard Proposal (TSP) — it documents a
+  proposed standard and solicits discussion.  Until promoted to a TTS,
+  this is experimental only and does not describe required behaviour.
+
+  This document is released to the public domain, and may be used,
+  copied or modified for any purpose whatever.
+
+Abstract
+────────
+
+  This document defines the legacy NetMail PING and TRACE diagnostic
+  service asserted by the TTS‑5001 PING flag.  A final destination
+  returns a diagnostic response, while a participating transit system
+  notifies the original sender and continues forwarding the original
+  item.  It defines the boundary of “unaltered” forwarding and the
+  sender‑name rule needed to prevent diagnostic loops.
+
+Contents
+────────
+
+  1. Introduction
+  2. Applicability and Terms
+  3. Valid Diagnostic Request
+  4. Final‑Destination PING
+  5. In‑Transit TRACE
+  6. Diagnostic Responses
+  7. Non‑participating Destinations
+  8. Feedback and Discussion
+
+  A. References
+  B. History
+
+═════════════════════════════════════════════════════════════════════
+
+
+1. Introduction
+───────────────
+
+  TTS‑5001 assigns PING as the canonical assertion that a system
+  provides legacy PING and TRACE diagnostics.  It deliberately does
+  not make operating that service part of flag‑list conformance.
+
+  FTS‑5001.006 placed the service behavior beside the flag assignment.
+  This proposal retains that behavior at an explicit legacy
+  application boundary.  It does not turn PING into a TITH transport
+  frame, Bundle operation, acceptance response, or routing protocol.
+
+
+2. Applicability and Terms
+──────────────────────────
+
+  This document applies to a legacy NetMail Message whose data is
+  represented by TTS‑0009 and whose legacy serialization, when one is
+  needed, is defined by TSP‑0003.  It does not apply to EchoMail, a
+  File, a FileRequest, or transport control data.
+
+  The processing identity is the local address on whose behalf the
+  system is examining or forwarding the Message.  It is the final
+  destination when it equals Message Destination.  Otherwise it is an
+  in‑transit system.
+
+  The original sender is the Message Origin and FromUserName.  The
+  original Via values are the ordered Via values present when the
+  processing identity begins diagnostic processing.  A diagnostic
+  response is a newly originated NetMail Message; it is never a
+  mutation of the request.
+
+  Whether a processing identity advertises PING is determined from the
+  applicable TTS‑5001 flag list.  A local setting which operates the
+  service without publishing the flag does not authorize another
+  system to rely on it.
+
+
+3. Valid Diagnostic Request
+───────────────────────────
+
+  A diagnostic request is a NetMail Message whose ToUserName is the
+  four ASCII characters `PING`.  The comparison is byte‑for‑byte and
+  case‑sensitive; no alternate spelling is implied.
+
+  A conforming originator MUST NOT use `PING` as FromUserName.  A
+  Message which does so is not a conforming diagnostic request, and
+  this document defines no automatic response to it.  This prevents one
+  automatic diagnostic from addressing another as a new request.
+
+  Subject and MessageText have no trigger syntax.  They MAY contain
+  explanatory or correlation text selected by the originator and MUST
+  NOT be interpreted as transport commands.
+
+
+4. Final‑Destination PING
+────────────────────────
+
+  When a valid diagnostic request reaches its final destination and
+  that identity advertises PING, the receiving service MUST generate
+  one PING response to the original sender.
+
+  The response MUST quote every original Via value in its original
+  order.  It MAY additionally quote request fields or include local
+  diagnostic information, but that material MUST be distinguishable
+  from the quoted Via values.
+
+  Generating the response is application processing after receipt.  It
+  neither changes the request's transport acceptance outcome nor makes
+  the responding service the originator of the request.
+
+
+5. In‑Transit TRACE
+────────────────────
+
+  When a valid diagnostic request passes through an in‑transit
+  processing identity which advertises PING, that system MUST generate
+  one TRACE notification to the original sender and MUST continue
+  forwarding the request toward its Destination.
+
+  The notification MUST identify the processing identity at which the
+  transit event occurred.  It MAY quote request fields or Via values.
+
+  Continuing to forward the request “unaltered” means preserving the
+  exact signed region and Signature, when present, and preserving every
+  existing Via value.  The forwarding system appends its own Via as
+  TTS‑0009 requires before committing the next hop.  It MAY update the
+  mutable routing suffix only as the applicable item and carriage
+  standards permit.  It MUST NOT rewrite the diagnostic request's
+  Origin, Destination, user names, Subject, MessageText, or existing
+  Via values merely because it generated a TRACE notification.
+
+  Failure to submit a notification does not authorize dropping or
+  delaying the original request.  Diagnostic notification and ordinary
+  forwarding have separate outcomes.
+
+
+6. Diagnostic Responses
+───────────────────────
+
+  A PING response or TRACE notification has:
+
+    • Origin equal to the processing identity;
+    • Destination equal to the request Origin;
+    • ToUserName equal to the request FromUserName; and
+    • a locally configured FromUserName which is not `PING`.
+
+  The response is constructed and authenticated like any other newly
+  originated NetMail Message.  It follows the ordinary route to its
+  Destination and does not reverse the request's Via list into a route.
+
+  This proposal does not assign a machine‑readable response grammar.
+  Quoted fields are human‑readable diagnostic evidence.  A producer
+  MUST preserve each quoted string value and each Via's Address,
+  PublicKey when present, Timestamp, and software string without
+  omission.  Presentation punctuation and localized explanatory text
+  do not change those values.
+
+7. Non‑participating Destinations
+──────────────────────────────────
+
+  When a diagnostic request reaches a final destination which does not
+  advertise PING, that destination MAY delete it from the legacy
+  inbound queue without a response.  The absence of PING gave the
+  sender no diagnostic service assertion on which to rely.
+
+  This permission applies to final legacy application delivery.  It
+  does not authorize a relay to discard an in‑transit Message or a TITH
+  transport implementation to report acceptance for work it did not
+  store as required by its carrying standard.
+
+
+8. Feedback and Discussion
+─────────────────────────
+
+  PING and TRACE are application diagnostics whose availability is
+  advertised in a nodelist.  They do not expose a missing Bundle
+  completion marker or transport response.  Keeping the service here
+  lets TTS‑5001 define only the claim and lets TTS‑0009 continue to own
+  the immutable signed region and mutable forwarding suffix.
+
+  Human‑readable response presentation remains intentionally flexible.
+  The values which must be reported, the recipient, the diagnostic
+  identity, the forwarding consequence, and the loop prevention rule
+  are nevertheless deterministic.
+
+
+A. References
+─────────────
+
+  [FTS‑5001.006] Revision 6, “Nodelist flags and userflags”, FTSC,
+  2017‑08‑30.
+
+  [TSP‑0003] “Legacy Data Formats and TITH”, TITH, 2026‑08‑22.
+
+  [TTS‑0009] “Item Format”, TITH, 2026‑08‑23.
+
+  [TTS‑5001] “Nodelist Flags”, TITH, 2026‑08‑23.
+
+
+B. History
+──────────
+
+   Rev.1, 2026‑08‑23: Initial Release.  Moved the legacy PING and
+   TRACE service behavior out of the nodelist flag registry and defined
+   its item‑preservation boundary.
+
+**********************************************************************
