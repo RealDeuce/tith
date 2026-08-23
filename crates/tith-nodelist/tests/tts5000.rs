@@ -582,6 +582,26 @@ fn writer_round_trips_records_and_checks_application_keys() {
 		NodelistErrorKind::ApplicationKeyMismatch
 	));
 
+	let mut missing = NodelistWriter::distribution("fidonet", Vec::new()).unwrap();
+	missing
+		.write_entry(&input(Keyword::Zone, 1), PublicationSource::Ordinary)
+		.unwrap();
+	missing
+		.write_entry(&input(Keyword::Host, 10), PublicationSource::Ordinary)
+		.unwrap();
+	let mut missing_key = input(Keyword::Normal, 21);
+	missing_key.phone = "1-1".to_owned();
+	let error = missing
+		.write_entry(
+			&missing_key,
+			PublicationSource::FirstPublicationFromAnonymousApplication(key),
+		)
+		.unwrap_err();
+	assert!(matches!(
+		error.kind,
+		NodelistErrorKind::ApplicationKeyMismatch
+	));
+
 	let mut comments = NodelistWriter::distribution("fidonet", Vec::new()).unwrap();
 	let error = comments
 		.write_comment(&Comment {
