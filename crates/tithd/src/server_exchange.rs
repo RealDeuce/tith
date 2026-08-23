@@ -105,12 +105,10 @@ fn answer_public_key_request(
 		identifier: request_identifier,
 		response_to,
 	};
-	let encoded = crate::public_key_response::build(
-		&mailer.local,
-		&mailer.local_secret,
-		&mailer.retired_secrets,
-		parameters,
-	)?;
+	let local = &mailer.local;
+	let secret = &mailer.local_secret;
+	let retired = &mailer.retired_secrets;
+	let encoded = crate::public_key_response::build(local, secret, retired, parameters)?;
 	writer.write_all(&encoded)?;
 	writer.flush()?;
 	writer.shutdown(Shutdown::Write)?;
@@ -344,11 +342,9 @@ fn payload_responses(
 					}
 					responses.push(accepted(item.request_identifier, payload.response_to)?);
 				} else {
-					let response = mailer.acceptance().dispatch(
-						&item,
-						payload.response_to,
-						&request.bundle.origin,
-					)?;
+					let acceptance = mailer.acceptance();
+					let origin = &request.bundle.origin;
+					let response = acceptance.dispatch(&item, payload.response_to, origin)?;
 					responses.push(response);
 				}
 			}

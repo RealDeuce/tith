@@ -113,13 +113,14 @@ impl Outbound {
 						session.responses_received(&payload.responses)?;
 						require_open_for_requests(keep_open, &payload.requests)?;
 						if keep_open {
-							let dispatched = self.dispatch_returned(
-								&payload.requests,
-								payload.response_to,
+							let mut context = ReturnedDispatch {
+								response_to: payload.response_to,
 								local,
-								&reply.bundle.origin,
-								&mut answers,
-							)?;
+								peer: &reply.bundle.origin,
+								answers: &mut answers,
+							};
+							let dispatched =
+								self.dispatch_returned(&payload.requests, &mut context)?;
 							returned += dispatched;
 						}
 						if payload.close_after_reply {
@@ -168,31 +169,37 @@ impl Outbound {
 	fn dispatch_returned(
 		&self,
 		requests: &[ReceivedRequest],
-		response_to: TlvHash,
-		local: &LocalIdentity,
-		peer: &Identity,
-		answers: &mut Vec<OwnedTlv>,
+		context: &mut ReturnedDispatch<'_>,
 	) -> Result<usize, Box<dyn Error>> {
 		let acceptance = Acceptance {
 			store: &self.inbound,
 			application: &self.application,
 			configuration: &self.configuration,
 			nodelist: &self.nodelist,
-			local_ref: &local.reference,
-			local: &local.identity,
+			local_ref: &context.local.reference,
+			local: &context.local.identity,
 		};
 		let mut count = 0;
 		for request in requests {
 			count += 1;
-			answers.push(match request {
-				ReceivedRequest::Valid(item) => acceptance.dispatch(item, response_to, peer)?,
+			context.answers.push(match request {
+				ReceivedRequest::Valid(item) => {
+					acceptance.dispatch(item, context.response_to, context.peer)?
+				}
 				ReceivedRequest::DataError { request_identifier } => {
-					data_error_response(*request_identifier, response_to)?
+					data_error_response(*request_identifier, context.response_to)?
 				}
 			});
 		}
 		Ok(count)
 	}
+}
+
+struct ReturnedDispatch<'a> {
+	response_to: TlvHash,
+	local: &'a LocalIdentity,
+	peer: &'a Identity,
+	answers: &'a mut Vec<OwnedTlv>,
 }
 
 fn data_error_response(

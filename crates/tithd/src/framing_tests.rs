@@ -64,6 +64,12 @@ fn distinguishes_clean_eof_from_each_invalid_prefix() {
 	let mut empty_input = Cursor::new(Vec::new());
 	let mut empty = TlvReader::new(&mut empty_input as &mut dyn std::io::Read);
 	assert!(read_header(&mut empty, None, &resolver).unwrap().is_none());
+	let mut initial_truncated_bytes = OwnedTlv::new(types::ORIGIN, vec![1]).unwrap().encode();
+	initial_truncated_bytes.pop();
+	let mut initial_truncated_input = Cursor::new(initial_truncated_bytes);
+	let mut initial_truncated =
+		TlvReader::new(&mut initial_truncated_input as &mut dyn std::io::Read);
+	assert!(read_header(&mut initial_truncated, None, &resolver).is_err());
 
 	let wrong = OwnedTlv::new(types::TIMESTAMP, vec![1]).unwrap();
 	let mut no_more_input = Cursor::new(Vec::new());

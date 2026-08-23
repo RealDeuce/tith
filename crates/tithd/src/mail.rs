@@ -864,6 +864,21 @@ mod tests {
 			build_bundle(&peer, &peer_keys.secret, &local, 1, vec![Vec::new()]).unwrap();
 		let (_, completed) = exchange(&empty_payload, &mailer);
 		assert!(completed);
+		let header_only = build_bundle(&peer, &peer_keys.secret, &local, 1, Vec::new()).unwrap();
+		let (_, completed) = exchange(&header_only, &mailer);
+		assert!(completed);
+		let mut extension_first = header_only.clone();
+		extension_first.extend_from_slice(&OwnedTlv::new(31, Vec::new()).unwrap().encode());
+		let (_, completed) = exchange(&extension_first, &mailer);
+		assert!(completed);
+		let mut malformed_first = header_only;
+		malformed_first.extend_from_slice(
+			&OwnedTlv::new(types::SIGNED_TLV, Vec::new())
+				.unwrap()
+				.encode(),
+		);
+		let (_, completed) = exchange(&malformed_first, &mailer);
+		assert!(!completed);
 		drop(mailer);
 		fs::remove_file(database).unwrap();
 	}
@@ -2392,6 +2407,31 @@ mod tests {
 				&mut holds,
 				Vec::new(),
 				&trailing,
+			)
+			.is_err()
+		);
+		let unknown = OwnedTlv::new(31, Vec::new()).unwrap().encode();
+		assert!(
+			check_final_reply(
+				&node,
+				&peer_keys,
+				&peer,
+				&request,
+				&mut holds,
+				Vec::new(),
+				&unknown,
+			)
+			.is_err()
+		);
+		assert!(
+			check_final_reply(
+				&node,
+				&peer_keys,
+				&peer,
+				&request,
+				&mut holds,
+				vec![accepted(1, TlvHash::from_bytes([2; 32])).unwrap()],
+				&[],
 			)
 			.is_err()
 		);
