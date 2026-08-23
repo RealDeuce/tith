@@ -32,6 +32,7 @@ base64 = "=0.22.1"
 libhydrogen-sys = "=0.9.4"
 redb = "=4.2.0"
 same-file = "=1.0.6"
+zstd = "=0.13.3"
 windows-sys = { version = "=0.61.2", features = [
 	"Win32_Foundation",
 	"Win32_Security",

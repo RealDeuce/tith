@@ -11,6 +11,7 @@ publish = false
 base64.workspace = true
 tith-crypto = { path = "../tith-crypto" }
 tith-wire = { path = "../tith-wire" }
+zstd.workspace = true
 
 [lints]
 workspace = true

@@ -3,11 +3,11 @@ TITH                                              THIS ISN'T THAT HARD
 **********************************************************************
 
 Publication:  TTS‑5000
-Revision:     8
+Revision:     9
 Title:        The Distribution Nodelist
 Author(s):    FTSC Members, Administrator, Honoured Guests and
               Stephen Hurd
-Date:         2026‑08‑22
+Date:         2026‑08‑23
 ══════════════════════════════════════════════════════════════════════
 
 Status of this document
@@ -110,19 +110,25 @@ Contents
 ───────────────────────────────
 
   The Distribution Nodelist uses the filename DDD-nodelist.nnn, where
-  DDD is the domain of the nodelist, nnn is the day‐of‐year of
-  publication, starting at 001 for the first day of January.  Partial
-  or alternate nodelists must use some other base filename (i.e.
-  in place of DDD-nodelist).
+  DDD is the domain text and nnn is exactly three ASCII decimal digits
+  giving the Gregorian ordinal day of publication in the range 001–366.
+  U+002D HYPHEN-MINUS and U+002E FULL STOP are literal filename syntax.
+  Partial or alternate nodelists MUST use another base filename in
+  place of DDD-nodelist.
 
-  For actual distribution, DDD-nodelist.nnn is packed into an archive
-  file named DDD-nodelist.nnn.zst.
+  Distribution compresses the exact DDD-nodelist.nnn bytes as one
+  ordinary Zstandard frame conforming to RFC 8878.  The resulting file
+  is named DDD-nodelist.nnn.zst.  It is not an archive containing an
+  intermediate file format.
 
-  The ZSTD format is presently the official TITH standard, although
-  others may be distributed in addition.
+  The frame MUST decode without a dictionary.  It MUST NOT be a
+  skippable frame and MUST NOT be followed by another frame or trailing
+  data.  Compression parameters may vary, and the RFC 8878 content
+  checksum may be present or absent.  Other representations may be
+  distributed, but they are not TTS‑5000 encodings.
 
-  Every node on a network SHOULD have their current nodelists
-  available via file request as DDD-nodelist.zst
+  Every node on a network SHOULD make its current nodelist available
+  by FileRequest under the name DDD-nodelist.zst.
 
 
 5. Content
@@ -131,24 +137,26 @@ Contents
   The nodelist is a flat text file containing any number of lines,
   encoded in UTF‑8.
 
-  For the remainder of this document, characters in the range U+00
-  to U+1F, plus U+7F, shall be called "control characters".
-
-  Every line must be terminated with a line feed (U+0A).  Fields are
-  separated with tabs (U+09).  No other control characters are
-  permitted anywhere in the nodelist.
+  U+0000 through U+001F and U+007F through U+009F are prohibited.
+  U+0009 CHARACTER TABULATION is permitted only as the field separator
+  on a data line, and U+000A LINE FEED is permitted only as a line
+  terminator.  Every line MUST have that terminator.  Every other
+  Unicode scalar value is permitted unless a field grammar below
+  restricts it further.
 
 
 5.1. Comment Lines
 ──────────────────
 
-  Comment lines begin with a semicolon (U+3B) in the first character
-  position followed by zero or more alphabetic characters called
-  "interest flags."  A program which processes the nodelist may use
-  comment interest flags to determine the disposition of a comment
-  line.  The remainder of a comment line is free‐form text.
+  A comment line begins with U+003B SEMICOLON.  Its interest‐flag
+  prefix is the maximal consecutive run of ASCII letters U+0041
+  through U+005A and U+0061 through U+007A immediately following the
+  semicolon.  A program which processes the nodelist may use those
+  flags to determine the disposition of the comment.  The remainder
+  is uninterpreted free‐form text.
 
-  There are five interest flags defined as follows:
+  Five uppercase interest flags have assigned meanings.  Every other
+  ASCII letter remains valid but has no meaning assigned here.
 
      ;S This comment is of particular interest to Sysops.
 
@@ -167,28 +175,19 @@ Contents
   ordinary line of whichever kind it is, and no line carries a
   meaning the same line would not carry elsewhere in the same file.
 
-  FTS‑5000.005 reserved the first line of a distribution nodelist for
-  a comment carrying the day number and a CRC of the file.  This
-  document does not define that line, so in a TTS‑5000 nodelist it is
-  an ordinary comment.  A converter SHOULD retain it unchanged, since
-  it records which FTS‑5000.005 nodelist the file was converted from,
-  and MUST NOT rewrite it to describe the converted file.
-
-  No value appearing on a comment line is interpreted, and a processor
-  MUST NOT validate one or refuse a nodelist because one does not
-  match the file.  In particular, a retained FTS‑5000.005 first line
-  states a CRC of the file it was converted from and not of the file
-  containing it, so that value will not match and is not expected to.
+  No value in the free‐form remainder is interpreted.  A processor
+  MUST NOT validate that text or refuse a nodelist because it resembles
+  metadata which does not match the file.
 
 
 5.2.  Data lines
 ────────────────
 
   A nodelist data line contains exactly eleven (11) variable length
-  fields separated by tabs (U+09), defined below.  Each data line is
+  fields separated by tabs (U+0009), defined below.  Each data line is
   a record for an individual Fidonet node.
 
-  All printable Unicode characters are allowed in all string fields
+  All scalar values permitted by section 5 are allowed in string fields
   unless specified otherwise.
 
   Field 1: Keyword
@@ -199,67 +198,49 @@ Contents
     empty or contain exactly one of the keywords defined below,
     grouped by functional class.
 
-    No other keywords are valid in the distribution nodelist at this
-    time, but private nodelist distributions may include other node
-    types by marking them appropriately in this field.  One common
-    example is the "Point" keyword.  See FTS‑5002.002 for the
-    pointlist specification.
-
-    A keyword has no independent length limit.  The exact alternatives
-    defined below determine which values are valid in a distribution
-    nodelist.  A private nodelist extension which defines another
-    keyword also defines its meaning and placement in the hierarchy.
+    No other keyword is valid in a Distribution Nodelist or TTS‑5000
+    segment.  A separately specified private format may reuse the
+    record shape and define other keywords, but that format and its
+    profile selection are outside TTS‑5000.  A TTS‑5000 consumer MUST
+    reject an unassigned keyword.
 
     Full or Member Nodes — these are the system numbers of individual
-    Fidonet members.  See [Policy] for details on Fidonet membership.
+    Fidonet members.
 
       <empty>
-        Defines a normal node entry.
+        Defines an operational member having at least one usable
+        direct‐contact target.
 
       Pvt
-        This keyword defines a Private node (see Policy v4.07,
-        Section 2.1.9) — i.e. a node that is operational, but
-        not publicly available for direct contact.
+        Defines an operational member having no usable direct‐contact
+        target.  A member represented by either the empty or Pvt
+        alternative MUST use Pvt if and only if it has no such target;
+        otherwise its keyword MUST be empty.
 
-        A Private node publishes no means of direct contact.  When
-        this keyword is used, field 6 MUST be empty, and a flag in
-        field 9 or field 10 MUST NOT carry a value.  A data line
-        which does otherwise is invalid, and a processor MUST reject
-        it.
+        A usable direct‐contact target is any of:
 
-        One flag form is excepted.  `IIH:<PublicKey>`, the form which
-        carries a public key and nothing else, is permitted, because
-        it publishes no endpoint (see TTS‑5001).  A Private node
-        therefore still publishes the key by which data whose Origin
-        is that node is authenticated.  Every other value a flag in
-        those two fields can carry is a server address, a port, or an
-        email address, and so is a means of direct contact.
+          • a nonempty telephone number in field 6;
+          • an Internet Protocol or IIH occurrence which, after the
+            TTS‑5001 resolution rules are applied, has both a server
+            and a usable port; or
+          • an Email Flag which carries an address directly or through
+            the addressed IEM rules in TTS‑5001.
 
-        A converter from an FTS‑5000.005 nodelist which encounters
-        such an entry MUST remove the Pvt keyword, leaving field 1
-        empty, and SHOULD report having done so.  A system whose
-        contact information is published is not private, and it is
-        that keyword, rather than the contact information, which the
-        source nodelist contradicts.  A converter MUST NOT resolve
-        this by discarding the entry or its flags.
-
-        If the originating node cannot contact the destination node,
-        mail may instead be routed via its Hub or Host.
-
-        Pvt entries are only allowed as members of local networks.
+        INA alone, a port without a server, a server for a method having
+        no default or explicit port, a bare Email method, PSTN or ISDN
+        capability flags without a telephone number, and
+        `IIH:<PublicKey>` without an endpoint are not usable targets.
+        Pvt entries are permitted only as members of local networks.
 
       Hold
         Defines a node which is operational but cannot be publicly
         contacted.  This is expected to be a temporary condition.
 
-        Mail may be sent to such nodes, routed via its Hub, Host or
-        Coordinator, or held locally by the originating node until the
-        Hold keyword is removed.
-
       Down
         Defines a node which is not operational.  This is expected to
-        be permanent or semipermanent.  Mail may NOT be sent or routed
-        to it.
+        be permanent or semipermanent.
+
+    Routing consequences of these states are outside this document.
 
     Administrative Nodes — these nodes indicate the beginning of a
     branch in the Fidonet addressing and management hierarchy.
@@ -298,6 +279,21 @@ Contents
       Hub
         Begins the definition of a routing subunit within a multilevel
         local network.
+
+    A nonempty Distribution Nodelist begins, after any comments, with a
+    Zone data line.  Before that line there is no active zone or net.
+    Zone supplies both its zone and logical‐net context.  Region
+    requires an active Zone and supplies its region and logical‐net
+    context.  Host requires an active Zone, may occur directly within
+    a Zone or Region branch, and starts a local net.  Hub requires an
+    active Host and starts a subunit of that Host's local net; it MUST
+    NOT occur directly within a Zone or Region branch.
+
+    Members immediately below Zone and Region are Zone Independent and
+    Region Independent Nodes respectively.  Members below Host or Hub
+    are members of that local net.  An administrative entry ends every
+    preceding branch of equal or lower tier.  Region and Host numbers
+    share one logical‐net address namespace within a zone.
 
 
   Field 2: Node number
@@ -368,8 +364,7 @@ Contents
      This field is either empty, or contains two or more nonempty
      subfields of ASCII digits separated by one U+002D HYPHEN-MINUS.
      U+002D is literal syntax.  The first field is the country code.
-     The rest of the phone number should be formatted according to
-     local practise.
+     Conventionally, the remaining components follow local practice.
 
      The various parts of the phone number may be used to derive cost
      and routing information, as well as what number is to be dialled.
@@ -377,10 +372,7 @@ Contents
      1-800-555-0100, corresponding to country 1 (USA), area 800 (area
      code), exchange 555, and number 0100.
 
-     Alternatively, this field may be empty if the node has no
-     conventional phone number. Software must recognize the empty
-     string as an indicator to never attempt to dial this node by
-     PSTN or ISDN.
+     An empty field supplies no PSTN or ISDN direct-contact target.
 
 
   Field 7: System Flags
@@ -411,13 +403,15 @@ Contents
      cannot override this key; it is considered only when no Origin key
      is available.
 
-     `IIH:<PublicKey>` alone is the only Internet Flag a Pvt entry may
-     carry.  It publishes the key but no endpoint; see field 1.
+     `IIH:<PublicKey>` publishes the key but no endpoint and therefore
+     remains valid on a Pvt entry; see field 1.
 
-     The IIH PublicKey supplies the authoritative external anchor for
-     this address as defined by TTS‑0008.  That document determines
+     When a using context has accepted this nodelist as authoritative
+     for the address, the IIH PublicKey supplies the authoritative
+     external anchor defined by TTS‑0008.  That document determines
      whether the anchor or an authenticated successor is the effective
-     key for a particular implementation.
+     key.  TTS‑5000 does not define how a nodelist publication is
+     authenticated or accepted.
 
      When a node is first published following an application from the
      anonymous address defined in TTS‑0004, this PublicKey MUST be
@@ -436,10 +430,7 @@ Contents
      Type: string.
 
      Contains exactly the Other Flags and extensions defined by
-     TTS‑5001, separated and ordered as that document specifies.  A U
-     used as the FTS‑5000.005 User Flag delimiter is not included.  A
-     complete native extension whose value is `U` remains an extension
-     as TTS‑5001 specifies.
+     TTS‑5001, separated and ordered as that document specifies.
 
 
 5.3. Flag Relationships
@@ -457,18 +448,29 @@ Contents
 
   NEC and NPK may each occur on at most one entry in a logical net and
   identify that net's EchoMail Coordinator and Pointlist Keeper
-  respectively.  NC may occur on at most one member entry in a local
-  net.  When present, it identifies that net's Network Coordinator in
-  place of the Host entry; it MUST NOT occur on the Host entry itself.
+  respectively.  NC may occur on at most one nonadministrative member
+  entry in a local net.  When present, it identifies that net's Network
+  Coordinator in place of the Host entry.  It MUST NOT occur on a Host,
+  Hub, Zone Independent Node, or Region Independent Node.
 
 
 6. Segments
 ───────────
 
-  Segments are partial nodelists, usually containing only one complete
-  branch of nodes, starting at the relevant zone, region, host or hub
-  node.  The Distribution Nodelist is also referred to as a composite
-  nodelist, as it is assembled from multiple zone‐lists.
+  A segment is a partial nodelist containing one or more complete
+  branches.  Its first data line is the relevant Zone, Region, Host, or
+  Hub entry.  It uses the same record grammar and hierarchy transitions
+  as the Distribution Nodelist.
+
+  Parsing or producing a segment begins with an externally supplied
+  domain and, according to its first entry, these additional values:
+
+    • a Zone segment needs no initial zone or net;
+    • a Region or Host segment needs an initial zone; and
+    • a Hub segment needs an initial zone and local net.
+
+  Those initial values provide the omitted enclosing hierarchy only.
+  TTS‑5000 does not define how they are discovered or authenticated.
 
   The format and structure is the same as the Distribution Nodelist,
   with a base filename of local invention, usually derived from the
@@ -476,20 +478,10 @@ Contents
   fidonet-N712seg.nnn for a segment containing all the nodes in Net
   712 of fidonet).
 
-  To generate the Distribution Nodelist, segments propagate up through
-  the network's administrative hierarchy, each tier compiling segments
-  from the tier immediately below, then passing on the resulting
-  segment to the next tier upstream.
-
-  For example, a Network Coordinator will collect Hub Segments from
-  all the hubs in the same local network, compile it into a Network
-  Segment, and forward it on to the Regional Coordinator.  And so on.
-
-  Segments can also be sent back downstream — this is most commonly
-  done with Zone Nodelists.  Nodes that do not need to attempt direct
-  contact with nodes in other zones can use the Zone Nodelist instead
-  of the full composite nodelist, saving on storage space and
-  transmission time.
+  Segment transport, authentication, merge policy, conflict handling,
+  and administrative workflow are outside this document.  A compiled
+  Distribution Nodelist MUST independently satisfy every complete‐file
+  rule in sections 4 and 5.
 
 
 A. References
@@ -503,8 +495,6 @@ A. References
   Administrator and Honoured Guests.  January 2014. Obsoleted by this
   document.
 
-  [FTS‑5002.002] "Pointlist Formats", Michiel van der Vlist.  March 2010.
-
   [FTA‑1006.002] "Key words to indicate requirement levels"
   FTSC, 1998‑01‑17.
 
@@ -516,7 +506,8 @@ A. References
 
   [TTS‑5001] "Nodelist Flags", TITH, 2026‑08‑22.
 
-  [Policy] "FidoNet Policy Document" v4.07 — June 9, 1989.
+  [RFC 8878] "Zstandard Compression and the 'application/zstd' Media
+  Type", Y. Collet and M. Kucherawy, February 2021.
 
 
 B. History
@@ -552,5 +543,10 @@ B. History
 
    Rev.8, 2026‑08‑22: Classified the IIH PublicKey as the authoritative
    external anchor supplied to TTS‑0008 effective key resolution.
+
+   Rev.9, 2026‑08‑23: Defined exact publication framing, character and
+   comment grammar, usable‐contact Pvt state, hierarchy and segment
+   context, and private keyword scope.  Removed legacy conversion,
+   downstream routing, and duplicated flag requirements.
 
 **********************************************************************

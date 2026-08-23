@@ -1,0 +1,64 @@
+name: Qualify TTS-5000
+
+on:
+  push:
+    paths:
+      - "standards/TTS-5000.txt"
+      - "standards/TTS-0004.txt"
+      - "standards/TTS-0008.txt"
+      - "standards/TTS-0009.txt"
+      - "standards/TTS-5001.txt"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "rust-toolchain.toml"
+      - ".github/workflows/rust.yml"
+      - "crates/tith-nodelist/Cargo.toml"
+      - "crates/tith-nodelist/src/document.rs"
+      - "crates/tith-nodelist/src/lib.rs"
+      - "crates/tith-nodelist/src/flags.rs"
+      - "crates/tith-nodelist/tests/tts5000.rs"
+      - "crates/tith/src/inbound.rs"
+      - "crates/tith/tests/support/request_processor.rs"
+      - "crates/tith-adapter/src/srif.rs"
+      - "qualification/check_source_line_coverage.py"
+      - "qualification/TTS-5000.009.md"
+      - ".github/workflows/qualify-tts-5000.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  coverage:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - name: Install pinned coverage toolchain
+        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772
+        with:
+          toolchain: nightly-2026-08-20
+          components: llvm-tools-preview
+
+      - name: Install pinned coverage driver
+        run: cargo install cargo-llvm-cov --version 0.9.0 --locked
+
+      - name: Exercise the complete reference implementation
+        run: cargo test --workspace
+
+      - name: Exercise the TTS-5000 conformance surface
+        run: |
+          cargo +nightly-2026-08-20 llvm-cov clean --workspace
+          cargo +nightly-2026-08-20 llvm-cov --branch --workspace --json --output-path tts-5000-coverage.json
+
+      - name: Report source coverage
+        run: cargo +nightly-2026-08-20 llvm-cov report --branch --text --show-missing-lines
+
+      - name: Require complete conformance coverage
+        run: |
+          sha256sum tts-5000-coverage.json
+          python3 qualification/check_source_line_coverage.py \
+            tts-5000-coverage.json \
+            crates/tith-nodelist/src/document.rs \
+            crates/tith-nodelist/src/lib.rs

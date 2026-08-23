@@ -708,6 +708,23 @@ mod tests {
 		path
 	}
 
+	fn build_request_processor(directory: &std::path::Path) -> PathBuf {
+		let executable =
+			directory.join(format!("request-processor{}", std::env::consts::EXE_SUFFIX));
+		let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+			.join("tests/support/request_processor.rs");
+		let rustc = std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into());
+		let status = std::process::Command::new(rustc)
+			.arg("--edition=2024")
+			.arg(source)
+			.arg("-o")
+			.arg(&executable)
+			.status()
+			.expect("run rustc for request-processor fixture");
+		assert!(status.success(), "request-processor fixture did not build");
+		executable
+	}
+
 	fn ledger_with(path: &std::path::Path, inbound_id: &str) -> Ledger {
 		let ledger = Ledger::open(path.join("ledger.redb")).expect("ledger");
 		ledger
@@ -744,6 +761,51 @@ mod tests {
 			..unlisted
 		};
 		assert!(processor_session(&listed).listed);
+	}
+
+	#[test]
+	fn configured_processor_returns_current_nodelist_byte_exactly() {
+		let directory = temp_dir("configured_processor_returns_current_nodelist_byte_exactly");
+		let processor = build_request_processor(&directory);
+		let nodelist = b"Zone\t1\tNode\tLocation\tSysop\t\t\t\t\t\t\n";
+		let archive = tith_nodelist::compress_zstd_frame(&nodelist[..], Vec::new())
+			.expect("compress publication");
+		let publication = directory.join("fidonet-nodelist.zst");
+		fs::write(&publication, &archive).expect("publish current nodelist");
+
+		let response = Processor {
+			program: processor,
+			working_directory: directory.clone(),
+		}
+		.run(
+			&Session {
+				sysop: "Requester".to_owned(),
+				akas: vec!["1:104/1@fidonet".to_owned()],
+				our_aka: "1:104/36@fidonet".to_owned(),
+				protected: true,
+				listed: true,
+			},
+			&["fidonet-nodelist.zst".to_owned()],
+			1,
+		)
+		.expect("configured request processor");
+		assert_eq!(response.offered.len(), 1);
+		assert_eq!(response.offered[0].path, publication);
+
+		let selected = plan_reply(&response.offered, Some(0));
+		assert_eq!(selected.offered.len(), 1);
+		assert_eq!(selected.offered[0].wire_filename, "fidonet-nodelist.zst");
+		assert_eq!(
+			fs::read(&selected.offered[0].path).expect("read selected publication"),
+			archive
+		);
+		assert!(
+			plan_reply(&response.offered, Some(now() + 86_400))
+				.offered
+				.is_empty(),
+			"a publication older than the requested timestamp must be omitted"
+		);
+		fs::remove_dir_all(directory).expect("cleanup");
 	}
 
 	#[test]

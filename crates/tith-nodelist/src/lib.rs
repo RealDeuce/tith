@@ -9,7 +9,13 @@ use tith_crypto::PublicKey;
 use tith_wire::address::{Address, AddressError};
 use tith_wire::bundle::KeyResolver;
 
+mod document;
 mod flags;
+
+pub use document::{
+	AlternatePublicationName, Comment, EntryInput, NodelistReader, NodelistWriter, PublicationName,
+	PublicationSource, Record, SegmentContext, compress_zstd_frame, decompress_zstd_frame,
+};
 
 pub use flags::{
 	EmailAddress, EmailFlag, EmailFlags, EmailMethod, EndpointSpec, ExtensionFlag, FileRequestFlag,
@@ -92,8 +98,11 @@ pub struct Entry {
 
 #[derive(Debug)]
 pub enum NodelistErrorKind {
+	Io,
+	InvalidUtf8,
 	MissingFinalLineFeed,
 	ControlCharacter,
+	InvalidComment,
 	WrongFieldCount,
 	InvalidKeyword,
 	InvalidNodeNumber,
@@ -104,6 +113,8 @@ pub enum NodelistErrorKind {
 	InvalidFlag,
 	InvalidPublicKey,
 	InvalidEndpoint,
+	InvalidPublication,
+	ApplicationKeyMismatch,
 	Address(AddressError),
 }
 
@@ -126,19 +137,11 @@ pub struct Nodelist {
 	entries: BTreeMap<Address, Entry>,
 }
 
-#[derive(Default)]
-struct Hierarchy {
-	zone: Option<i32>,
-	region: Option<Address>,
-	host: Option<Address>,
-	hub: Option<Address>,
-}
-
-fn fail(line: usize, kind: NodelistErrorKind) -> NodelistError {
+pub(crate) fn fail(line: usize, kind: NodelistErrorKind) -> NodelistError {
 	NodelistError { line, kind }
 }
 
-fn parse_keyword(value: &str) -> Option<Keyword> {
+pub(crate) fn parse_keyword(value: &str) -> Option<Keyword> {
 	match value {
 		"" => Some(Keyword::Normal),
 		"Pvt" => Some(Keyword::Private),
@@ -152,7 +155,7 @@ fn parse_keyword(value: &str) -> Option<Keyword> {
 	}
 }
 
-fn parse_node_number(value: &str) -> Option<i32> {
+pub(crate) fn parse_node_number(value: &str) -> Option<i32> {
 	if value.is_empty()
 		|| value.starts_with('0')
 		|| !value.bytes().all(|byte| byte.is_ascii_digit())
@@ -163,21 +166,7 @@ fn parse_node_number(value: &str) -> Option<i32> {
 	(1..=32_767).contains(&number).then_some(number)
 }
 
-fn publishes_internet_contact(flag: &InternetFlag) -> bool {
-	match flag {
-		InternetFlag::DefaultServer(_) => true,
-		InternetFlag::Tith { endpoint, .. }
-		| InternetFlag::Binkp(endpoint)
-		| InternetFlag::Ifcico(endpoint)
-		| InternetFlag::Ftp(endpoint)
-		| InternetFlag::Telnet(endpoint)
-		| InternetFlag::Vmodem(endpoint)
-		| InternetFlag::Unspecified(endpoint) => endpoint.server().is_some() || endpoint.port().is_some(),
-		InternetFlag::NoIncomingIpv4 => false,
-	}
-}
-
-fn publishes_email_contact(flag: &EmailFlag) -> bool {
+pub(crate) fn publishes_email_contact(flag: &EmailFlag) -> bool {
 	match flag {
 		EmailFlag::Default(address)
 		| EmailFlag::Transx(address)
@@ -189,7 +178,7 @@ fn publishes_email_contact(flag: &EmailFlag) -> bool {
 	}
 }
 
-fn validate_phone(phone: &str) -> bool {
+pub(crate) fn validate_phone(phone: &str) -> bool {
 	if phone.is_empty() {
 		return true;
 	}
@@ -205,228 +194,18 @@ fn validate_phone(phone: &str) -> bool {
 
 impl Nodelist {
 	pub fn parse(domain: &str, input: &str) -> Result<Self, NodelistError> {
-		// Validate the domain independently before line-numbered processing.
-		Address::new(domain.to_owned(), 1, 1, 0, 0)
-			.map_err(|error| fail(0, NodelistErrorKind::Address(error)))?;
-		if !input.is_empty() && !input.ends_with('\n') {
-			return Err(fail(
-				1 + input.bytes().filter(|byte| *byte == b'\n').count(),
-				NodelistErrorKind::MissingFinalLineFeed,
-			));
-		}
+		Self::read(domain, std::io::Cursor::new(input.as_bytes()))
+	}
+
+	pub fn read<R: std::io::BufRead>(domain: &str, reader: R) -> Result<Self, NodelistError> {
 		let mut entries = BTreeMap::new();
-		let mut hierarchy = Hierarchy::default();
-		let mut zones_with_zec = std::collections::BTreeSet::new();
-		let mut regions_with_rec = std::collections::BTreeSet::new();
-		let mut regions_with_rpk = std::collections::BTreeSet::new();
-		let mut echomail_coordinator_nets = std::collections::BTreeSet::new();
-		let mut pointlist_keeper_nets = std::collections::BTreeSet::new();
-		let mut coordinator_override_nets = std::collections::BTreeSet::new();
-		for (line_index, raw_line) in input.split_terminator('\n').enumerate() {
-			let line_number = line_index + 1;
-			if raw_line.chars().any(|character| {
-				(character <= '\u{1f}' && character != '\t') || character == '\u{7f}'
-			}) {
-				return Err(fail(line_number, NodelistErrorKind::ControlCharacter));
+		for record in NodelistReader::distribution(domain.to_owned(), reader)? {
+			if let Record::Entry(entry) = record? {
+				entries.insert(entry.address.clone(), *entry);
 			}
-			if let Some(comment) = raw_line.strip_prefix(';') {
-				let _interest_flags = comment
-					.chars()
-					.take_while(|character| character.is_alphabetic())
-					.count();
-				continue;
-			}
-			let fields: Vec<_> = raw_line.split('\t').collect();
-			if fields.len() != 11 {
-				return Err(fail(line_number, NodelistErrorKind::WrongFieldCount));
-			}
-			let keyword = parse_keyword(fields[0])
-				.ok_or_else(|| fail(line_number, NodelistErrorKind::InvalidKeyword))?;
-			let number = parse_node_number(fields[1])
-				.ok_or_else(|| fail(line_number, NodelistErrorKind::InvalidNodeNumber))?;
-			let address = match keyword {
-				Keyword::Zone => {
-					hierarchy.zone = Some(number);
-					hierarchy.region = None;
-					hierarchy.host = None;
-					hierarchy.hub = None;
-					Address::new(domain.to_owned(), number, number, 0, 0)
-				}
-				Keyword::Region => {
-					let zone = hierarchy
-						.zone
-						.ok_or_else(|| fail(line_number, NodelistErrorKind::InvalidHierarchy))?;
-					hierarchy.host = None;
-					hierarchy.hub = None;
-					let address = Address::new(domain.to_owned(), zone, number, 0, 0);
-					hierarchy.region = address.as_ref().ok().cloned();
-					address
-				}
-				Keyword::Host => {
-					let zone = hierarchy
-						.zone
-						.ok_or_else(|| fail(line_number, NodelistErrorKind::InvalidHierarchy))?;
-					hierarchy.hub = None;
-					let address = Address::new(domain.to_owned(), zone, number, 0, 0);
-					hierarchy.host = address.as_ref().ok().cloned();
-					address
-				}
-				Keyword::Hub
-				| Keyword::Normal
-				| Keyword::Private
-				| Keyword::Hold
-				| Keyword::Down => {
-					let zone = hierarchy
-						.zone
-						.ok_or_else(|| fail(line_number, NodelistErrorKind::InvalidHierarchy))?;
-					let net = hierarchy
-						.host
-						.as_ref()
-						.or(hierarchy.region.as_ref())
-						.map_or(zone, Address::net);
-					if hierarchy.host.is_none()
-						&& hierarchy.region.is_none()
-						&& !matches!(keyword, Keyword::Hub)
-					{
-						// Zone-independent members are valid, so the active Zone itself
-						// supplies the branch. The condition is intentionally documentary.
-					}
-					let address = Address::new(domain.to_owned(), zone, net, number, 0);
-					if keyword == Keyword::Hub {
-						hierarchy.hub = address.as_ref().ok().cloned();
-					}
-					address
-				}
-			}
-			.map_err(|error| fail(line_number, NodelistErrorKind::Address(error)))?;
-			if entries.contains_key(&address) {
-				return Err(fail(line_number, NodelistErrorKind::DuplicateAddress));
-			}
-			if keyword == Keyword::Private && hierarchy.host.is_none() {
-				return Err(fail(line_number, NodelistErrorKind::InvalidHierarchy));
-			}
-			if !validate_phone(fields[5]) {
-				return Err(fail(line_number, NodelistErrorKind::InvalidPhone));
-			}
-			let system_flags: SystemFlags =
-				fields[6].parse().map_err(|kind| fail(line_number, kind))?;
-			let pstn_isdn_flags: PstnIsdnFlags =
-				fields[7].parse().map_err(|kind| fail(line_number, kind))?;
-			let internet_flags: InternetFlags =
-				fields[8].parse().map_err(|kind| fail(line_number, kind))?;
-			let email_flags: EmailFlags =
-				fields[9].parse().map_err(|kind| fail(line_number, kind))?;
-			let other_flags: OtherFlags =
-				fields[10].parse().map_err(|kind| fail(line_number, kind))?;
-			if keyword == Keyword::Private
-				&& (!fields[5].is_empty()
-					|| internet_flags.iter().any(publishes_internet_contact)
-					|| email_flags.iter().any(publishes_email_contact))
-			{
-				return Err(fail(line_number, NodelistErrorKind::PrivateContact));
-			}
-
-			let file_request_count = system_flags
-				.iter()
-				.filter(|flag| matches!(flag, SystemFlag::FileRequest(_)))
-				.count();
-			let has_cm = system_flags.contains(&SystemFlag::ContinuousMail);
-			if file_request_count > 1
-				|| has_cm
-					&& system_flags.iter().any(|flag| {
-						matches!(
-							flag,
-							SystemFlag::InternetContinuousMail
-								| SystemFlag::MailPeriod(_)
-								| SystemFlag::OnlinePeriod(_)
-						)
-					}) {
-				return Err(fail(line_number, NodelistErrorKind::InvalidFlag));
-			}
-
-			let zone = hierarchy.zone.expect("a valid data line has a Zone");
-			let region = hierarchy.region.as_ref().map(Address::net);
-			let net = address.net();
-			for flag in &other_flags {
-				let valid = match flag {
-					OtherFlag::ZoneEchomailCoordinator => zones_with_zec.insert(zone),
-					OtherFlag::RegionalEchomailCoordinator => {
-						region.is_some_and(|region| regions_with_rec.insert((zone, region)))
-					}
-					OtherFlag::RegionalPointlistKeeper => {
-						region.is_some_and(|region| regions_with_rpk.insert((zone, region)))
-					}
-					OtherFlag::NetworkEchomailCoordinator => {
-						echomail_coordinator_nets.insert((zone, net))
-					}
-					OtherFlag::NetPointlistKeeper => pointlist_keeper_nets.insert((zone, net)),
-					OtherFlag::NetworkCoordinator => {
-						!matches!(keyword, Keyword::Zone | Keyword::Region | Keyword::Host)
-							&& coordinator_override_nets.insert((zone, net))
-					}
-					_ => true,
-				};
-				if !valid {
-					return Err(fail(line_number, NodelistErrorKind::InvalidFlag));
-				}
-			}
-
-			let services: Vec<_> = internet_flags
-				.resolved_services()
-				.into_iter()
-				.filter(|service| service.protocol == InternetProtocol::Tith)
-				.collect();
-			let tith = services.first().map(|service| TithService {
-				endpoints: services
-					.iter()
-					.flat_map(|service| service.endpoints.iter())
-					.map(|endpoint| Endpoint {
-						server: endpoint
-							.server
-							.as_ref()
-							.map(|server| server.as_str().to_owned()),
-						port: endpoint
-							.port
-							.map_or(EndpointPort::RegisteredDefault, EndpointPort::Explicit),
-					})
-					.collect(),
-				public_key: service
-					.public_key
-					.expect("a resolved TITH service has a public key"),
-			});
-			let zone_address = Address::new(
-				domain.to_owned(),
-				hierarchy.zone.expect("a valid data line has a Zone"),
-				hierarchy.zone.expect("a valid data line has a Zone"),
-				0,
-				0,
-			)
-			.expect("active Zone is valid");
-			let entry = Entry {
-				keyword,
-				address: address.clone(),
-				node_name: fields[2].to_owned(),
-				location: fields[3].to_owned(),
-				sysop_name: fields[4].to_owned(),
-				phone: fields[5].to_owned(),
-				system_flags,
-				pstn_isdn_flags,
-				internet_flags,
-				email_flags,
-				other_flags,
-				tith,
-				branch: Branch {
-					zone: zone_address,
-					region: hierarchy.region.clone(),
-					host: hierarchy.host.clone(),
-					hub: hierarchy.hub.clone(),
-				},
-			};
-			entries.insert(address, entry);
 		}
 		Ok(Self { entries })
 	}
-
 	#[must_use]
 	pub fn get(&self, address: &Address) -> Option<&Entry> {
 		self.entries.get(address)
@@ -463,11 +242,13 @@ mod tests {
 	use base64::engine::general_purpose::STANDARD_NO_PAD;
 
 	fn line(keyword: &str, number: u16, internet: &str) -> String {
-		format!("{keyword}\t{number}\tNode\tLocation\tSysop\t\tCM\t\t{internet}\t\t\n")
+		let phone = if keyword.is_empty() { "1-1" } else { "" };
+		format!("{keyword}\t{number}\tNode\tLocation\tSysop\t{phone}\tCM\t\t{internet}\t\t\n")
 	}
 
 	fn flagged_line(keyword: &str, number: u16, system: &str, other: &str) -> String {
-		format!("{keyword}\t{number}\tNode\tLocation\tSysop\t\t{system}\t\t\t\t{other}\n")
+		let phone = if keyword.is_empty() { "1-1" } else { "" };
+		format!("{keyword}\t{number}\tNode\tLocation\tSysop\t{phone}\t{system}\t\t\t\t{other}\n")
 	}
 
 	#[test]
@@ -668,10 +449,8 @@ mod tests {
 		let key = STANDARD_NO_PAD.encode([13; 32]);
 		let prefix = [line("Zone", 1, ""), line("Host", 10, "")].concat();
 		for field_9 in [
-			"INA:example.org",
 			"IBN:example.org:24554",
 			&format!("IIH:example.org:24555:{key}"),
-			&format!("IIH::24555:{key}"),
 		] {
 			let input = format!("{prefix}Pvt\t20\tNode\tLocation\tSysop\t\tCM\t\t{field_9}\t\t\n");
 			assert!(
