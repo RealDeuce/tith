@@ -555,7 +555,7 @@ mod tests {
 			OwnedTlv::new(types::TO_USER_NAME, b"You".to_vec()).unwrap(),
 			OwnedTlv::new(types::FROM_USER_NAME, b"Me".to_vec()).unwrap(),
 			OwnedTlv::new(types::SUBJECT, b"Transit".to_vec()).unwrap(),
-			OwnedTlv::new(types::MESSAGE_TEXT, b"Please pass this along".to_vec()).unwrap(),
+			OwnedTlv::new(types::MESSAGE_TEXT, b"Please pass this along\n".to_vec()).unwrap(),
 		];
 		if sign {
 			let mut signed = Vec::new();

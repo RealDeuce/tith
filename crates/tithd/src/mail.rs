@@ -792,7 +792,7 @@ mod tests {
 			OwnedTlv::new(types::TO_USER_NAME, b"Sysop".to_vec()).unwrap(),
 			OwnedTlv::new(types::FROM_USER_NAME, b"Remote".to_vec()).unwrap(),
 			OwnedTlv::new(types::SUBJECT, b"Hello".to_vec()).unwrap(),
-			OwnedTlv::new(types::MESSAGE_TEXT, b"Native TITH mail".to_vec()).unwrap(),
+			OwnedTlv::new(types::MESSAGE_TEXT, b"Native TITH mail\n".to_vec()).unwrap(),
 		];
 		let mut signed = Vec::new();
 		for child in &children {
