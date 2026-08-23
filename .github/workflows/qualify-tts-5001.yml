@@ -13,7 +13,7 @@ on:
       - "crates/tith-nodelist/src/lib.rs"
       - "crates/tith-nodelist/tests/tts5001.rs"
       - "qualification/check_source_line_coverage.py"
-      - "qualification/TTS-5001.002.md"
+      - "qualification/TTS-5001.003.md"
       - ".github/workflows/qualify-tts-5001.yml"
   workflow_dispatch:
 

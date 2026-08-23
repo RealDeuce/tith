@@ -251,6 +251,7 @@ fn internet_grammar_and_public_keys_are_canonical() {
 		"IBN::65535".to_owned(),
 		"IBN:192.0.2.1:24555".to_owned(),
 		"IBN:[2001:db8::1]".to_owned(),
+		"IBN:[2001:db8::1]:24555".to_owned(),
 		format!("IIH:{encoded_key}"),
 		format!("IIH:mail.example:{encoded_key}"),
 		format!("IIH::24555:{encoded_key}"),
@@ -274,12 +275,14 @@ fn internet_grammar_and_public_keys_are_canonical() {
 		"IBN::65536".to_owned(),
 		"IBN:+1".to_owned(),
 		"IBN:[2001:db8::1]x".to_owned(),
+		"IBN:[2001:db8::1]:0".to_owned(),
 		"IBNx".to_owned(),
 		"INO4:x".to_owned(),
 		"IP,IP".to_owned(),
 		"IBN,INA:a.example".to_owned(),
 		"IIH:key".to_owned(),
 		format!("IIH:{encoded_key}="),
+		format!("IIH:{}=", &encoded_key[..42]),
 		format!("IIH:a.example:1:{encoded_key},IIH:b.example:1:{other_key}"),
 	] {
 		assert!(invalid.parse::<InternetFlags>().is_err(), "{invalid}");
@@ -338,7 +341,7 @@ fn email_defaults_expand_in_preference_order() {
 #[test]
 fn other_extensions_reserve_only_exact_assigned_names() {
 	let longest = "A".repeat(32);
-	for valid in ["U", "TRACE", "V32B", "V42B", "a9", &longest] {
+	for valid in ["U", "AAA", "TRACE", "V32B", "V42B", "a9", &longest] {
 		let parsed: OtherFlags = valid.parse().unwrap();
 		assert_eq!(parsed.to_string(), valid);
 	}

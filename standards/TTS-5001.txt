@@ -3,7 +3,7 @@ TITH                                              THIS ISN'T THAT HARD
 **********************************************************************
 
 Publication:  TTS‑5001
-Revision:     2
+Revision:     3
 Title:        Nodelist Flags
 Author(s):    FTSC Members, Administrator, Honoured Guests and
               Stephen Hurd
@@ -310,6 +310,11 @@ Contents
   and an endpoint argument from section 7.1.  Its registered default
   port and meaning are:
 
+  When the endpoint argument is empty, the Colon and argument are both
+  omitted.  A present Colon MUST therefore be followed by a nonempty
+  endpoint argument.  For example, `IBN` is canonical and `IBN:` is
+  invalid.
+
     IBN   24554  binkp
     IFC   60179  raw ifcico
     IFT      21  FTP
@@ -437,5 +442,8 @@ B. History
    Rev.2, 2026‑08‑23: Limited conformance to the flag registry and
    serialization, defined exact IPv6 and repeated IEM handling, and
    pinned the public‑key and requirement‑keyword dependencies.
+
+   Rev.3, 2026‑08‑23: Defined the single canonical spelling of a
+   Protocol flag whose endpoint argument is empty.
 
 **********************************************************************
