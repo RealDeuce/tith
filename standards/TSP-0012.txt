@@ -3,7 +3,7 @@ TITH                                              THIS ISN'T THAT HARD
 **********************************************************************
 
 Publication:  TSP‑0012
-Revision:     3
+Revision:     4
 Title:        Tosser Consumption IPC
 Author(s):    Stephen Hurd
 Date:         2026‑08‑23
@@ -65,7 +65,8 @@ Contents
   Path presentation is required and works over every binding.  Unix
   socket and Windows named pipe bindings may additionally transfer a
   read‐only native payload handle in the result.  Capabilities
-  advertises this as the feature "Consume.Payload-Handle".
+  advertises this as the feature "Consume.Payload-Handle".  This
+  document assigns that feature and defines its behavior.
 
   Capabilities lists Claim-Inbound, Renew-Inbound,
   Acknowledge-Inbound, Release-Inbound, Defer-Inbound, Reject-Inbound,
@@ -164,11 +165,11 @@ Contents
     Payload-Path "<local-pathname>"|Payload-Handle 0
     End
 
-  Forward-Job occurs only after a TSP‑0006 Job Forward commitment and
-  identifies that stable Job.  The final alternative occupies one
-  physical line.  Payload-Path occurs for Path and Payload-Handle occurs
-  for Handle.  A Handle result has exactly one result‐associated handle.
-  A Path result has none.
+  Forward-Job occurs only when the TSP‑0006 operation‐private
+  InboundID-to-JobID association exists and identifies that stable Job.
+  The final alternative occupies one physical line.  Payload-Path
+  occurs for Path and Payload-Handle occurs for Handle.  A Handle result
+  has exactly one result‐associated handle.  A Path result has none.
 
   Local-Identity names the exact receiving local identity recorded by
   TSP‑0011.  Peer is the canonical TTS‑0004 text address of the
@@ -364,6 +365,25 @@ Contents
   item.  The consumer records InboundID with its effects so redelivery
   can be recognized without creating them again.
 
+  For an Origin-Valid or SignedOrigin-Valid EchoMail or standalone
+  distribution File, the consumer requests TSP‑0006 Job Forward while
+  the claim is current.  Before the request it durably assigns a stable
+  submission idempotency identity associated with InboundID.  It
+  obtains or recovers the complete committed result before
+  Acknowledge-Inbound.  If its own association is lost, Forward-Job in
+  Claim-Inbound or Query-Inbound recovers the Service's durable
+  association without creating another Job.
+
+  A terminal control transition atomically permits TSP‑0006 to release
+  its operation recovery hold.  Release, Defer, and claim expiration
+  leave an existing association and hold available to a later claim.
+
+  A reply, notification, or other ordinary outbound Job follows the
+  same commitment rule without Forward-Job.  The consumer records its
+  InboundID and submission idempotency identity, then recovers the
+  complete result through the submission operation before
+  acknowledging the inbound item.
+
   Release, Defer, Reject, claim expiration, a failed payload read, or an
   incomplete Claim result transfers no durable responsibility away
   from the mailer.  The consumer discards partial local output unless
@@ -432,29 +452,29 @@ A. References
 ─────────────
 
   [TSP‑0002] "Routing and Distribution Configuration", TITH,
-  2026‑08‑21.
+  2026‑08‑23.
 
   [TSP‑0004] "Local IPC Format", TITH, 2026‑08‑23.
 
   [TSP‑0006] "Outbound Job Submission", TITH, 2026‑08‑23.
 
-  [TSP‑0007] "Unix‐Domain Socket IPC Binding", TITH, 2026‑08‑17.
+  [TSP‑0007] "Unix‐Domain Socket IPC Binding", TITH, 2026‑08‑23.
 
   [TSP‑0008] "Atomic File IPC Binding", TITH, 2026‑08‑17.
 
   [TSP‑0009] "Authenticated TCP IPC Binding", TITH, 2026‑08‑17.
 
-  [TSP‑0010] "Windows Named‐Pipe IPC Binding", TITH, 2026‑08‑17.
+  [TSP‑0010] "Windows Named‐Pipe IPC Binding", TITH, 2026‑08‑23.
 
-  [TSP‑0011] "Durable Inbound Delivery Items", TITH, 2026‑08‑21.
+  [TSP‑0011] "Durable Inbound Delivery Items", TITH, 2026‑08‑23.
 
   [TSP‑0019] "Spawned‐Process IPC Binding", TITH, 2026‑08‑23.
 
   [TTS‑0003] "Common TLV Types", TITH, 2026‑08‑22.
 
-  [TTS‑0004] "Node Addresses", TITH, 2026‑08‑21.
+  [TTS‑0004] "Node Addresses", TITH, 2026‑08‑22.
 
-  [TTS‑0005] "Bundle Format", TITH, 2026‑08‑22.
+  [TTS‑0005] "Bundle Format", TITH, 2026‑08‑23.
 
 
 B. History
@@ -466,5 +486,9 @@ B. History
    authentication states required by final delivery policy.
 
    Rev.3, 2026‑08‑23: Added the spawned‐process path binding.
+
+   Rev.4, 2026‑08‑23: Assigned Consume.Payload-Handle and defined the
+   consumer workflow for Forward Job association, acknowledgement, and
+   ordinary outbound effects.
 
 **********************************************************************

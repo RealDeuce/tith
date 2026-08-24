@@ -3,7 +3,7 @@ TITH                                              THIS ISN'T THAT HARD
 **********************************************************************
 
 Publication:  TSP‑0004
-Revision:     3
+Revision:     4
 Title:        Local IPC Format
 Author(s):    Stephen Hurd
 Date:         2026‑08‑23
@@ -267,24 +267,16 @@ Contents
   Both kinds are ordered by their quoted value's exact UTF‑8 bytes and
   contain no duplicate.  A Client ignores an unknown Feature value.
 
-  This suite defines these Feature values:
+  This common IPC format defines the Feature value
+  "Completion.Callbacks".  It means trusted host configuration may
+  associate a callback with an Application.  The Events and
+  Acknowledge Operation lines independently advertise the IPC event
+  operations.
 
-    Completion.Callbacks
-    Consume.Payload-Handle
-    Submit.Delete
-    Submit.Move
-    Submit.Source-Handle
-    Submit.Truncate
-
-  Submit.Source-Handle is present only when the current binding and
-  Service can provide a request‐associated handle table satisfying
-  TSP‑0006.  Consume.Payload-Handle is present only when it can provide
-  the result‐associated payload handle required by TSP‑0012.  The other
-  submission features apply to Submit and Submit-Items and mean the
-  Service implements that optional ingestion or cleanup behaviour.
-  Completion.Callbacks means trusted host configuration may associate
-  a callback with an Application.  The Events and Acknowledge Operation
-  lines independently advertise the IPC event operations.
+  The document which defines an operation assigns and defines Feature
+  values specific to it.  A binding states whether it can carry the
+  associated behavior.  Defining the common Feature envelope does not
+  assign every Feature used by an operation.
 
   Capabilities is a snapshot of implemented and binding‐available
   behaviour.  It does not authorize an Application, Source, Job,
@@ -309,24 +301,24 @@ Contents
 A. References
 ─────────────
 
-  [TSP‑0005] "Durable Outbound Jobs", TITH, 2026‑08‑21.
+  [TSP‑0005] "Durable Outbound Jobs", TITH, 2026‑08‑23.
 
   [TSP‑0006] "Outbound Job Submission", TITH, 2026‑08‑23.
 
-  [TSP‑0007] "Unix‐Domain Socket IPC Binding", TITH, 2026‑08‑17.
+  [TSP‑0007] "Unix‐Domain Socket IPC Binding", TITH, 2026‑08‑23.
 
   [TSP‑0008] "Atomic File IPC Binding", TITH, 2026‑08‑17.
 
   [TSP‑0009] "Authenticated TCP IPC Binding", TITH, 2026‑08‑17.
 
-  [TSP‑0010] "Windows Named‐Pipe IPC Binding", TITH, 2026‑08‑17.
+  [TSP‑0010] "Windows Named‐Pipe IPC Binding", TITH, 2026‑08‑23.
 
-  [TSP‑0011] "Durable Inbound Delivery Items", TITH, 2026‑08‑21.
+  [TSP‑0011] "Durable Inbound Delivery Items", TITH, 2026‑08‑23.
 
   [TSP‑0012] "Tosser Consumption IPC", TITH, 2026‑08‑23.
 
   [TSP‑0013] "Legacy Mailer and Tosser IPC Adapters", TITH,
-  2026‑08‑20.
+  2026‑08‑23.
 
   [TSP‑0019] "Spawned‐Process IPC Binding", TITH, 2026‑08‑23.
 
@@ -340,5 +332,8 @@ B. History
    and added inbound consumption capabilities.
 
    Rev.3, 2026‑08‑23: Added the spawned‐process binding.
+
+   Rev.4, 2026‑08‑23: Left operation‐specific Feature assignment to
+   the document which owns each operation.
 
 **********************************************************************

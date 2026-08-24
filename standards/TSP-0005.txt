@@ -3,10 +3,10 @@ TITH                                              THIS ISN'T THAT HARD
 **********************************************************************
 
 Publication:  TSP‑0005
-Revision:     11
+Revision:     12
 Title:        Durable Outbound Jobs
 Author(s):    Stephen Hurd
-Date:         2026‑08‑22
+Date:         2026‑08‑23
 ══════════════════════════════════════════════════════════════════════
 
 Status of this document
@@ -93,8 +93,9 @@ Contents
 
   An Attachment is a File child inside a Message.  A Message may have
   no Attachments.  A locally submitted standalone File of either Kind
-  has one Source for its Contents; a Forward Job takes its complete
-  item from a TSP‑0011 inbound record.  A FileRequest Job has no
+  has one Source for its Contents.  A Forward Job owns the complete
+  immutable item supplied atomically by the operation which creates
+  it, and has no Source cleanup record.  A FileRequest Job has no
   Source, private copy, WireFilename, or cleanup record; its complete
   item is the requested Filename, an optional condition Timestamp, and
   a RequestIdentifier.
@@ -338,8 +339,11 @@ Contents
   usable endpoint and satisfaction of caller restrictions when
   committed; Passive does not require an endpoint.
 
-  If routing, authorization, or loop detection fails, Reroute fails
-  without replacing the existing delivery copy or any of its policies.
+  Unroutable or Loop from Route produces Reroute PermanentFailure with
+  the current Job state.  An unauthorized explicit next hop or failure
+  policy produces NotPermitted.  A transient local failure produces
+  TemporaryFailure.  Each failure leaves the existing delivery copy
+  and every one of its policies unchanged.
 
   Failure-Policy absent or Route resolves current TSP‑0002 policies.
   An explicit policy applies to both permanent response kinds and
@@ -618,18 +622,16 @@ Contents
   until acknowledged or explicitly discarded by an administrator.
 
   An explicit administrative purge may remove a Job only when it is
-  Delivered, Rejected, Failed, or Cancelled and no cleanup status is
-  Pending.  A Forward Job additionally requires its associated inbound
-  item to be terminal with no current claim.  The administrator
-  explicitly authorizes retirement of any
-  retained Dead-Letter contents and discard of any unacknowledged
-  events.  Purge MUST NOT silently occur as ordinary age‐based Job
-  processing.
+  Delivered, Rejected, Failed, or Cancelled, no cleanup status is
+  Pending, and no operation‐owned recovery association retains it.  The
+  administrator explicitly authorizes retirement of any retained
+  Dead-Letter contents and discard of any unacknowledged events.  Purge
+  MUST NOT silently occur as ordinary age‐based Job processing.
 
   A completed purge durably removes the Job metadata, its idempotency
-  mapping, Forward association, remaining private contents, cleanup
-  records, and event or acknowledgement history as one administrative
-  action.  Afterward, Query, Query-Job, and Acknowledge return NotFound,
+  mapping, remaining private contents, cleanup records, and event or
+  acknowledgement history as one administrative action.  Afterward,
+  Query, Query-Job, and Acknowledge return NotFound,
   Lookup-Submission reports NotFound, and the former Idempotency-Key may
   be reused for a new Job.  Removing contents alone does not permit key
   reuse.
@@ -655,19 +657,19 @@ A. References
 ─────────────
 
   [TSP‑0002] "Routing and Distribution Configuration", TITH,
-  2026‑08‑22.
+  2026‑08‑23.
 
-  [TSP‑0004] "Local IPC Format", TITH, 2026‑08‑17.
+  [TSP‑0004] "Local IPC Format", TITH, 2026‑08‑23.
 
-  [TSP‑0006] "Outbound Job Submission", TITH, 2026‑08‑21.
+  [TSP‑0006] "Outbound Job Submission", TITH, 2026‑08‑23.
 
-  [TSP‑0011] "Durable Inbound Delivery Items", TITH, 2026‑08‑21.
+  [TSP‑0011] "Durable Inbound Delivery Items", TITH, 2026‑08‑23.
 
-  [TTS‑0009] "Item Format", TITH, 2026‑08‑22.
+  [TTS‑0009] "Item Format", TITH, 2026‑08‑23.
 
   [TTS‑0003] "Common TLV Types", TITH, 2026‑08‑22.
 
-  [TTS‑0005] "Bundle Format", TITH, 2026‑08‑22.
+  [TTS‑0005] "Bundle Format", TITH, 2026‑08‑23.
 
 
 B. History
@@ -709,5 +711,9 @@ B. History
 
    Rev.11, 2026‑08‑22: Applied rejection reason 2 generically while
    retaining its terminal copy state and modified replacement Job.
+
+   Rev.12, 2026‑08‑23: Made Forward Job contents and retention
+   independent of an inbound record and assigned exact Reroute failure
+   results.
 
 **********************************************************************

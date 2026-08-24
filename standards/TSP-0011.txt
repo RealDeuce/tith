@@ -3,10 +3,10 @@ TITH                                              THIS ISN'T THAT HARD
 **********************************************************************
 
 Publication:  TSP‑0011
-Revision:     7
+Revision:     8
 Title:        Durable Inbound Delivery Items
 Author(s):    Stephen Hurd
-Date:         2026‑08‑22
+Date:         2026‑08‑23
 ══════════════════════════════════════════════════════════════════════
 
 Status of this document
@@ -54,10 +54,9 @@ Contents
   packet in a tosser's inbound directory.
 
   The item remains owned by the mailer until a configured local
-  consumer durably accepts responsibility for it.  TSP‑0012 defines the
-  local IPC operations which claim and resolve items.  TSP‑0013 defines
-  how a legacy adapter may place packet and spool conventions beyond
-  that IPC boundary.
+  consumer durably accepts responsibility for it.  Nonnormatively,
+  TSP‑0012 provides local IPC operations which claim and resolve items,
+  and TSP‑0013 describes a legacy adapter beyond that IPC boundary.
 
   An inbound item is not a Bundle, packet, or temporary connection
   object.  Bundle framing and immediate transport routing are complete
@@ -96,8 +95,8 @@ Contents
     • Message, File, or FileRequest as its Kind;
     • the end‐to‐end item authentication result when applicable;
     • the payload byte count and hash; and
-    • its state, claim history, optional Forward Job association, and
-      most recent local result.
+    • its state, claim history, outstanding local delivery, routing,
+      and distribution responsibilities, and most recent local result.
 
   The receiving local identity is the exact local identity represented
   by the Destination in the Bundle Header.  The immediate peer is the
@@ -127,6 +126,12 @@ Contents
   modified in transit.  The value is Transport for a FileRequest, which
   has no independent item Signature by design.
 
+  Origin-Valid and SignedOrigin-Valid meet the authenticated relay and
+  distribution predicate defined by TSP‑0002.  Unsigned,
+  Origin-Invalid, and SignedOrigin-Invalid do not.  These storage names
+  record the TTS‑0009 authentication result; they do not define that
+  routing predicate.
+
   None of these values reports Bundle authentication.  Before an item
   reaches this record, its enclosing payload SignedTLV has been
   authenticated with the Bundle Origin.  Unauthenticated SignedData is
@@ -154,8 +159,10 @@ Contents
     • the complete immutable payload;
     • InboundID and every inbound record field;
     • the selected consumer Application;
-    • Available as the initial state; and
-    • the TTS‑0009 signed‑item identity when the item has one.
+    • Available as the initial state;
+    • the TTS‑0009 signed‑item identity when the item has one; and
+    • every outstanding local delivery, routing, or distribution
+      responsibility selected for the item.
 
   A consumer Application is selected from trusted local configuration,
   not from an unauthenticated field or IPC request.  Configuration may
@@ -170,6 +177,12 @@ Contents
   it, an Area accepted it, or a legacy packet was created.  A later
   local outcome MUST NOT retract, replace, or contradict the completed
   transport response.
+
+  Responsibility for the exact item may move to another durable owner
+  only through an atomic transfer which satisfies TSP‑0002 section 9.
+  The inbound record remains responsible for every obligation which
+  that transfer has not discharged or assigned to another durable
+  owner.
 
   A transport duplicate handled under TTS‑0005 section 7 does not create
   another inbound item.  The receiver returns Accepted for the current
@@ -238,31 +251,24 @@ Contents
 ───────────────────
 
   A consumer acknowledges an item only after its processing result and
-  every responsibility transferred from the mailer are durable.  For a
-  native tosser this includes its message base changes, duplicate
-  record, and any new outbound submission commitment.  For a legacy
-  adapter it includes the ledger and published legacy objects required
-  by TSP‑0013.
+  every responsibility transferred from the mailer are durable.  This
+  includes local delivery and duplicate records, every applicable
+  onward copy, and every enabled authentication reply or notification.
+  Any transfer to another durable owner MUST satisfy TSP‑0002 section
+  9 for the exact retained item and all of its remaining obligations.
 
   Before acknowledging an Origin-Valid or SignedOrigin-Valid EchoMail
-  or standalone distribution File, a consumer MUST use TSP‑0006
-  Submit-Items Job Forward.  That operation uses the inbound record's
-  receiving local identity, exact immediate peer, and retained payload
-  to create every applicable TSP‑0002 Send-To delivery copy without
-  applying a TITH NetMail Route.  The consumer obtains or recovers its
-  complete committed result.  A later outbound failure is owned by
-  that Job and does not reopen the inbound item.
+  or standalone distribution File, the consumer MUST durably commit
+  every applicable TSP‑0002 Send-To copy from the exact retained item,
+  receiving local identity, and immediate peer.  TITH NetMail Route is
+  not applied.  The consumer obtains or recovers the complete result
+  of that commitment.  A later outbound failure belongs to the new
+  durable owner and does not reopen the inbound item.
 
-  The consumer assigns and durably records the Forward Job's
-  idempotency identity before requesting it.  If that local record is
-  lost, TSP‑0012 Forward-Job exposes the durable association without
-  creating another Job.
-
-  A TSP‑0013 legacy adapter follows the same rule.  Its published
-  legacy object is terminal local delivery and MUST NOT be used to
-  create onward copies.  A legacy round trip would remove the native
-  authentication evidence and replace it with a new gateway
-  attestation, so it is not an alternate distribution mechanism.
+  A converted or locally presented object is terminal local delivery
+  and MUST NOT become the source for onward copies.  The exact signed
+  payload and its validation evidence remain the distribution source;
+  conversion cannot be an alternate distribution mechanism.
 
   Only an Origin-Valid or SignedOrigin-Valid item has a distribution
   obligation.  An Unsigned, Origin-Invalid, or SignedOrigin-Invalid
@@ -343,8 +349,8 @@ Contents
   A Message diagnostic is prepended to the local user presentation,
   followed by an empty line before MessageText.  It MUST NOT alter the
   immutable native payload or become the source for forwarding,
-  duplicate detection, or TSP‑0003 signed‐region reconstruction.  This
-  distinction matters because text inserted into the body can be
+  duplicate detection, authentication, or signed‐region reconstruction.
+  This distinction matters because text inserted into the body can be
   mistaken for author text, quoted in a reply, or invalidate a retained
   signature.  A File diagnostic is local metadata or an adjacent
   message; File Contents MUST NOT be prefixed or otherwise modified.
@@ -356,15 +362,17 @@ Contents
   an administrative quarantine can own it.  It MUST NOT acknowledge
   and silently discard the only recoverable copy.
 
-  Reply-Origin creates separate signed NetMail through TSP‑0006.  For a
-  Message it is addressed to FromUserName at Message Origin; for a File
-  it is addressed to the Sysop at File Origin.  It identifies the
-  authentication state and local disposition but MUST NOT quote the
-  original MessageText or disclose File Contents.  Its submission and
-  the consumer's InboundID association are durable before the inbound
-  item is acknowledged.  An authentication reply MUST NOT itself cause
-  another authentication reply.  If current routing cannot address
-  Origin, the reply is omitted and that result is recorded locally.
+  Reply-Origin creates separate signed NetMail through the ordinary
+  outbound submission interface.  For a Message it is addressed to
+  FromUserName at Message Origin; for a File it is addressed to the
+  Sysop at File Origin.  It identifies the authentication state and
+  local disposition but MUST NOT quote the original MessageText or
+  disclose File Contents.  The consumer records InboundID and a stable
+  idempotency identity, then obtains or recovers the complete committed
+  submission result before acknowledging the inbound item.  An
+  authentication reply MUST NOT itself cause another authentication
+  reply.  If current routing cannot address Origin, the reply is
+  omitted and that result is recorded locally.
 
   Automatic replies are disabled by default.  Unsigned Origin is
   unauthenticated, and SignedOrigin authenticates only the gateway's
@@ -435,12 +443,10 @@ Contents
 
   An explicit administrative purge may remove an inbound record only
   when it is Consumed, Rejected, or Failed and has no current claim.
-  A record associated with a Forward Job may be purged only after the
-  TSP‑0005 Job purge has removed that association.  Inbound purge
-  durably removes its remaining payload, metadata, ClaimKey mappings,
-  and local result as one administrative action.  It is not a consumer
-  IPC operation and MUST NOT occur as silent ordinary age‐based
-  processing.
+  Inbound purge durably removes its remaining payload, metadata,
+  ClaimKey mappings, and local result as one administrative action.  It
+  is not a consumer IPC operation and MUST NOT occur as silent ordinary
+  age‐based processing.
 
   A TTS‑0009 signed‑item identity is independent of the local
   inbound record.  Purging InboundID MUST NOT remove that identity or
@@ -474,32 +480,26 @@ A. References
   https://github.com/jedisct1/libhydrogen/wiki
 
   [TSP‑0002] "Routing and Distribution Configuration", TITH,
-  2026‑08‑21.
+  2026‑08‑23.
 
-  [TSP‑0003] "Legacy Data Formats and TITH", TITH, 2026‑08‑21.
+  [TSP‑0004] "Local IPC Format", TITH, 2026‑08‑23.
 
-  [TSP‑0004] "Local IPC Format", TITH, 2026‑08‑17.
-
-  [TSP‑0005] "Durable Outbound Jobs", TITH, 2026‑08‑21.
-
-  [TSP‑0006] "Outbound Job Submission", TITH, 2026‑08‑21.
-
-  [TSP‑0012] "Tosser Consumption IPC", TITH, 2026‑08‑18.
+  [TSP‑0012] "Tosser Consumption IPC", TITH, 2026‑08‑23.
 
   [TSP‑0013] "Legacy Mailer and Tosser IPC Adapters", TITH,
-  2026‑08‑20.
+  2026‑08‑23.
 
-  [TTS‑0008] "Public Key Trust and Continuity", TITH, 2026‑08‑22.
+  [TTS‑0008] "Public Key Trust and Continuity", TITH, 2026‑08‑23.
 
-  [TTS‑0009] "Item Format", TITH, 2026‑08‑22.
+  [TTS‑0009] "Item Format", TITH, 2026‑08‑23.
 
   [TTS‑0003] "Common TLV Types", TITH, 2026‑08‑22.
 
-  [TTS‑0004] "Node Addresses", TITH, 2026‑08‑21.
+  [TTS‑0004] "Node Addresses", TITH, 2026‑08‑22.
 
-  [TTS‑0005] "Bundle Format", TITH, 2026‑08‑22.
+  [TTS‑0005] "Bundle Format", TITH, 2026‑08‑23.
 
-  [TTS‑0006] "Bundle Exchange Protocol", TITH, 2026‑08‑21.
+  [TTS‑0006] "Bundle Exchange Protocol", TITH, 2026‑08‑23.
 
   [Policy] "FidoNet Policy Document", Version 4.07, 1989‑06‑09.
 
@@ -531,5 +531,10 @@ B. History
    Rev.7, 2026‑08‑22: Referred the exact item payload, authentication
    outcomes, and stable signed‑item identity to TTS‑0009 while retaining
    the TTS‑0005 transport acceptance and duplicate handling rules.
+
+   Rev.8, 2026‑08‑23: Defined model‐independent durable responsibility
+   and acknowledgement, related stored authentication names to the
+   routing predicate, and left operation and adapter mechanics to their
+   owning proposals.
 
 **********************************************************************

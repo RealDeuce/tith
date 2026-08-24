@@ -3,10 +3,10 @@ TITH                                              THIS ISN'T THAT HARD
 **********************************************************************
 
 Publication:  TSP‑0007
-Revision:     2
+Revision:     3
 Title:        Unix‐Domain Socket IPC Binding
 Author(s):    Stephen Hurd
-Date:         2026‑08‑17
+Date:         2026‑08‑23
 ══════════════════════════════════════════════════════════════════════
 
 Status of this document
@@ -146,7 +146,7 @@ Contents
   description, the Service MUST use host facilities which meet that
   requirement.  It rejects a new Source when it cannot do so.
 
-  A Service advertises the TSP‑0004 feature "Submit.Source-Handle" over
+  A Service advertises the TSP‑0006 Feature "Submit.Source-Handle" over
   this binding only when it can provide these guarantees.
 
   Result Descriptors
@@ -174,7 +174,7 @@ Contents
   at byte zero, then transfers that descriptor.  The received descriptor
   is index zero and the result contains no other associated descriptor.
 
-  A Service advertises the TSP‑0004 feature "Consume.Payload-Handle"
+  A Service advertises the TSP‑0012 Feature "Consume.Payload-Handle"
   over this binding only when it can provide these guarantees.
 
 
@@ -234,11 +234,11 @@ Contents
 A. References
 ─────────────
 
-  [TSP‑0004] "Local IPC Format", TITH, 2026‑08‑17.
+  [TSP‑0004] "Local IPC Format", TITH, 2026‑08‑23.
 
-  [TSP‑0006] "Outbound Job Submission", TITH, 2026‑08‑21.
+  [TSP‑0006] "Outbound Job Submission", TITH, 2026‑08‑23.
 
-  [TSP‑0012] "Tosser Consumption IPC", TITH, 2026‑08‑18.
+  [TSP‑0012] "Tosser Consumption IPC", TITH, 2026‑08‑23.
 
 
 B. History
@@ -248,5 +248,8 @@ B. History
 
    Rev.2, 2026‑08‑17: Added result‐associated descriptor transfer and
    item‐aware submission Sources.
+
+   Rev.3, 2026‑08‑23: Referred operation‐specific Features to their
+   operation documents.
 
 **********************************************************************

@@ -3,10 +3,10 @@ TITH                                              THIS ISN'T THAT HARD
 **********************************************************************
 
 Publication:  TSP‑0003
-Revision:     11
+Revision:     12
 Title:        Legacy Data Formats and TITH
 Author(s):    Stephen Hurd
-Date:         2026‑08‑22
+Date:         2026‑08‑23
 ════════════════════════════════════════════════════════════════════════
 
 Status of this document
@@ -66,11 +66,12 @@ Contents
   FSC‑0074.001.  Other deployed packet and message dialects are input
   compatibility policy, not alternate canonical output.
 
-  TSP‑0013 owns selection, durable staging, publication, companion
-  files, acknowledgement, and recovery.  This document owns only the
-  bytes and native fields produced from an already selected object.
-  Legacy routing and storage conventions do not change the TITH wire
-  grammar.
+  This document owns only the bytes and native fields produced from an
+  already selected object.  Selection, durable staging, publication,
+  companion file ownership, acknowledgement, and recovery are outside
+  that conversion.  Nonnormatively, TSP‑0013 specifies an operational
+  adapter which supplies those facilities.  Legacy routing and storage
+  conventions do not change the TITH wire grammar.
 
   These legacy forms are alternate serializations of the Message,
   File, and FileRequest data defined by TTS‑0009.  They do not define a
@@ -141,7 +142,7 @@ Contents
 
   On export, Origin supplies the claimed legacy author.  It must belong
   to the configured legacy domain and every emitted zone, net, node,
-  and point component must fit an unsigned 16‑bit field.  An adapter
+  and point component must fit an unsigned 16‑bit field.  A converter
   MUST NOT truncate an address component or invent a domain or zone.
 
   2.1 TTS‑0009 Message Field Map
@@ -440,9 +441,9 @@ Contents
   request correlation, replies, and acceptance consequences.
 
   Bark, WaZOO session negotiation, SRIF, Binkley‐style outbound, and
-  session polling are carriage or local‐interface concerns.  TSP‑0013
-  owns their adapter boundary.  An adapter MUST NOT disguise one as
-  ordinary NetMail or infer a native request merely from an attribute.
+  session polling are carriage or local‐interface concerns outside
+  this conversion.  A converter MUST NOT disguise one as ordinary
+  NetMail or infer a native request merely from an attribute.
 
 
 3. Message Text and Common Fields
@@ -623,11 +624,11 @@ Contents
   companion files after successful legacy transmission.  K/S requests
   removal of the message and is distinct from both.  These are legacy
   ownership and disposition instructions, not Message or File content.
-  An adapter maps them only through the durable ownership rules in
-  TSP‑0013.  It MUST NOT infer native deletion authority from a received
-  control.  An export MAY emit KFS or TFS only when its ledger and
-  configured ownership rule require that exact legacy action, and MUST
-  NOT emit both.  These controls remain unsigned AdditionalKludgeLine
+  Conversion reports each instruction as unsigned legacy disposition
+  evidence.  It does not infer native deletion authority from a
+  received control.  Canonical output emits KFS or TFS only when the
+  conversion context requests that exact legacy action, and MUST NOT
+  emit both.  These controls remain unsigned AdditionalKludgeLine
   values and are excluded from TITHSIG reconstruction.
 
   Canonical NetMail control paragraphs occur in this order before the
@@ -660,8 +661,8 @@ Contents
   by FTS‑0009.001.  Import stores the complete decoded MSGID payload as
   MessageID so quoted, gateway, traditional FTN, and TTS address forms
   remain distinguishable.  When native MessageID is not itself a valid
-  complete FTS‑0009 payload, the adapter durably assigns a serial unique
-  for legacy‐origin and records the association.
+  complete FTS‑0009 payload, the conversion context supplies a stable
+  serial unique for legacy‐origin and its inverse association.
 
   A parseable REPLY origin becomes ReplyTo Address and its complete
   payload becomes the ReplyTo string.  If its origin is a legacy
@@ -868,14 +869,13 @@ Contents
   importing gateway appends its own Via before committing the Message to
   a new next hop as required by TTS‑0009.
 
-  When the importer uses TSP‑0006, it submits those reconstructed named
-  Message fields, the retained Signature, the actual SignedOrigin and
-  conditional PublicKey from TITHSIGN, its selected Local-Identity,
-  Attachment Sources, and current unsigned suffix through that
-  document's existing UTF‑8 Message Job grammar.  It MUST NOT submit
-  TITHSIGN or TITHSIG again as an AdditionalKludgeLine.  The Service
-  reconstructs and verifies the same signed children before commitment;
-  it does not create a second binary Message submission grammar.
+  Successful import yields the reconstructed named Message fields, the
+  retained Signature, the actual SignedOrigin and conditional PublicKey
+  from TITHSIGN, the Attachment contents, and the current unsigned
+  suffix.  TITHSIGN and TITHSIG are reconstruction controls and MUST
+  NOT also become AdditionalKludgeLine values.  A consumer of this
+  conversion result reconstructs and verifies the same signed children
+  before treating the retained Signature as valid.
 
   The enclosing Message Type and Length and every child following
   Signature are freshly encoded because they are outside the original
@@ -929,9 +929,9 @@ Contents
   fields makes conversion unavailable.  Compatibility output MAY
   truncate at a UTF‑8 scalar boundary, but then cannot carry TITHSIG.
 
-  When the Message has File children, the adapter first assigns each a
-  safe legacy FileSpec and publishes the companion files according to
-  TSP‑0013.  Subject is the FileSpecs in child order separated by one
+  When the Message has File children, the conversion context supplies
+  one stable safe legacy FileSpec for each and the exact companion
+  contents.  Subject is the FileSpecs in child order separated by one
   ASCII Space, and AttributeWord bit 4 is set.  The complete list,
   including its NUL, must fit 72 bytes; otherwise this representation
   is unavailable.  A FileSpec MUST NOT contain NUL, ASCII Space, comma,
@@ -941,8 +941,9 @@ Contents
   Bits 4, 11, and 15 select the FileList grammar described in section
   3.  On ordinary import, AttributeWord bit 4, a preserved FLAGS FIL
   token, or ASSOC identifies attached files.  Each attachment FileSpec
-  is resolved only through the trusted companion‐file mapping, opened
-  and validated according to TSP‑0013, and converted to a File child.
+  is resolved only through the trusted companion‐file mapping to an
+  already selected stable readable regular file and is converted to a
+  File child from that exact object.
   When bit 4 is asserted, native Subject is empty.  With only bit 11 or
   bit 15 asserted, the exact decoded FileList remains native Subject;
   it is not converted into a native request.
@@ -1070,9 +1071,10 @@ Contents
   field.  The context therefore supplies the domain and MUST verify
   that the selected packet endpoints belong to it.
 
-  Creation fields contain the adapter's packet‐publication time in the
-  configured local time of the legacy link.  They are packet metadata,
-  not a source for any contained Message Timestamp or TimestampOffset.
+  Creation fields contain the packet creation time supplied by the
+  conversion context in the configured local time of the legacy link.
+  They are packet metadata, not a source for any contained Message
+  Timestamp or TimestampOffset.
 
   The capability word is 0x0001 and its validation copy is 0x0100.
   Both legacy zone fields repeat the corresponding current zone.  For
@@ -1186,10 +1188,10 @@ Contents
 ────────────────────────
 
   One FTS‑0006.002 REQ file carries one or more TTS‑0009 FileRequest
-  values for the same authenticated Bundle destination.  Its legacy
-  filename and placement select the immediate legacy peer according to
-  TSP‑0013 and local outbound policy; they are not a Filename value and
-  do not change the native Destination.
+  values for the same authenticated Bundle destination.  The trusted
+  conversion context supplies the immediate legacy peer selected by
+  the REQ filename and placement.  They are not a Filename value and do
+  not change the native Destination.
 
   Canonical output writes each FileRequest as one ASCII action line in
   request order, terminated by byte 0x0D:
@@ -1220,14 +1222,13 @@ Contents
   Every successfully parsed action becomes one FileRequest with a
   newly allocated RequestIdentifier.  The importing gateway signs the
   enclosing payload as itself.  REQ has no per‐action acceptance or
-  rejection record, so an adapter MUST NOT manufacture Accepted or
+  rejection record, so a converter MUST NOT manufacture Accepted or
   Rejected from a missing response or from the end of a legacy session.
 
-  An adapter converting a REQ file for onward native transmission
-  submits each action as one TSP‑0006 Job FileRequest addressed to the
-  peer its legacy placement selected.  The files answering an accepted
-  request are peer‐addressed standalone Files and are submitted as
-  TSP‑0006 Peer-File Jobs; they are not a distribution area.
+  The semantic result of importing a REQ action is one FileRequest
+  addressed to the peer supplied by its trusted placement context.  A
+  file answering such a request is a peer‐addressed standalone File,
+  not a distribution File and not a member of an Area.
 
 
 9. TIC File Distribution
@@ -1264,17 +1265,17 @@ Contents
     Pw
 
   Area is the configured legacy tag for File AreaName.  Areadesc maps
-  AreaDescription.  Origin is File Origin.  From is the immediate
-  legacy adapter address and To,
+  AreaDescription.  Origin is File Origin.  From is the configured
+  immediate local legacy address and To,
   when required by the selected legacy link, is its immediate
   destination.  These addresses use the FTS‑5006 5D form
   "zone:net/node[.point][@domain]" with no omitted zone, net, or node.
 
-  File is a stable safe 8.3 DOS transfer name generated and recorded by
-  the TSP‑0013 adapter.  Lfile is emitted when Filename differs from
-  that transfer name and contains the native Filename.  Import uses
-  Lfile as Filename when present and otherwise File.  Neither value is
-  used as a local path without the TSP‑0013 validation and name mapping.
+  File is a stable safe 8.3 DOS transfer name supplied by the trusted
+  conversion context.  Lfile is emitted when Filename differs from that
+  transfer name and contains the native Filename.  Import uses Lfile as
+  Filename when present and otherwise File.  Neither value is a local
+  path or grants permission to select one.
 
   The companion bytes are Contents.  Size is their decimal byte count.
   Crc is their eight‐digit uppercase FTS‑5006 CRC‑32.  Both are computed
@@ -1296,9 +1297,10 @@ Contents
   collection using the trusted legacy domain where a line is only 4D.
 
   Pw is trusted legacy link policy only.  It has no TITH field and does
-  not authenticate Origin, SignedOrigin, Contents, or any route.  An
-  adapter MAY emit the configured link value needed by its legacy peer.
-  It MUST NOT derive Pw from a native key or expose Pw as native data.
+  not authenticate Origin, SignedOrigin, Contents, or any route.  A
+  converter MAY emit the configured link value needed by its legacy
+  peer.  It MUST NOT derive Pw from a native key or expose Pw as native
+  data.
 
   Input keywords are case‐insensitive and may occur in any order except
   that repeated Path, Desc, and Ldesc groups retain their documented
@@ -1307,24 +1309,23 @@ Contents
   size, bad CRC, missing required keyword, missing companion, or
   conflict with trusted link context is malformed.
 
-  Unknown TIC lines have no TTS‑0009 File child.  The adapter retains
-  them verbatim in its TSP‑0013 conversion ledger for replay to the same
-  legacy side, but they do not enter the signed native File and cannot
-  grant authority.  A gateway which requires end‑to‑end preservation of
-  an unknown keyword must retain the work rather than claim a lossless
-  conversion.
+  Unknown TIC lines have no TTS‑0009 File child.  Conversion reports
+  them verbatim as unsigned legacy evidence for possible replay to the
+  same legacy side, but they do not enter the signed native File and
+  cannot grant authority.  A gateway which requires end‑to‑end
+  preservation of an unknown keyword must retain the work rather than
+  claim a lossless conversion.
 
   An FTS‑5005.003 reference file entry which no packed Message claims
   and which has no accompanying TIC is neither an attachment nor an
   area distribution.  An ARCmail bundle is the ordinary example.  It
-  maps to one peer‑addressed standalone TTS‑0009 File and is submitted
-  as a TSP‑0006 Peer-File Job.  Its Filename is the final component of
-  the entry, which is a legacy pathname and not itself a Filename
-  value; its Destination is the address the entry's placement selects;
-  and its section 3.1 directive supplies the TSP‑0006
-  Source-Disposition rather than authorizing an immediate removal.
-  The entry has no legacy description, magic name, or replacement name,
-  so the resulting File carries none.
+  maps to one peer‐addressed standalone TTS‑0009 File.  Its Filename is
+  the validated final component of the entry rather than the legacy
+  pathname itself; its Destination is the address the trusted placement
+  context selects; and its section 3.1 directive is unsigned legacy
+  disposition evidence rather than authorization for immediate
+  removal.  The entry has no legacy description, magic name, or
+  replacement name, so the resulting File carries none.
 
 
 10. Validation and Compatibility
@@ -1378,13 +1379,14 @@ Contents
   dialect.
 
   Packet passwords and legacy control paragraphs are untrusted input.
-  Attached FileSpecs and every generated or received pathname are
-  subject to the race‑resistant ownership and validation rules in
-  TSP‑0013.  No legacy field selects SignedOrigin, overrides an existing
-  effective Origin key, or grants native routing policy.
+  A converter receives attached FileSpecs and generated or received
+  pathnames only through a trusted mapping to already selected stable
+  regular files; those strings grant no access by themselves.  No
+  legacy field selects SignedOrigin, overrides an existing effective
+  Origin key, or grants native routing policy.
 
-  10.1 Final Delivery Authentication
-  ────────────────────────────────────
+  10.1 Conversion Authentication Results
+  ──────────────────────────────────────
   TTS‑0009 defines five end‑to‑end authentication states for a
   Message or standalone File carried in an authenticated payload
   SignedTLV.  TSP‑0011 names them Unsigned, SignedOrigin-Invalid,
@@ -1400,9 +1402,8 @@ Contents
   for a signed region its author constructed under section 3.1, since
   no SignedOrigin is present.  A native Unsigned item has
   no TITHSIG controls.  Invalid or Unsigned input is not eligible for a
-  canonical signed‐region export, though a final delivery adapter may
-  produce a clearly marked local compatibility presentation under
-  TSP‑0011 and TSP‑0013.
+  canonical signed‐region export.  Nonnormatively, TSP‑0011 defines how
+  a final consumer acts on each authentication result.
 
   When legacy software removes TITHSIG and later presents the Message
   for import, that input is indistinguishable from a Message which was
@@ -1411,38 +1412,8 @@ Contents
   cannot restore, infer, or carry forward the earlier authentication
   state.  In particular, a new SignedOrigin-Valid gateway attestation
   is not evidence that an earlier Origin or SignedOrigin Signature was
-  valid.  TSP‑0013 consequently makes an inbound legacy presentation
-  terminal local delivery rather than an input to onward distribution.
-
-  Delivering an Unsigned or SignedOrigin-Valid item with a NOTICE tells
-  the reader that Origin did not authenticate the text.  Delivering an
-  Origin-Invalid or SignedOrigin-Invalid item with an ERROR tells the
-  reader only that Signature did not verify over the exact received
-  signed bytes under the effective key selected for Origin or
-  SignedOrigin respectively.  That result does not establish why
-  verification failed or that the item was modified in transit.  The
-  diagnostic is local presentation, not legacy author text.  If it is
-  inserted into an ordinary stored body, it can be quoted, mistaken for
-  content, or destroy a later byte‐exact reconstruction.  The adapter
-  therefore retains the exact native source separately and never
-  prefixes File Contents.
-
-  An automatic reply to Origin is potentially dangerous.  Unsigned
-  Origin is unverified, and a valid SignedOrigin authenticates only the
-  gateway's report of a legacy claim.  Forged Origins, retransmission,
-  and EchoMail fan‐out can therefore make replies backscatter or a flood
-  amplifier.  TSP‑0011 consequently makes Reply-Origin explicit local
-  policy, disabled by default, idempotent, rate‐limited, and
-  nonrecursive.
-
-  FidoNet Policy 4.07 section 2.1.7 does require an explanation when a
-  node agreed to route an in‐transit message but does not forward it.
-  That explanation goes to the sysop of the node where the message
-  entered FidoNet, not necessarily to its claimed Origin.  It is a
-  routing obligation and does not require a final destination to send
-  Reply-Origin when local authentication policy orphans an item.  A
-  final adapter which also performs obligated legacy routing must
-  satisfy both rules independently.
+  valid.  It is a distinct newly minted item and cannot restore the
+  earlier item's distribution eligibility or signed identity.
 
 
 11. Feedback and Discussion
@@ -1528,20 +1499,18 @@ A. References
 
   [Policy] "FidoNet Policy Document", Version 4.07, 1989‑06‑09.
 
-  [TSP‑0006] "Outbound Job Submission", TITH, 2026‑08‑21.
+  [TSP‑0011] "Durable Inbound Delivery Items", TITH, 2026‑08‑23.
 
   [TSP‑0013] "Legacy Mailer and Tosser IPC Adapters", TITH,
-  2026‑08‑20.
+  2026‑08‑23.
 
-  [TSP‑0011] "Durable Inbound Delivery Items", TITH, 2026‑08‑21.
+  [TTS‑0009] "Item Format", TITH, 2026‑08‑23.
 
-  [TTS‑0009] "Item Format", TITH, 2026‑08‑22.
-
-  [TTS‑0002] "Type Length Value Encoding", TITH, 2026‑08‑16.
+  [TTS‑0002] "Type Length Value Encoding", TITH, 2026‑08‑22.
 
   [TTS‑0004] "Node Addresses", TITH, 2026‑08‑22.
 
-  [TTS‑0005] "Bundle Format", TITH, 2026‑08‑22.
+  [TTS‑0005] "Bundle Format", TITH, 2026‑08‑23.
 
 
 B. History
@@ -1601,5 +1570,9 @@ B. History
    per‐domain case policy, and completion of missing Domain and Zone
    components from the native address standard into the trusted
    conversion context.
+
+   Rev.12, 2026‑08‑23: Confined the document to byte and field
+   conversion results, leaving adapter mechanics, native submission,
+   and final delivery policy to their owning proposals.
 
 **********************************************************************

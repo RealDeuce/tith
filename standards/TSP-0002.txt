@@ -3,10 +3,10 @@ TITH                                              THIS ISN'T THAT HARD
 **********************************************************************
 
 Publication:  TSP‑0002
-Revision:     17
+Revision:     18
 Title:        Routing and Distribution Configuration
 Author(s):    Stephen Hurd
-Date:         2026‑08‑22
+Date:         2026‑08‑23
 ══════════════════════════════════════════════════════════════════════
 
 Status of this document
@@ -294,9 +294,10 @@ Contents
   a later method.
 
   Unroutable and Loop are routing results detected before a delivery
-  copy is committed.  A local submission or Reroute which encounters
-  either fails under TSP‑0006; the caller retains responsibility, and
-  no delivery‐copy disposition or notification applies.
+  copy is committed.  They create no delivery copy, and no
+  delivery‐copy disposition or notification applies.  The operation
+  which requested route selection defines its result and retains
+  responsibility for its own source.
 
 
 6. Relay and Failure Handling
@@ -312,12 +313,12 @@ Contents
   so a receiver has nothing to route them on and MUST treat one
   addressed to it by the Bundle as its own.
 
-  Authenticated here means TSP‑0011 ItemAuthentication Origin-Valid or
-  SignedOrigin-Valid.  An Unsigned, Origin-Invalid, or
-  SignedOrigin-Invalid item MUST NOT be relayed or distributed as
-  authenticated content; attempting to create such a copy fails as
-  Authentication.  This restriction does not prevent final local
-  delivery under the warning or orphan policy in TSP‑0011.
+  Authenticated here means that the item has an end‐to‐end Signature
+  which validates over its exact signed bytes under the effective
+  Origin or SignedOrigin key selected by TTS‑0009.  An absent or invalid
+  item Signature does not meet this predicate.  Such an item MUST NOT
+  be relayed or distributed as authenticated content; attempting to
+  create such a copy fails as Authentication.
 
   A relay rule has one of the following forms:
 
@@ -595,15 +596,9 @@ Contents
   distribution copy instead uses the class on its Send-To line, or
   Normal when that line has none.
 
-  A source Bundle is authenticated and tossed item by item.  A locally
-  consumed value may first become a durable TSP‑0011 inbound item.  In
-  that case the Bundle container may be retired after the exact item,
-  immediate peer, consumer commitment, and duplicate identity are
-  durable; the inbound item becomes the retained source of tossing.
-
-  Before a directly tossed source value may be considered consumed,
-  every required NetMail delivery or area distribution copy MUST be
-  durably recorded with:
+  A source Bundle is authenticated and tossed item by item.  Before a
+  source value may be considered consumed, every required NetMail
+  delivery or area distribution copy MUST be durably recorded with:
 
     • its local identity;
     • its exact next‐hop address and anonymous PublicKey, if any;
@@ -611,13 +606,15 @@ Contents
     • its retry Timestamp, if any; and
     • its resolved permanent failure policies.
 
-  A TSP‑0011 consumer may instead take durable responsibility for a
-  queued inbound item before completing these copies.  It then retains
-  an exact recoverable source and every unperformed routing or
-  distribution obligation.  A TSP‑0013 adapter ledger and its private
-  converted objects may provide that retained source.  The consumer
-  MUST NOT retire its source or mark its toss complete until every
-  required copy above is durable.
+  Responsibility may instead be durably transferred before those
+  copies are complete.  That transfer MUST include an exact recoverable
+  source, the source's duplicate identity when it has one, and a
+  complete record of every unperformed routing or distribution
+  obligation.  The new owner MUST NOT retire that source or mark its
+  toss complete until every required copy above is durable or the same
+  complete responsibility is durably transferred again.  A Bundle
+  container may be retired only after every value it contained meets
+  one of these two conditions.
 
   NetMail produces one delivery copy.  EchoMail and file distribution
   produce one copy for each applicable Send-To link.  A peer‐addressed
@@ -637,13 +634,14 @@ Contents
   outside this configuration reload process.
 
   During an exchange, outcomes are applied per Message, File, or
-  FileRequest.  An Accepted delivery copy becomes Delivered and may be
-  retired as specified in TSP‑0005.  Shared private contents and Source
-  cleanup are governed separately by TSP‑0005.  Permanently Rejected
-  items use section 6.  Temporarily Rejected and unacknowledged items
-  retain the same route and may be repackaged for retry.  An item with
-  a later retry Timestamp MUST NOT block another eligible item for the
-  same Peer.
+  FileRequest.  A complete authenticated Accepted response means that
+  delivery attempt succeeded; no retry or permanent failure policy
+  applies to that copy.  The durable owner of the outbound work defines
+  its local state, record retirement, shared‐content retention, and
+  Source cleanup separately.  Permanently Rejected items use section
+  6.  Temporarily Rejected and unacknowledged items retain the same
+  route and may be repackaged for retry.  An item with a later retry
+  Timestamp MUST NOT block another eligible item for the same Peer.
 
   Routing, area, and failure policy changes apply only to delivery
   copies created after the new configuration takes effect.  Existing
@@ -783,28 +781,19 @@ Contents
 A. References
 ─────────────
 
-  [TSP‑0005] "Durable Outbound Jobs", TITH, 2026‑08‑21.
+  [TTS‑0008] "Public Key Trust and Continuity", TITH, 2026‑08‑23.
 
-  [TSP‑0006] "Outbound Job Submission", TITH, 2026‑08‑21.
-
-  [TSP‑0011] "Durable Inbound Delivery Items", TITH, 2026‑08‑21.
-
-  [TSP‑0013] "Legacy Mailer and Tosser IPC Adapters", TITH,
-  2026‑08‑20.
-
-  [TTS‑0008] "Public Key Trust and Continuity", TITH, 2026‑08‑22.
-
-  [TTS‑0009] "Item Format", TITH, 2026‑08‑22.
+  [TTS‑0009] "Item Format", TITH, 2026‑08‑23.
 
   [TTS‑0003] "Common TLV Types", TITH, 2026‑08‑22.
 
-  [TTS‑0004] "Node Addresses", TITH, 2026‑08‑21.
+  [TTS‑0004] "Node Addresses", TITH, 2026‑08‑22.
 
-  [TTS‑0005] "Bundle Format", TITH, 2026‑08‑22.
+  [TTS‑0005] "Bundle Format", TITH, 2026‑08‑23.
 
-  [TTS‑0006] "Bundle Exchange Protocol", TITH, 2026‑08‑22.
+  [TTS‑0006] "Bundle Exchange Protocol", TITH, 2026‑08‑23.
 
-  [TTS‑5000] "The Distribution Nodelist", TITH, 2026‑08‑22.
+  [TTS‑5000] "The Distribution Nodelist", TITH, 2026‑08‑23.
 
   [FSC‑0003.001] "FidoNet Route Files Explained", Ben Barker,
   1986‑03‑23.
@@ -877,5 +866,9 @@ B. History
 
    Rev.17, 2026‑08‑22: Mapped the complete TTS‑0006 continuity‐recovery
    sequence to one delivery attempt and schedule activation.
+
+   Rev.18, 2026‑08‑23: Made routing outcomes, authentication
+   eligibility, and tossing responsibility independent of submission,
+   Job, inbound consumer, and legacy adapter models.
 
 **********************************************************************

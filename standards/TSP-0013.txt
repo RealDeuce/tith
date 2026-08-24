@@ -3,10 +3,10 @@ TITH                                              THIS ISN'T THAT HARD
 **********************************************************************
 
 Publication:  TSP‑0013
-Revision:     6
+Revision:     7
 Title:        Legacy Mailer and Tosser IPC Adapters
 Author(s):    Stephen Hurd
-Date:         2026‑08‑20
+Date:         2026‑08‑23
 ══════════════════════════════════════════════════════════════════════
 
 Status of this document
@@ -75,12 +75,16 @@ Contents
   For outbound conversion the ledger records:
 
     • the race‐resistant identity and digest of every legacy object;
+    • the selected objects, companion associations, and trusted
+      placement context used to interpret them;
     • the exact conversion policy and resulting canonical submission;
     • TSP‑0003 TITHSIGN and TITHSIG verification and mutable forwarding
       evidence when signed‑region reconstruction succeeds;
     • the ordered normalized Message model, retained Signature, current
       unsigned suffix, selected Local-Identity, and canonical
       submission identity;
+    • stable generated names and unknown legacy controls retained for
+      replay to the same legacy side;
     • every Application and Idempotency-Key;
     • each returned JobID and state; and
     • legacy cleanup still required.
@@ -115,6 +119,22 @@ Contents
   as a stable readable regular file and reads from that same object.
   A pathname replacement MUST NOT select different contents.
 
+  A converted stored or packed NetMail becomes TSP‑0006 Submit or a
+  Submit-Items NetMail Job.  EchoMail becomes a Submit-Items EchoMail
+  Job.  A TIC and its selected companion become a Submit-Items File
+  Job.  For each, the adapter supplies the named converted fields and
+  the Local-Identity, route, area, or next-hop context required by that
+  operation; the Service does not infer them from legacy placement.
+
+  Every successfully converted REQ action becomes one Submit-Items
+  FileRequest Job addressed to the peer selected by trusted placement
+  context.  Each answering file becomes a Peer-File Job addressed back
+  to that peer.  A reference-file entry which no Message claims and no
+  TIC accompanies likewise becomes one Peer-File Job, with Destination
+  selected from trusted placement rather than guessed from its path.
+  These conversions create no native Area or NetMail route when their
+  semantic result has neither.
+
   Before changing a legacy object, the adapter durably assigns the
   native submission idempotency keys and records the exact conversion.
   When TSP‑0003 TITHSIG reconstruction succeeds, this record includes
@@ -145,6 +165,11 @@ Contents
   legacy sender‐side rules; they do not by themselves grant native
   deletion or truncation authority.  K/S applies to the containing
   message rather than its attached Sources and is tracked separately.
+
+  Unknown TIC lines are retained verbatim in the ledger only for
+  possible replay to the same legacy side.  They are not submitted as
+  native File fields and do not select a Source, Destination, Area,
+  disposition, or pathname.
 
   Retiring a .MSG or control entry and recording its associated JobID
   are one recoverable adapter operation.  After a crash, the adapter
@@ -336,16 +361,9 @@ Contents
   network (FDN) transfers are NetMail traffic.  They use individual
   NetMail messages, packets, file attaches, and TIC conventions
   described by FTS‑0004.001 version 3.31, FTS‑5006.001 revision 1, and
-  FSC‑0028.001.
-  The adapter classifies what that legacy NetMail carriage represents.
-  Ordinary NetMail uses TSP‑0006 Submit or a Submit-Items NetMail Job;
-  EchoMail and FDN use the corresponding Submit-Items Kind.  A file
-  transfer belonging to no area and to no message uses the Peer-File
-  Kind, and a converted WaZOO request uses the FileRequest Kind, one
-  Job per action.  This preserves the legacy carriage fact without
-  applying TITH NetMail Destination routing to an item whose native
-  semantics require explicit area links, and without inventing an area
-  for a transfer which has none.
+  FSC‑0028.001.  Section 3 owns how the adapter classifies that carriage
+  for native submission; the legacy representation does not alter the
+  native item kind.
 
   Compatibility tolerance for malformed packets, alternate headers,
   character sets, control paragraphs, .MSG variants, and flow file
@@ -409,19 +427,19 @@ A. References
   1992‑12‑08.
 
   [TSP‑0002] "Routing and Distribution Configuration", TITH,
-  2026‑08‑21.
+  2026‑08‑23.
 
-  [TSP‑0003] "Legacy Data Formats and TITH", TITH, 2026‑08‑21.
+  [TSP‑0003] "Legacy Data Formats and TITH", TITH, 2026‑08‑23.
 
-  [TSP‑0004] "Local IPC Format", TITH, 2026‑08‑17.
+  [TSP‑0004] "Local IPC Format", TITH, 2026‑08‑23.
 
-  [TSP‑0005] "Durable Outbound Jobs", TITH, 2026‑08‑21.
+  [TSP‑0005] "Durable Outbound Jobs", TITH, 2026‑08‑23.
 
-  [TSP‑0006] "Outbound Job Submission", TITH, 2026‑08‑21.
+  [TSP‑0006] "Outbound Job Submission", TITH, 2026‑08‑23.
 
-  [TSP‑0011] "Durable Inbound Delivery Items", TITH, 2026‑08‑21.
+  [TSP‑0011] "Durable Inbound Delivery Items", TITH, 2026‑08‑23.
 
-  [TSP‑0012] "Tosser Consumption IPC", TITH, 2026‑08‑18.
+  [TSP‑0012] "Tosser Consumption IPC", TITH, 2026‑08‑23.
 
 
 B. History
@@ -454,5 +472,9 @@ B. History
    inbound distribution obligation, made legacy publication terminal
    local delivery, and prohibited onward copies of unsigned or invalid
    items.
+
+   Rev.7, 2026‑08‑23: Owned legacy object selection, conversion ledger,
+   native Job mapping, trusted placement, disposition, staging, and
+   publication mechanics while leaving byte conversion to TSP‑0003.
 
 **********************************************************************

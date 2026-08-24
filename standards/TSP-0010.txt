@@ -3,10 +3,10 @@ TITH                                              THIS ISN'T THAT HARD
 **********************************************************************
 
 Publication:  TSP‑0010
-Revision:     2
+Revision:     3
 Title:        Windows Named‐Pipe IPC Binding
 Author(s):    Stephen Hurd
-Date:         2026‑08‑17
+Date:         2026‑08‑23
 ══════════════════════════════════════════════════════════════════════
 
 Status of this document
@@ -231,7 +231,7 @@ Contents
   filesystem file meeting every TSP‑0006 Source-Handle requirement and
   closes the first duplicate.
 
-  A Service advertises the TSP‑0004 feature "Submit.Source-Handle" over
+  A Service advertises the TSP‑0006 Feature "Submit.Source-Handle" over
   this binding only when it can provide these guarantees.
 
   The Client retains every original handle and its underlying file
@@ -260,7 +260,7 @@ Contents
   retains the other process's handle value as durable state.
 
   A TSP‑0012 Handle presentation contains exactly one readable result
-  handle at index zero.  The Service advertises the TSP‑0004 feature
+  handle at index zero.  The Service advertises the TSP‑0012 Feature
   "Consume.Payload-Handle" only when it can provide these guarantees.
 
   Neither handle count is given an arbitrary protocol limit.  Checked
@@ -403,13 +403,13 @@ A. References
   [Microsoft-RevertToSelf] "RevertToSelf function", Microsoft,
   https://learn.microsoft.com/windows/win32/api/securitybaseapi/nf-securitybaseapi-reverttoself
 
-  [TSP‑0004] "Local IPC Format", TITH, 2026‑08‑17.
+  [TSP‑0004] "Local IPC Format", TITH, 2026‑08‑23.
 
-  [TSP‑0006] "Outbound Job Submission", TITH, 2026‑08‑21.
+  [TSP‑0006] "Outbound Job Submission", TITH, 2026‑08‑23.
 
-  [TSP‑0012] "Tosser Consumption IPC", TITH, 2026‑08‑18.
+  [TSP‑0012] "Tosser Consumption IPC", TITH, 2026‑08‑23.
 
-  [TTS‑0002] "Type Length Value Encoding", TITH, 2026‑08‑16.
+  [TTS‑0002] "Type Length Value Encoding", TITH, 2026‑08‑22.
 
 
 B. History
@@ -419,5 +419,8 @@ B. History
 
    Rev.2, 2026‑08‑17: Added acknowledged result‐handle transfer and
    item‐aware submission Sources.
+
+   Rev.3, 2026‑08‑23: Referred operation‐specific Features to their
+   operation documents.
 
 **********************************************************************

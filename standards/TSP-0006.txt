@@ -3,7 +3,7 @@ TITH                                              THIS ISN'T THAT HARD
 **********************************************************************
 
 Publication:  TSP‑0006
-Revision:     13
+Revision:     14
 Title:        Outbound Job Submission
 Author(s):    Stephen Hurd
 Date:         2026‑08‑23
@@ -383,8 +383,8 @@ Contents
   Bundle carries the request; Signed-Origin is prohibited.  Either
   local identity requires a Routes block and no Areas block.
 
-  Inbound identifies one current TSP‑0011 item and ClaimToken obtained
-  by the same Application through TSP‑0012.  For a New Forward Job, the
+  Inbound identifies one current TSP‑0011 claim held by the same
+  Application and binding‐supplied caller.  For a New Forward Job, the
   item MUST be EchoMail or a standalone distribution File.  Its
   receiving local identity selects the Areas block and its immediate
   peer supplies distribution exclusion.  The Service MUST authorize
@@ -527,6 +527,11 @@ Contents
   associated handle MUST be referenced.  A binding without associated
   handles rejects Source-Handle as Invalid.
 
+  This document assigns the Feature value "Submit.Source-Handle".  A
+  Service advertises it only when the current binding and Service can
+  provide a request‐associated handle table satisfying every
+  Source-Handle requirement in this section.
+
   A Source-Path MUST be opened exactly once for ingestion.  The opened
   object, rather than an earlier pathname inspection, is checked to be
   a readable regular file.  Every byte is copied from that same open
@@ -603,13 +608,14 @@ Contents
   For either disposition, Source-Path itself, without following a
   symbolic link, MUST name the regular file opened for ingestion.
 
-  Delete and Truncate are optional and are advertised respectively as
-  the TSP‑0004 features "Submit.Delete" and "Submit.Truncate".  The
-  features apply to Submit and Submit-Items.  A Service which does not
-  advertise the requested feature rejects the Batch as Invalid before
-  commitment.  An advertised feature may still reject a Source whose
-  filesystem cannot support race‐resistant exact‐object cleanup.  It
-  MUST NOT knowingly commit an obligation it cannot attempt safely.
+  This document assigns the Feature values "Submit.Delete" and
+  "Submit.Truncate".  The corresponding optional behavior is
+  advertised with its Feature and applies to Submit and Submit-Items.
+  A Service which does not advertise the requested feature rejects the
+  Batch as Invalid before commitment.  An advertised feature may still
+  reject a Source whose filesystem cannot support race‐resistant
+  exact‐object cleanup.  It MUST NOT knowingly commit an obligation it
+  cannot attempt safely.
 
   Move
   ────
@@ -618,9 +624,9 @@ Contents
   to the mailer.  Source-Path itself, without following a symbolic link,
   MUST name the regular file being moved.
 
-  A Service advertises Move with the TSP‑0004 feature "Submit.Move".
-  The feature applies to Submit and Submit-Items.  A Service which does
-  not advertise it rejects a Move Batch as Invalid.
+  This document assigns the Feature value "Submit.Move".  A Service
+  advertises it when Move is available for Submit and Submit-Items.  A
+  Service which does not advertise it rejects a Move Batch as Invalid.
 
   New MUST NOT be returned until the ownership transfer, private copy,
   Job, every delivery copy, and idempotency mapping are durable.  A
@@ -758,8 +764,8 @@ Contents
 
   Every delivery copy and field required by TSP‑0005 section 3 is
   durable before New.  The Forward Job commitment does not resolve or
-  acknowledge its inbound claim; the consumer does that separately
-  under TSP‑0012 after recovering the submission result.  Route
+  acknowledge its inbound claim; claim resolution remains a separate
+  operation after the submission result is recovered.  Route
   commitment belongs to the delivery copies rather than a storage
   Bundle.  Later area or endpoint configuration changes do not add,
   remove, activate, or reroute a committed copy.
@@ -801,12 +807,29 @@ Contents
   Forward Job is Invalid and no new Job in the Batch commits.
 
   One inbound item may be associated with at most one Forward Job.  A
-  new Forward Job, its JobID, and that association in the TSP‑0011
-  record are one atomic commitment.  Two new Job blocks in one Batch
-  MUST NOT name the same InboundID.  An attempt to create another Job
-  for an already associated inbound item is Invalid; the consumer
-  recovers the original through its idempotency key or the TSP‑0012
-  Forward-Job field rather than using a new key.
+  new Forward Job, its JobID, and an operation‐owned InboundID‐to‐JobID
+  association are one atomic commitment.  The association is not part
+  of either durable model.  Two new Job blocks in one Batch MUST NOT
+  name the same InboundID.  An attempt to create another Job for an
+  already associated inbound item is Invalid; the consumer recovers the
+  original through its idempotency key or an operation which exposes
+  that association rather than using a new key.
+
+  The Service retains the association while the inbound item is
+  nonterminal.  During that interval it is an operation‐owned recovery
+  hold which prevents administrative purge of the Forward Job.  Release,
+  Defer, and claim expiration do not remove it.  The transition which
+  makes the inbound item terminal also durably releases the hold before
+  either record becomes purgeable; the association may then be
+  retired.  Creation, lookup, retention, and removal of this
+  cross‐model association belong to this operation.
+
+  A separate reply or notification caused by processing an inbound
+  item is an ordinary Job.  Before submission its Application durably
+  records the InboundID and chosen Idempotency-Key, and it obtains or
+  recovers the complete submission result before resolving the source
+  claim.  No special reply association or second submission grammar is
+  defined.
 
   If the Application and Idempotency-Key exist with a different
   JobDigest, that Job block is Conflict.  Conflict does not access a
@@ -881,9 +904,9 @@ Contents
   If validation, ingestion, routing, authorization, durability, or a
   Move transfer fails for any new Job, no new Job in the Batch is
   committed.  Every new Job's Source remains owned by the Application.
-  In particular, Unroutable and Loop are pre‐commit results: they
-  create no JobID and invoke no delivery‐copy disposition or
-  notification.
+  In particular, Unroutable and Loop produce PermanentFailure for the
+  affected Job.  They are pre‐commit results: they create no JobID and
+  invoke no delivery‐copy disposition or notification.
   Recovery completes or rolls back the transaction before a query or
   resubmission can observe a new idempotency mapping.
 
@@ -1162,9 +1185,9 @@ Contents
     End
     End
 
-  The Inbound line above is one physical line.  After a committed
-  result, or recovery through Lookup-Submission, the tosser may
-  acknowledge that inbound claim under TSP‑0012.
+  The Inbound line above is one physical line.  A committed result or
+  recovery through Lookup-Submission establishes the Forward Job.  The
+  source claim is resolved separately.
 
 
 12. Feedback and Discussion
@@ -1236,39 +1259,37 @@ A. References
   S. Josefsson, 2006‑10.
 
   [TSP‑0002] "Routing and Distribution Configuration", TITH,
-  2026‑08‑21.
+  2026‑08‑23.
 
-  [TSP‑0003] "Legacy Data Formats and TITH", TITH, 2026‑08‑21.
+  [TSP‑0003] "Legacy Data Formats and TITH", TITH, 2026‑08‑23.
 
   [TSP‑0004] "Local IPC Format", TITH, 2026‑08‑23.
 
-  [TSP‑0005] "Durable Outbound Jobs", TITH, 2026‑08‑21.
+  [TSP‑0005] "Durable Outbound Jobs", TITH, 2026‑08‑23.
 
-  [TSP‑0007] "Unix‐Domain Socket IPC Binding", TITH, 2026‑08‑17.
+  [TSP‑0007] "Unix‐Domain Socket IPC Binding", TITH, 2026‑08‑23.
 
   [TSP‑0008] "Atomic File IPC Binding", TITH, 2026‑08‑17.
 
   [TSP‑0009] "Authenticated TCP IPC Binding", TITH, 2026‑08‑17.
 
-  [TSP‑0010] "Windows Named‐Pipe IPC Binding", TITH, 2026‑08‑17.
+  [TSP‑0010] "Windows Named‐Pipe IPC Binding", TITH, 2026‑08‑23.
 
-  [TSP‑0011] "Durable Inbound Delivery Items", TITH, 2026‑08‑21.
-
-  [TSP‑0012] "Tosser Consumption IPC", TITH, 2026‑08‑23.
+  [TSP‑0011] "Durable Inbound Delivery Items", TITH, 2026‑08‑23.
 
   [TSP‑0019] "Spawned‐Process IPC Binding", TITH, 2026‑08‑23.
 
-  [TTS‑0008] "Public Key Trust and Continuity", TITH, 2026‑08‑22.
+  [TTS‑0008] "Public Key Trust and Continuity", TITH, 2026‑08‑23.
 
-  [TTS‑0009] "Item Format", TITH, 2026‑08‑22.
+  [TTS‑0009] "Item Format", TITH, 2026‑08‑23.
 
   [TTS‑0003] "Common TLV Types", TITH, 2026‑08‑22.
 
-  [TTS‑0004] "Node Addresses", TITH, 2026‑08‑21.
+  [TTS‑0004] "Node Addresses", TITH, 2026‑08‑22.
 
-  [TTS‑0005] "Bundle Format", TITH, 2026‑08‑22.
+  [TTS‑0005] "Bundle Format", TITH, 2026‑08‑23.
 
-  [TTS‑0007] "Signed Integer Encoding", TITH, 2026‑08‑16.
+  [TTS‑0007] "Signed Integer Encoding", TITH, 2026‑08‑22.
 
 
 B. History
@@ -1319,5 +1340,9 @@ B. History
    retaining TTS‑0005 Bundle delivery and reply behaviour.
 
    Rev.13, 2026‑08‑23: Added the spawned‐process path binding.
+
+   Rev.14, 2026‑08‑23: Assigned submission Features and exact routing
+   failures, and made Forward claim validation and its recovery
+   association independent of consumer operations and durable models.
 
 **********************************************************************
