@@ -3,7 +3,7 @@ TITH                                              THIS ISN'T THAT HARD
 **********************************************************************
 
 Publication:  TSP‑0018
-Revision:     1
+Revision:     2
 Title:        Legacy PING and TRACE Diagnostics
 Author(s):    FTSC Members, Administrator, Honoured Guests and
               Stephen Hurd
@@ -24,11 +24,12 @@ Abstract
 ────────
 
   This document defines the legacy NetMail PING and TRACE diagnostic
-  service asserted by the TTS‑5001 PING flag.  A final destination
-  returns a diagnostic response, while a participating transit system
-  notifies the original sender and continues forwarding the original
-  item.  It defines the boundary of “unaltered” forwarding and the
-  sender‑name rule needed to prevent diagnostic loops.
+  services advertised by the separate PING and TRACE flags.  A final
+  destination advertising PING returns a diagnostic response, while a
+  transit system advertising TRACE notifies the original sender and
+  continues forwarding the original item.  It defines the boundary of
+  “unaltered” forwarding and the user‑name rules needed to prevent
+  diagnostic loops.
 
 Contents
 ────────
@@ -51,14 +52,17 @@ Contents
 1. Introduction
 ───────────────
 
-  TTS‑5001 assigns PING as the canonical assertion that a system
-  provides legacy PING and TRACE diagnostics.  It deliberately does
-  not make operating that service part of flag‑list conformance.
+  FTS‑5001.006 assigned both final‑destination PING and in‑transit
+  TRACE behavior to the PING flag.  FTS‑4010.001 superseded that
+  service definition and separated the two advertisements: PING names
+  the final‑destination service and TRACE names the in‑transit service.
 
-  FTS‑5001.006 placed the service behavior beside the flag assignment.
-  This proposal retains that behavior at an explicit legacy
-  application boundary.  It does not turn PING into a TITH transport
-  frame, Bundle operation, acceptance response, or routing protocol.
+  TTS‑5001 defines canonical flag‑list representation without making
+  operation of an advertised service part of flag‑list conformance.
+  This proposal retains the separately advertised behavior at an
+  explicit legacy application boundary.  It does not turn either
+  diagnostic into a TITH transport frame, Bundle operation, acceptance
+  response, or routing protocol.
 
 
 2. Applicability and Terms
@@ -80,23 +84,26 @@ Contents
   response is a newly originated NetMail Message; it is never a
   mutation of the request.
 
-  Whether a processing identity advertises PING is determined from the
-  applicable TTS‑5001 flag list.  A local setting which operates the
-  service without publishing the flag does not authorize another
-  system to rely on it.
+  Whether a processing identity advertises PING or TRACE is determined
+  from the applicable TTS‑5001 Other Flag list.  PING advertises only
+  the final‑destination service.  TRACE advertises only the in‑transit
+  service.  Neither flag implies the other.  A local setting which
+  operates a service without publishing its flag does not authorize
+  another system to rely on it.
 
 
 3. Valid Diagnostic Request
 ───────────────────────────
 
-  A diagnostic request is a NetMail Message whose ToUserName is the
-  four ASCII characters `PING`.  The comparison is byte‑for‑byte and
-  case‑sensitive; no alternate spelling is implied.
-
-  A conforming originator MUST NOT use `PING` as FromUserName.  A
-  Message which does so is not a conforming diagnostic request, and
-  this document defines no automatic response to it.  This prevents one
-  automatic diagnostic from addressing another as a new request.
+  A diagnostic request is a NetMail Message whose ToUserName consists
+  of four ASCII letters which compare case‑insensitively to `PING`, and
+  whose FromUserName does not compare case‑insensitively to `PING`.
+  For this comparison, ASCII `a` through `z` compare equal to the
+  corresponding ASCII `A` through `Z`; no other folding or alternate
+  spelling is implied.  A Message whose FromUserName compares equal to
+  `PING` is not a conforming diagnostic request, and this document
+  defines no automatic response to it.  This prevents one automatic
+  diagnostic from addressing another as a new request.
 
   Subject and MessageText have no trigger syntax.  They MAY contain
   explanatory or correlation text selected by the originator and MUST
@@ -124,12 +131,13 @@ Contents
 ────────────────────
 
   When a valid diagnostic request passes through an in‑transit
-  processing identity which advertises PING, that system MUST generate
-  one TRACE notification to the original sender and MUST continue
-  forwarding the request toward its Destination.
+  processing identity which advertises TRACE, that system MUST
+  generate one TRACE notification to the original sender and MUST
+  continue forwarding the request toward its Destination.
 
   The notification MUST identify the processing identity at which the
-  transit event occurred.  It MAY quote request fields or Via values.
+  transit event occurred and MUST quote every original Via value in its
+  original order.  It MAY additionally quote other request fields.
 
   Continuing to forward the request “unaltered” means preserving the
   exact signed region and Signature, when present, and preserving every
@@ -153,7 +161,8 @@ Contents
     • Origin equal to the processing identity;
     • Destination equal to the request Origin;
     • ToUserName equal to the request FromUserName; and
-    • a locally configured FromUserName which is not `PING`.
+    • a locally configured FromUserName which does not compare
+      case‑insensitively to `PING` as defined in section 3.
 
   The response is constructed and authenticated like any other newly
   originated NetMail Message.  It follows the ordinary route to its
@@ -198,6 +207,9 @@ Contents
 A. References
 ─────────────
 
+  [FTS‑4010.001] Revision 1, “The PING and TRACE flags”, FTSC,
+  2022‑12‑24.
+
   [FTS‑5001.006] Revision 6, “Nodelist flags and userflags”, FTSC,
   2017‑08‑30.
 
@@ -210,6 +222,11 @@ A. References
 
 B. History
 ──────────
+
+   Rev.2, 2026‑08‑23: Incorporated FTS‑4010.001: separated the PING
+   and TRACE advertisements, made request recognition case‑insensitive,
+   required TRACE notifications to quote the original Via values, and
+   applied the response loop prevention rule to both user names.
 
    Rev.1, 2026‑08‑23: Initial Release.  Moved the legacy PING and
    TRACE service behavior out of the nodelist flag registry and defined
