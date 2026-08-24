@@ -1,0 +1,316 @@
+**********************************************************************
+TITH                                              THIS ISN'T THAT HARD
+**********************************************************************
+
+Publication:  TSP‑0019
+Revision:     1
+Title:        Spawned‐Process IPC Binding
+Author(s):    Stephen Hurd
+Date:         2026‑08‑23
+══════════════════════════════════════════════════════════════════════
+
+Status of this document
+───────────────────────
+
+  This document is a TITH Standard Proposal (TSP) — it documents a
+  proposed standard and solicits discussion.  Until promoted to a TTS,
+  this is experimental only and does not describe required behaviour.
+
+  This document is released to the public domain, and may be used,
+  copied or modified for any purpose whatever.
+
+Abstract
+────────
+
+  This document binds TSP‑0004 local IPC documents to a Client process
+  launched on demand by the Service.  It defines launch identity,
+  standard‐stream framing, sequential transactions, inherited‐handle
+  isolation, process completion, and failure recovery.
+
+Contents
+────────
+
+  1. Introduction
+  2. Launch and Caller Identity
+  3. Standard Streams and Handle Isolation
+  4. Process Session
+  5. Operation Restrictions
+  6. Failure and Recovery
+  7. Security
+  8. Feedback and Discussion
+
+  A. References
+  B. History
+
+══════════════════════════════════════════════════════════════════════
+
+
+1. Introduction
+───────────────
+
+  A local Application such as a robot, door, request processor,
+  scheduled callout driver, or administrative worker may need to run
+  only when work is available.  Requiring every such Application to
+  remain resident adds supervision and idle resource use without
+  changing the durable Job or inbound‐item boundary.
+
+  In this binding the Service launches the Application as a child
+  process.  The child is the TSP‑0004 Client.  It sends ordinary IPC
+  requests through its standard output and receives their results
+  through its standard input.  It may perform several sequential
+  transactions and exit when its available work is drained.
+
+  Process creation is activation, not an IPC operation.  It does not
+  claim an inbound item, submit a Job, acknowledge an event, or commit
+  any other Service state.  The child obtains and resolves work only
+  through the same TSP‑0004 operations used by another Client.
+  This binding does not define the operations by which a future driver
+  claims a callout assignment or reports its outcome.
+
+
+2. Launch and Caller Identity
+─────────────────────────────
+
+  Trusted Service policy selects an executable invocation and assigns
+  it one local IPC principal with its permitted Applications and
+  operations.  The executable pathname, argument vector, environment,
+  working directory, activation condition, and process resource policy
+  are host configuration and are not fields in an IPC document.
+
+  The Service creates one private pair of unidirectional byte streams
+  and arranges their child ends as specified in section 3.  It passes
+  those ends only to the exact process created for that invocation.
+  Possession of both child ends for that one launch securely establishes
+  the binding‐supplied caller identity.  A process identifier, exit
+  status, executable name reported by the child, Application line, or
+  environment value does not establish or replace that identity.
+
+  The Service MAY delegate process creation to a trusted spawn broker.
+  The broker must receive launch authority through a private channel
+  established by the Service before the invocation.  It MUST associate
+  the returned stream ends with the exact launch and MUST NOT make a
+  child end available to another process.  Broker messages, process
+  identifiers, and native stream values are carrier metadata and are
+  not TSP‑0004 document bytes.
+
+  A launch does not promise that an IPC operation will find work.  The
+  Client uses the operation's Now, Wait, Empty, event, and retry rules
+  normally.  The Service MAY coalesce activations or run several
+  independently authorized Clients; durable claims and Jobs remain the
+  authority for exclusive work.
+
+
+3. Standard Streams and Handle Isolation
+────────────────────────────────────────
+
+  Before the child executable begins:
+
+    • the readable end of the Service‐to‐Client stream is the child's
+      standard input;
+    • the writable end of the Client‐to‐Service stream is the child's
+      standard output; and
+    • standard error is a diagnostic stream selected by trusted Service
+      policy and is not an IPC carrier.
+
+  The Service reads requests from the Client's standard output and
+  writes results to its standard input.  Both streams carry exact bytes.
+  A host text mode MUST NOT translate Line Feed, Carriage Return,
+  end‐of‐file characters, encodings, or any other byte.  Standard output
+  contains only IPC requests.  A Client writes logs and diagnostics to
+  standard error and MUST NOT mix them with request bytes.
+
+  The child MUST NOT inherit a Service database, key, directory, file,
+  listener, accepted connection, synchronization object, random source,
+  broker control channel, or another IPC endpoint.  It receives only
+  the two carrier stream ends, the configured standard‐error object,
+  and host process objects which convey no Service resource authority.
+  The Service and any broker close their unnecessary copies after a
+  successful launch.
+
+  Every Service and broker handle not intended for the child MUST be
+  noninheritable at process creation or closed by execution.  Creating a
+  handle and later changing its inheritance while another thread may
+  create a process is insufficient when the host provides an atomic
+  create‐noninheritable facility.  A spawn broker which removes
+  unexpected inherited handles does so before it accepts concurrent
+  launch work.
+
+  Before the Client executes a descendant, it makes both carrier stream
+  ends noninheritable by that descendant.  It MUST NOT duplicate,
+  transfer, or delegate the carrier to another process.  A descendant
+  which inherits either end would extend the caller identity and could
+  keep a failed session alive after the configured Client exits.
+
+  The standard streams are binding objects, not request‐associated or
+  result‐associated handle tables.  Their native descriptor or handle
+  values MUST NOT occur in an IPC document.  This revision supplies no
+  associated native handle table in either direction.
+
+
+4. Process Session
+──────────────────
+
+  One child process carries zero or more sequential TSP‑0004
+  transactions.  For each transaction, the Client writes one complete
+  request through the Line Feed following its outer End and flushes its
+  standard output.  It then writes no byte of another request until it
+  has received and validated the complete result for that transaction.
+
+  The Service reads the complete request, performs the operation, writes
+  its one complete result through the Line Feed following its outer End,
+  and flushes the result stream.  The Client may then begin another
+  request.  Requests are never pipelined, so request and result order
+  associates each result with exactly one request without an additional
+  identifier.
+
+  The request and result bytes are exactly the TSP‑0004 documents.  The
+  binding adds no length, preamble, terminating Null, Carriage Return,
+  byte‐order marker, or character conversion.  Both receivers determine
+  completion from the complete outer grammar rather than a pipe read
+  boundary, process exit, or end of file.
+
+  When it has no outstanding request, the Client may close its standard
+  output and exit.  The Service treats end of file between transactions
+  as normal session completion and closes its result stream.  The
+  Service reaps the child or obtains an equivalent host completion; a
+  process which has exited MUST NOT remain as an unreaped host resource.
+
+  The Service may apply local inactivity and process‐lifetime policy.
+  It reports an operation TemporaryFailure when the operation grammar
+  permits and the result stream remains usable.  Terminating a child or
+  closing a stream does not undo a committed operation.
+
+
+5. Operation Restrictions
+─────────────────────────
+
+  This revision supplies no request‐associated handles.  A TSP‑0006
+  Submit or Submit-Items request containing Source-Handle produces a
+  Not-Committed Invalid failure.  Source-Path remains available and
+  retains every TSP‑0006 race, ownership, and arbitrary‐length
+  requirement.  Capabilities omits the feature
+  "Submit.Source-Handle".
+
+  TSP‑0012 Claim-Inbound supports Presentation Path.  Presentation
+  Handle returns NotSupported, and Capabilities omits
+  "Consume.Payload-Handle".  A payload export is governed by its
+  inbound claim rather than the child process lifetime.  Process exit
+  does not acknowledge the item or authorize export removal before the
+  claim otherwise permits it.
+
+  Every other TSP‑0004 operation can use this binding.  Claim-Inbound
+  Wait and Events Wait may keep one transaction outstanding.  A Client
+  which wants to drain currently eligible work uses Now repeatedly and
+  exits after the applicable Empty or empty result.
+
+
+6. Failure and Recovery
+───────────────────────
+
+  Failure to create the child or its private streams creates no IPC
+  transaction.  The Service retains every durable item, Job, event, and
+  activation condition under its ordinary recovery policy.
+
+  End of file or process exit before a complete request means no
+  operation is committed from that partial request.  If enough framing
+  is valid and the result stream remains writable, the Service SHOULD
+  return the applicable TSP‑0004 Error before ending the session.
+
+  Once the Service receives a complete request, later stream failure or
+  process exit does not cancel it.  The operation may already have
+  committed.  If the Client does not receive and validate the complete
+  result, its outcome is unknown and a later invocation applies the
+  operation's idempotency, Query, and recovery rules.  For Submit or
+  Submit-Items it first uses Lookup-Submission without a handle table.
+
+  Bytes after a request's outer End and before its complete result make
+  the Client nonconforming.  A malformed request or unexpected byte MAY
+  end the process session after the Service returns an applicable Error
+  when possible.  Standard‐output diagnostics are malformed IPC data;
+  the Service MUST NOT discard or reinterpret them as logs.
+
+  Process exit status, signal termination, broker status, elapsed
+  lifetime, standard‐error output, and disappearance of a payload export
+  are not operation results.  The Service MUST NOT acknowledge an
+  inbound item, mark a Job committed, or acknowledge an event from any
+  of them.
+
+  If the Service or spawn broker fails, every affected stream closes.
+  A Client with an incomplete result treats it as unknown and exits.
+  After restart, durable operation state and eligible inbound work cause
+  normal recovery and a later activation; the carrier retains no
+  transaction object of its own.
+
+
+7. Security
+───────────
+
+  The Service authorizes every operation against the principal assigned
+  to the exact launch.  Request contents do not gain authority from
+  having been produced by a configured executable.  The Service parses
+  them as untrusted IPC input and applies every normal Application,
+  Source, routing, claim, and control authorization.
+
+  The executable and each directory used to resolve it MUST be protected
+  from replacement by a principal which is not authorized for the
+  assigned IPC identity.  The Service invokes the executable directly
+  with a structured argument vector and MUST NOT construct a shell
+  command from IPC or remote data.
+
+  This binding does not require the Service and Client to use different
+  operating‐system users, access tokens, sandboxes, or capability modes.
+  Such separation is host policy.  Handle isolation remains mandatory
+  even when both processes use the same account: it prevents accidental
+  authority, lifetime extension, interference with open file state, and
+  disclosure through already open objects.
+
+  Environment variables and arguments SHOULD contain no secret,
+  ClaimToken, Source pathname, payload pathname, or remote data unless
+  the configured Application requires that exact value.  IPC request
+  and result documents remain the canonical interface; process
+  metadata MUST NOT become an alternate operation grammar.
+
+
+8. Feedback and Discussion
+───────────────────────────
+
+  A spawned Client provides low‐latency activation without requiring a
+  specialized Application to remain resident.  Letting one invocation
+  perform sequential transactions amortizes process creation and lets a
+  worker drain its Application queue before exit.
+
+  The same boundary permits a schedule to launch a short‐lived callout
+  driver without putting its legacy exchange protocol in the Service.
+  The operation document for that driver still has to define the
+  durable assignment, data presented, and result; process activation
+  and exit do not provide those semantics.
+
+  Standard streams are available on the supported hosts and need no
+  published endpoint or long‐lived Client credential.  The private
+  stream ends themselves bind the configured principal to the exact
+  launched process.
+
+  Handle isolation is narrower than a hostile‐code sandbox and is still
+  useful independently.  It keeps a child from accidentally retaining a
+  listening socket, database file, active connection, or other Service
+  object whose lifetime and authority do not belong to that Application.
+
+
+A. References
+─────────────
+
+  [TSP‑0004] "Local IPC Format", TITH, 2026‑08‑23.
+
+  [TSP‑0006] "Outbound Job Submission", TITH, 2026‑08‑23.
+
+  [TSP‑0011] "Durable Inbound Delivery Items", TITH, 2026‑08‑22.
+
+  [TSP‑0012] "Tosser Consumption IPC", TITH, 2026‑08‑23.
+
+
+B. History
+──────────
+
+   Rev.1, 2026‑08‑23: Initial Release.
+
+**********************************************************************

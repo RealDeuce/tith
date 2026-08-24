@@ -3,10 +3,10 @@ TITH                                              THIS ISN'T THAT HARD
 **********************************************************************
 
 Publication:  TSP‑0012
-Revision:     2
+Revision:     3
 Title:        Tosser Consumption IPC
 Author(s):    Stephen Hurd
-Date:         2026‑08‑18
+Date:         2026‑08‑23
 ══════════════════════════════════════════════════════════════════════
 
 Status of this document
@@ -59,8 +59,8 @@ Contents
   All operations use the TSP‑0004 text format and its authenticated
   local caller identity.  The same operation grammar is used over the
   Unix socket, atomic file, authenticated TCP, and Windows named pipe
-  bindings.  Binary payload bytes are never escaped into the text
-  document.
+  bindings, and over the spawned‐process binding.  Binary payload bytes
+  are never escaped into the text document.
 
   Path presentation is required and works over every binding.  Unix
   socket and Windows named pipe bindings may additionally transfer a
@@ -434,9 +434,9 @@ A. References
   [TSP‑0002] "Routing and Distribution Configuration", TITH,
   2026‑08‑21.
 
-  [TSP‑0004] "Local IPC Format", TITH, 2026‑08‑17.
+  [TSP‑0004] "Local IPC Format", TITH, 2026‑08‑23.
 
-  [TSP‑0006] "Outbound Job Submission", TITH, 2026‑08‑21.
+  [TSP‑0006] "Outbound Job Submission", TITH, 2026‑08‑23.
 
   [TSP‑0007] "Unix‐Domain Socket IPC Binding", TITH, 2026‑08‑17.
 
@@ -447,6 +447,8 @@ A. References
   [TSP‑0010] "Windows Named‐Pipe IPC Binding", TITH, 2026‑08‑17.
 
   [TSP‑0011] "Durable Inbound Delivery Items", TITH, 2026‑08‑21.
+
+  [TSP‑0019] "Spawned‐Process IPC Binding", TITH, 2026‑08‑23.
 
   [TTS‑0003] "Common TLV Types", TITH, 2026‑08‑22.
 
@@ -462,5 +464,7 @@ B. History
 
    Rev.2, 2026‑08‑18: Exposed the five Message and File item
    authentication states required by final delivery policy.
+
+   Rev.3, 2026‑08‑23: Added the spawned‐process path binding.
 
 **********************************************************************

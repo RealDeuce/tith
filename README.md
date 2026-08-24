@@ -97,6 +97,10 @@ The implementation is divided by responsibility rather than by document:
 | `tith` | The `tith` client multiplexer binary |
 | `tithd` | Reference service and host bindings |
 
+The proposed on-demand worker carrier is specified by
+[`TSP-0019`](standards/TSP-0019.txt). Its nonnormative reference-service
+architecture is recorded in the [`tithd` spawn-broker design](crates/tithd/SPAWN-BROKER.md).
+
 Rust 1.97.1 is pinned by [`rust-toolchain.toml`](rust-toolchain.toml). To build
 and validate the complete workspace:
 
