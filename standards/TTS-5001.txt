@@ -3,11 +3,11 @@ TITH                                              THIS ISN'T THAT HARD
 **********************************************************************
 
 Publication:  TTS‑5001
-Revision:     3
+Revision:     4
 Title:        Nodelist Flags
 Author(s):    FTSC Members, Administrator, Honoured Guests and
               Stephen Hurd
-Date:         2026‑08‑23
+Date:         2026‑08‑24
 ══════════════════════════════════════════════════════════════════════
 
 Status of this document
@@ -69,17 +69,20 @@ Contents
   parser was expected to infer.  Those rules cannot define one native
   representation on which independent implementations agree.
 
-  This document retains the registered facts needed by TITH and gives
-  each one a canonical encoding.  Compatibility with an FTS nodelist
-  belongs at a conversion boundary.  A later revision of an FTSC
-  document changes no TITH flag until a TTS revision incorporates it.
+  FTS‑4010.001 later separated final‑destination PING from in‑transit
+  TRACE and assigned an independent flag to each service.  This
+  document retains the registered facts needed by TITH and gives each
+  one a canonical encoding.  Compatibility with an FTS nodelist belongs
+  at a conversion boundary.  A later revision of an FTSC document
+  changes no TITH flag until a TTS revision incorporates it.
 
 
 2. Supersessions
 ────────────────
 
-  This document replaces the use of FTS‑5001.006 as the flag registry
-  for TITH.  It does not supersede that document for an FTS nodelist.
+  This document replaces the use of FTS‑5001.006 and FTS‑4010.001 as
+  flag registries for TITH.  It does not supersede either document for
+  an FTS nodelist.
 
 
 3. Purpose
@@ -395,8 +398,10 @@ Contents
 
     MO     The system does not accept human callers.
     GUUCP  The system is a Fidonet‑to‑email gateway.
-    PING   The system claims to provide legacy PING and TRACE
-           diagnostics.
+    PING   The system claims to provide the legacy final‑destination
+           PING diagnostic.
+    TRACE  The system claims to provide the legacy in‑transit TRACE
+           diagnostic.
     ZEC    Zone EchoMail Coordinator.
     REC    Regional EchoMail Coordinator.
     NEC    Network EchoMail Coordinator.
@@ -408,6 +413,9 @@ Contents
     NPK    Net Pointlist Keeper.
     ENC    The system accepts and routes inbound encrypted mail.
     CDP    The system accepts points created by CD‑point software.
+
+  PING and TRACE are independent assertions; neither implies the
+  other.  Operation of either diagnostic remains outside this document.
 
   A container may carry an unassigned extension after all assigned
   Other Flags.  An extension is 1–32 ASCII alphanumeric characters.
@@ -422,6 +430,9 @@ A. References
 
   [FTA‑1006.002] "Key words to indicate requirement levels", FTSC,
   1998‑01‑17.
+
+  [FTS‑4010.001] Revision 1, "The PING and TRACE flags", FTSC,
+  2022‑12‑24.
 
   [FTS‑5001.006] "Nodelist flags and userflags", FTSC Members,
   Administrator and Honoured Guests.  August 2017.
@@ -445,5 +456,11 @@ B. History
 
    Rev.3, 2026‑08‑23: Defined the single canonical spelling of a
    Protocol flag whose endpoint argument is empty.
+
+   TSP Rev.1, 2026‑08‑24: Proposed separate independent PING and TRACE
+   assertions following FTS‑4010.001.
+
+   TTS Rev.4, 2026‑08‑24: Promoted TSP‑5001 revision 1 without
+   technical changes.
 
 **********************************************************************

@@ -3,11 +3,11 @@ TITH                                              THIS ISN'T THAT HARD
 **********************************************************************
 
 Publication:  TSP‑0018
-Revision:     2
+Revision:     3
 Title:        Legacy PING and TRACE Diagnostics
 Author(s):    FTSC Members, Administrator, Honoured Guests and
               Stephen Hurd
-Date:         2026‑08‑23
+Date:         2026‑08‑24
 ═════════════════════════════════════════════════════════════════════
 
 Status of this document
@@ -217,11 +217,14 @@ A. References
 
   [TTS‑0009] “Item Format”, TITH, 2026‑08‑23.
 
-  [TTS‑5001] “Nodelist Flags”, TITH, 2026‑08‑23.
+  [TTS‑5001] “Nodelist Flags”, revision 4, TITH, 2026‑08‑24.
 
 
 B. History
 ──────────
+
+   Rev.3, 2026‑08‑24: Updated the Nodelist Flags reference after the
+   separate PING and TRACE assertions became TTS‑5001 revision 4.
 
    Rev.2, 2026‑08‑23: Incorporated FTS‑4010.001: separated the PING
    and TRACE advertisements, made request recognition case‑insensitive,
