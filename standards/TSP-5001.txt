@@ -1,0 +1,462 @@
+**********************************************************************
+TITH                                              THIS ISN'T THAT HARD
+**********************************************************************
+
+Publication:  TSP‑5001
+Revision:     1
+Title:        Nodelist Flags
+Author(s):    FTSC Members, Administrator, Honoured Guests and
+              Stephen Hurd
+Date:         2026‑08‑24
+══════════════════════════════════════════════════════════════════════
+
+Status of this document
+───────────────────────
+
+  This document is a TITH Standard Proposal (TSP) — it documents a
+  proposed standard and solicits discussion.  Until promoted to a TTS,
+  this is experimental only and does not describe required behaviour.
+
+  This document is released to the public domain, and may be used,
+  copied or modified for any purpose whatever.
+
+Abstract
+────────
+
+  Nodelist flags describe the operating conditions, capabilities, and
+  administrative roles of one system.  This document defines their
+  canonical spelling, syntax, ordering, and meaning independently of
+  the file or service in which a flag list is carried.
+
+
+Contents
+────────
+
+  1.  Introduction
+  2.  Supersessions
+  3.  Purpose
+  4.  Common Grammar
+  5.  System Flags
+      5.1  Operating Conditions
+      5.2  File and Update Requests
+      5.3  Mail Periods
+      5.4  Online Periods
+  6.  PSTN and ISDN Flags
+      6.1  Connection Protocols
+      6.2  Error Correction and Compression
+      6.3  ISDN Capabilities
+  7.  Internet Flags
+      7.1  Server Addresses and Ports
+      7.2  Protocols
+      7.3  Information
+      7.4  TITH Service and Public Key
+  8.  Email Flags
+  9.  Other Flags
+
+  A.  References
+  B.  History
+
+══════════════════════════════════════════════════════════════════════
+
+
+1. Introduction
+───────────────
+
+  FTS‑5001.006 combined a useful registry with permissive advice for
+  interpreting deployed nodelists.  It expressly allowed undocumented
+  experimental flags, alternate forms, and parameters whose meaning a
+  parser was expected to infer.  Those rules cannot define one native
+  representation on which independent implementations agree.
+
+  FTS‑4010.001 later separated final‑destination PING from in‑transit
+  TRACE and assigned an independent flag to each service.  This
+  document retains the registered facts needed by TITH and gives each
+  one a canonical encoding.  Compatibility with an FTS nodelist belongs
+  at a conversion boundary.  A later revision of an FTSC document
+  changes no TITH flag until a TTS revision incorporates it.
+
+
+2. Supersessions
+────────────────
+
+  This document replaces the use of FTS‑5001.006 and FTS‑4010.001 as
+  flag registries for TITH.  It does not supersede either document for
+  an FTS nodelist.
+
+
+3. Purpose
+──────────
+
+  A flag belongs to exactly one of five categories: System, PSTN and
+  ISDN, Internet, Email, or Other.  This document defines those
+  categories without assigning them to fields in a particular
+  container.  A container standard defines where each category is
+  carried and any constraints which depend on other records.
+
+  Producers MUST emit the exact grammar and order in this document.
+  Consumers MUST reject a list which does not conform.  In particular,
+  a native consumer does not repair case, infer whether an argument is
+  a server or port, recognize an alternate spelling, or move a flag to
+  another category.
+
+  A flag records a producer's assertion that the listed system has the
+  named condition, capability, or role.  This document specifies the
+  representation and interpretation of that assertion.  It does not
+  specify operation of the named modem, request, Internet, email,
+  diagnostic, or administrative facility.
+
+
+4. Common Grammar
+─────────────────
+
+  A flag list is either empty or one or more nonempty flags separated
+  by Comma (U+002C).  U+002C is literal syntax.  Whitespace is not
+  inserted around a separator.  A flag cannot contain U+002C.
+
+  Each category has the canonical order shown by its tables and
+  subsections.  A producer MUST use that order and a consumer MUST
+  reject another order.  Where a flag may occur more than once, its
+  occurrences remain together and their order is preference order.
+  No two occurrences in one category may be byte‑for‑byte identical.
+
+  A flag described as singular MUST occur no more than once.  A simple
+  flag takes no argument; adding Colon (U+003A) or any other byte is
+  invalid.
+
+  Flag names and syntax are case‑sensitive.  ASCII letters printed in
+  a table have exactly the printed case.  In particular, the canonical
+  spellings are `V32b` and `V42b`, not `V32B` or `V42B`.
+
+
+5. System Flags
+───────────────
+
+  System Flags occur in this order:
+
+    1. CM, LO, MN, and ICM;
+    2. File and Update Request flags in the order printed below;
+    3. Mail Period flags, ordered by hour and with `#` before `!` for
+       the same hour; and
+    4. Online Period flags, ordered by start and then end time.
+
+
+5.1. Operating Conditions
+─────────────────────────
+
+  Each of these is a singular simple flag:
+
+    CM   The system accepts mail continuously using every listed
+         method.
+
+    LO   The system accepts calls only from listed FTN addresses.
+
+    MN   The system does not process compressed mail packets
+         automatically.
+
+    ICM  The system accepts mail continuously using every listed
+         Internet method, but not necessarily every other method.
+
+
+5.2. File and Update Requests
+─────────────────────────────
+
+  XA, XB, XC, XP, XR, XW, and XX are simple flags.  Each names the
+  following exact set of supported legacy request operations:
+
+          Bark File  Bark Update  WaZOO File  WaZOO Update
+    XA        yes         yes          yes          yes
+    XB        yes         yes          yes          no
+    XC        yes         no           yes          yes
+    XP        yes         yes          no           no
+    XR        yes         no           yes          no
+    XW        no          no           yes          no
+    XX        no          no           yes          yes
+
+  The absence of all seven means none of those operations is stated.
+
+
+5.3. Mail Periods
+─────────────────
+
+  A Mail Period flag is exactly `#nn` or `!nn`, where `nn` is an hour
+  from `00` through `23` written as two ASCII decimal digits.  `#`
+  states Bell 212A compatibility during that period and `!` states
+  incompatibility.  The hour is UTC.  One flag describes one period;
+  concatenated forms such as `#02#09` are not native syntax.
+
+  A list MUST NOT contain both forms for the same hour.
+
+
+5.4. Online Periods
+───────────────────
+
+  An Online Period flag is exactly `Tyz`.  Each of `y` and `z` is one
+  character from `A` through `X` or `a` through `x`.  Uppercase `A`
+  through `X` mean the whole hours 00:00 through 23:00 UTC;
+  lowercase `a` through `x` mean the corresponding half hours 00:30
+  through 23:30 UTC.  `y` is the start and `z` is the end.  A period
+  whose end is not later than its start crosses midnight.
+
+
+6. PSTN and ISDN Flags
+──────────────────────
+
+  Every flag in this category is simple and singular.  They occur in
+  the order printed in sections 6.1 through 6.3.  A flag states only
+  the named capability; no flag implies another.
+
+
+6.1. Connection Protocols
+─────────────────────────
+
+    V22   ITU‑T V.22
+    V29   ITU‑T V.29
+    V32   ITU‑T V.32
+    V32b  ITU‑T V.32bis
+    V34   ITU‑T V.34
+    V90C  ITU‑T V.90 client
+    V90S  ITU‑T V.90 server
+    V32T  V.32 Terbo
+    VFC   V.Fast Class
+    HST   USR Courier HST
+    H14   USR Courier HST 14.4
+    H16   USR Courier HST 16.8
+    X2C   US Robotics x2 client
+    X2S   US Robotics x2 server
+    ZYX   Zyxel 16.8
+    Z19   Zyxel 19.2
+    H96   Hayes V9600
+    PEP   Packet Ensemble Protocol
+    CSP   Compucom Speedmodem
+
+
+6.2. Error Correction and Compression
+──────────────────────────────────────
+
+    MNP   Microcom Networking Protocol MNP1 through MNP4 error
+          correction.
+    V42   ITU‑T V.42 LAP‑M error correction with MNP fallback.
+    V42b  ITU‑T V.42bis error correction and compression with MNP
+          fallback.
+
+
+6.3. ISDN Capabilities
+──────────────────────
+
+    V110L  ITU‑T V.110 19.2 kbit/s asynchronous.
+    V110H  ITU‑T V.110 38.4 kbit/s asynchronous.
+    V120L  ITU‑T V.120 56 kbit/s asynchronous, layer 2 frame size
+           259, window 7, modulo 8.
+    V120H  ITU‑T V.120 64 kbit/s asynchronous, layer 2 frame size
+           259, window 7, modulo 8.
+    X75    ITU‑T X.75 SLP, one 64 kbit/s B channel, layer 2 maximum
+           frame size 2048, window 2, modulo 8, transparent layer 3.
+    ISDN   Another ISDN configuration.  This flag is deprecated.
+
+
+7. Internet Flags
+─────────────────
+
+  Internet Flags occur in this order: INA, IIH, IBN, IFC, IFT, ITN,
+  IVM, IP, and INO4.  INA, IIH, and each protocol flag may repeat with
+  distinct values.  INO4 is singular.
+
+
+7.1. Server Addresses and Ports
+───────────────────────────────
+
+  A <server> is exactly one of:
+
+    • a DNS name in lowercase ASCII, containing one or more labels
+      separated by Full Stop (U+002E), with no empty label or trailing
+      Full Stop; each label is 1–63 lowercase ASCII letters, digits,
+      or U+002D HYPHEN-MINUS, begins and ends with a letter or digit,
+      and the complete name is no longer than 253 characters;
+    • an IPv4 address in canonical dotted‑decimal notation; or
+    • an IPv6 address in the canonical notation below, enclosed in
+      Square Brackets (U+005B and U+005D).
+
+  A canonical IPv6 address represents its eight 16‑bit fields in
+  lowercase ASCII hexadecimal with every leading zero suppressed.  The
+  longest run of two or more consecutive zero fields is replaced by
+  exactly two Colon code points (U+003A); the leftmost run is used when
+  two runs have equal length.  No other run is compressed.  An embedded
+  IPv4 dotted‑decimal suffix is not permitted.
+
+  A <port> is an integer from 1 through 65535 written in ASCII decimal
+  with no sign, whitespace, or leading zero.
+
+  An endpoint argument has exactly one of these forms:
+
+    <empty>             default server and registered default port
+    <server>            explicit server and registered default port
+    :<port>             default server and explicit port
+    <server>:<port>     explicit server and explicit port
+
+  The empty server before an explicit port is significant.  Thus
+  `IBN:24555` names the DNS server `24555`, while `IBN::24555` selects
+  the default server and port 24555.  A consumer MUST NOT reinterpret
+  one as the other.
+
+  INA has exactly the form `INA:<server>`.  Each occurrence adds a
+  default server.  For a protocol or IIH occurrence without an
+  explicit server, every INA server supplies an endpoint, in INA
+  order.  If there is no INA, that occurrence has no usable server.
+  An explicit server applies only to its own occurrence.
+
+
+7.2. Protocols
+──────────────
+
+  A Protocol flag is its name optionally followed by Colon (U+003A)
+  and an endpoint argument from section 7.1.  Its registered default
+  port and meaning are:
+
+  When the endpoint argument is empty, the Colon and argument are both
+  omitted.  A present Colon MUST therefore be followed by a nonempty
+  endpoint argument.  For example, `IBN` is canonical and `IBN:` is
+  invalid.
+
+    IBN   24554  binkp
+    IFC   60179  raw ifcico
+    IFT      21  FTP
+    ITN      23  Telnet carrying a legacy modem protocol
+    IVM    3141  Vmodem carrying a legacy modem protocol
+    IP     none  unspecified Internet protocol; deprecated
+
+  `IP` without an explicit port has no usable port.  An implementation
+  MUST NOT substitute another protocol's port.
+
+
+7.3. Information
+────────────────
+
+  INO4 is a simple flag stating that an otherwise Internet‑capable
+  system cannot accept incoming IPv4 connections.
+
+
+7.4. TITH Service and Public Key
+────────────────────────────────
+
+  IIH is a TITH service endpoint and public‑key flag.  It has exactly
+  one of these forms:
+
+    IIH:<PublicKey>
+    IIH:<server>:<PublicKey>
+    IIH::<port>:<PublicKey>
+    IIH:<server>:<port>:<PublicKey>
+
+  <server> and <port> have the section 7.1 grammar.  <PublicKey> is the
+  43‑character RFC‑4648 base64 encoding, using the standard alphabet
+  and no padding, of the 32‑byte TITH public key defined by TTS‑0004.
+  Every IIH occurrence in one list MUST carry the same PublicKey.
+
+  An omitted server uses the INA servers as section 7.1 specifies.  An
+  omitted port means the registered default TITH service port.  No
+  such port is assigned by this revision, so an IIH occurrence with no
+  explicit port currently supplies no usable endpoint.  It still
+  publishes its PublicKey.
+
+
+8. Email Flags
+──────────────
+
+  Email Flags occur in this order: IEM, ITX, IUC, IMI, ISE, EVY, and
+  EMA.  Each may repeat with a distinct address, and its occurrences
+  remain in preference order.
+
+  Each flag is either its name alone or its name followed by Colon
+  (U+003A) and a nonempty <email-address>.  An <email-address> is an
+  opaque sequence of Unicode scalar values excluding U+0000 through
+  U+001F, U+007F, and Comma (U+002C).  Its interpretation belongs to
+  the email method; a parser MUST NOT infer, repair, or normalize it.
+
+  IEM supplies the default address for an Email Protocol flag which
+  carries none.  A bare IEM states an unspecified legacy email
+  tunnelling method but supplies no default address.  The protocol
+  meanings are:
+
+    ITX  TransX encoding with return receipts.
+    IUC  UUencoding of mail bundles.
+    IMI  MIME encoding of mail bundles.
+    ISE  SEAT tunnelling with return receipts.
+    EVY  Voyager‑compatible tunnelling.
+    EMA  Another email tunnelling method.
+
+  For an Email Protocol occurrence without an explicit address, every
+  addressed IEM occurrence supplies an address, in IEM preference
+  order.  A bare IEM supplies no address.  An explicit address applies
+  only to its own occurrence.
+
+
+9. Other Flags
+──────────────
+
+  The assigned Other Flags occur in this order and are simple and
+  singular:
+
+    MO     The system does not accept human callers.
+    GUUCP  The system is a Fidonet‑to‑email gateway.
+    PING   The system claims to provide the legacy final‑destination
+           PING diagnostic.
+    TRACE  The system claims to provide the legacy in‑transit TRACE
+           diagnostic.
+    ZEC    Zone EchoMail Coordinator.
+    REC    Regional EchoMail Coordinator.
+    NEC    Network EchoMail Coordinator.
+    NC     Network Coordinator when that role is separate from the
+           Host entry.
+    SDS    Software Distribution System.
+    SMH    Secure Mail Hub.
+    RPK    Regional Pointlist Keeper.
+    NPK    Net Pointlist Keeper.
+    ENC    The system accepts and routes inbound encrypted mail.
+    CDP    The system accepts points created by CD‑point software.
+
+  PING and TRACE are independent assertions; neither implies the
+  other.  Operation of either diagnostic remains outside this document.
+
+  A container may carry an unassigned extension after all assigned
+  Other Flags.  An extension is 1–32 ASCII alphanumeric characters.
+  Extensions occur in ascending ASCII byte order.  An assigned flag
+  name is always its assigned flag and cannot be encoded as an
+  extension.  `U` is not a delimiter and is merely an unassigned
+  extension if it occurs as a complete flag.
+
+
+A. References
+─────────────
+
+  [FTA‑1006.002] "Key words to indicate requirement levels", FTSC,
+  1998‑01‑17.
+
+  [FTS‑4010.001] Revision 1, "The PING and TRACE flags", FTSC,
+  2022‑12‑24.
+
+  [FTS‑5001.006] "Nodelist flags and userflags", FTSC Members,
+  Administrator and Honoured Guests.  August 2017.
+
+  [RFC‑4648] "The Base16, Base32, and Base64 Data Encodings", IETF,
+  2006‑10.
+
+  [TTS‑0004] "Node Addresses", revision 5, TITH, 2026‑08‑22.
+
+
+B. History
+──────────
+
+   Rev.1, 2026‑08‑22: Initial release.  Replaced the open‑ended FTS
+   registry with a complete canonical TITH grammar, retained the
+   registered flag meanings, and added the IIH service and key flag.
+
+   Rev.2, 2026‑08‑23: Limited conformance to the flag registry and
+   serialization, defined exact IPv6 and repeated IEM handling, and
+   pinned the public‑key and requirement‑keyword dependencies.
+
+   Rev.3, 2026‑08‑23: Defined the single canonical spelling of a
+   Protocol flag whose endpoint argument is empty.
+
+   TSP Rev.1, 2026‑08‑24: Proposed separate independent PING and TRACE
+   assertions following FTS‑4010.001.
+
+**********************************************************************

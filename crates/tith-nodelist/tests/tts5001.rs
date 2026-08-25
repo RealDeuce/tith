@@ -54,6 +54,8 @@ fn validated_components_cannot_spell_invalid_flags() {
 	assert_eq!(extension.as_str(), "V32B");
 	assert_eq!(extension.to_string(), "V32B");
 	assert!(ExtensionFlag::from_str("V32b").is_err());
+	assert!(ExtensionFlag::from_str("PING").is_err());
+	assert!(ExtensionFlag::from_str("TRACE").is_err());
 	assert!(ExtensionFlag::from_str("bad-flag").is_err());
 }
 
@@ -110,14 +112,15 @@ fn standalone_lists_parse_format_iterate_and_validate_construction() {
 	assert_eq!(email.clone().into_vec().len(), 8);
 
 	let other: OtherFlags =
-		"MO,GUUCP,PING,ZEC,REC,NEC,NC,SDS,SMH,RPK,NPK,ENC,CDP,TRACE,U,V32B,V42B"
+		"MO,GUUCP,PING,TRACE,ZEC,REC,NEC,NC,SDS,SMH,RPK,NPK,ENC,CDP,U,V32B,V42B"
 			.parse()
 			.unwrap();
 	assert_eq!(other.clone().into_vec().len(), 17);
 	assert_eq!(
 		other.to_string(),
-		"MO,GUUCP,PING,ZEC,REC,NEC,NC,SDS,SMH,RPK,NPK,ENC,CDP,TRACE,U,V32B,V42B"
+		"MO,GUUCP,PING,TRACE,ZEC,REC,NEC,NC,SDS,SMH,RPK,NPK,ENC,CDP,U,V32B,V42B"
 	);
+	assert_eq!(other.as_ref()[3], OtherFlag::Trace);
 
 	let constructed = SystemFlags::try_from(vec![SystemFlag::ContinuousMail]).unwrap();
 	assert_eq!(constructed.to_string(), "CM");
@@ -343,7 +346,7 @@ fn email_defaults_expand_in_preference_order() {
 fn other_extensions_reserve_only_exact_assigned_names() {
 	let longest = "A".repeat(32);
 	for valid in [
-		"U", "AAA", "TAY", "TYA", "TRACE", "V32B", "V42B", "a9", &longest,
+		"U", "AAA", "TAY", "TRACEX", "TYA", "V32B", "V42B", "a9", "trace", &longest,
 	] {
 		let parsed: OtherFlags = valid.parse().unwrap();
 		assert_eq!(parsed.to_string(), valid);
@@ -353,6 +356,9 @@ fn other_extensions_reserve_only_exact_assigned_names() {
 		"A,A",
 		"B,A",
 		"TRACE,MO",
+		"PING,ZEC,TRACE",
+		"TRACE,TRACE",
+		"TRACE:x",
 		"CM",
 		"V32b",
 		"INA",

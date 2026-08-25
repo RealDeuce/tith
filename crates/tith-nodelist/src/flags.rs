@@ -482,6 +482,7 @@ pub enum OtherFlag {
 	MailOnly,
 	EmailGateway,
 	Ping,
+	Trace,
 	ZoneEchomailCoordinator,
 	RegionalEchomailCoordinator,
 	NetworkEchomailCoordinator,
@@ -532,6 +533,7 @@ impl OtherFlag {
 			Self::MailOnly => "MO",
 			Self::EmailGateway => "GUUCP",
 			Self::Ping => "PING",
+			Self::Trace => "TRACE",
 			Self::ZoneEchomailCoordinator => "ZEC",
 			Self::RegionalEchomailCoordinator => "REC",
 			Self::NetworkEchomailCoordinator => "NEC",
@@ -569,7 +571,8 @@ const PSTN_NAMES: &[&str] = &[
 ];
 
 const OTHER_NAMES: &[&str] = &[
-	"MO", "GUUCP", "PING", "ZEC", "REC", "NEC", "NC", "SDS", "SMH", "RPK", "NPK", "ENC", "CDP",
+	"MO", "GUUCP", "PING", "TRACE", "ZEC", "REC", "NEC", "NC", "SDS", "SMH", "RPK", "NPK", "ENC",
+	"CDP",
 ];
 
 fn split_flags(value: &str) -> Result<Vec<&str>, NodelistErrorKind> {
@@ -972,6 +975,7 @@ fn assigned_name(text: &str) -> bool {
 			| "ISE" | "EVY"
 			| "EMA"
 	) || PSTN_NAMES.contains(&text)
+		|| OTHER_NAMES.contains(&text)
 		|| (text.len() == 3
 			&& text.starts_with('T')
 			&& parse_half_hour(text.as_bytes()[1]).is_some()
@@ -1021,6 +1025,7 @@ pub(crate) fn parse_other(value: &str) -> Result<Vec<OtherFlag>, NodelistErrorKi
 				"MO" => OtherFlag::MailOnly,
 				"GUUCP" => OtherFlag::EmailGateway,
 				"PING" => OtherFlag::Ping,
+				"TRACE" => OtherFlag::Trace,
 				"ZEC" => OtherFlag::ZoneEchomailCoordinator,
 				"REC" => OtherFlag::RegionalEchomailCoordinator,
 				"NEC" => OtherFlag::NetworkEchomailCoordinator,
@@ -1332,6 +1337,9 @@ mod tests {
 
 		let other = OTHER_NAMES.join(",");
 		assert_eq!(text(&parse_other(&other).unwrap()).join(","), other);
+		for name in OTHER_NAMES {
+			assert!(name.parse::<ExtensionFlag>().is_err(), "{name}");
+		}
 	}
 
 	#[test]

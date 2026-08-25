@@ -3,6 +3,7 @@ name: Qualify TTS-5001
 on:
   push:
     paths:
+      - "standards/TSP-5001.txt"
       - "standards/TTS-5001.txt"
       - "standards/TTS-0004.txt"
       - "Cargo.lock"
@@ -13,7 +14,7 @@ on:
       - "crates/tith-nodelist/src/lib.rs"
       - "crates/tith-nodelist/tests/tts5001.rs"
       - "qualification/check_source_line_coverage.py"
-      - "qualification/TTS-5001.003.md"
+      - "qualification/TTS-5001.004.md"
       - ".github/workflows/qualify-tts-5001.yml"
   workflow_dispatch:
 

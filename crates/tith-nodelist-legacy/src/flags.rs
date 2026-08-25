@@ -67,7 +67,8 @@ const PSTN_CANONICAL: &[&str] = &[
 ];
 
 const OTHER: &[&str] = &[
-	"MO", "GUUCP", "PING", "ZEC", "REC", "NEC", "NC", "SDS", "SMH", "RPK", "NPK", "ENC", "CDP",
+	"MO", "GUUCP", "PING", "TRACE", "ZEC", "REC", "NEC", "NC", "SDS", "SMH", "RPK", "NPK", "ENC",
+	"CDP",
 ];
 
 fn one(field: Field, text: impl Into<String>, order: u32) -> Vec<CanonicalFlag> {
@@ -411,10 +412,11 @@ mod tests {
 	}
 
 	#[test]
-	fn trace_is_an_extension_not_a_registered_robot_flag() {
+	fn trace_is_a_registered_robot_flag() {
 		let flag = &canonicalize("TRACE").unwrap()[0];
 		assert_eq!(flag.field, Field::Other);
-		assert!(flag.extension);
-		assert!(!flag.known);
+		assert!(!flag.extension);
+		assert!(flag.known);
+		assert_eq!(flag.order, 3);
 	}
 }

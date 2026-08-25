@@ -802,14 +802,15 @@ mod tests {
 
 	#[test]
 	fn sorts_flags_into_their_tts_5000_fields() {
-		let (output, warnings) =
-			convert_ok("Zone,1,N,L,S,,,CM,V32b,IBN:example.org,IEM:s@example.org,MO\r\n");
+		let (output, warnings) = convert_ok(
+			"Zone,1,N,L,S,,,ZEC,CM,V32b,TRACE,IBN:example.org,IEM:s@example.org,MO,PING\r\n",
+		);
 		let fields: Vec<_> = output.trim_end().split('\t').collect();
 		assert_eq!(fields[6], "CM");
 		assert_eq!(fields[7], "V32b");
 		assert_eq!(fields[8], "IBN:example.org");
 		assert_eq!(fields[9], "IEM:s@example.org");
-		assert_eq!(fields[10], "MO");
+		assert_eq!(fields[10], "MO,PING,TRACE,ZEC");
 		assert!(warnings.is_empty());
 	}
 

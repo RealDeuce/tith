@@ -459,6 +459,28 @@ fn coordinator_assertions_use_their_exact_scopes() {
 }
 
 #[test]
+fn other_flags_use_the_separate_ping_and_trace_order() {
+	let canonical = [
+		flagged_line("Zone", 1, "", ""),
+		flagged_line("Host", 10, "", ""),
+		flagged_line("", 2, "", "PING,TRACE,ZEC"),
+	]
+	.concat();
+	assert!(Nodelist::parse("fidonet", &canonical).is_ok());
+
+	let revision_three_order = [
+		flagged_line("Zone", 1, "", ""),
+		flagged_line("Host", 10, "", ""),
+		flagged_line("", 2, "", "PING,ZEC,TRACE"),
+	]
+	.concat();
+	assert!(matches!(
+		Nodelist::parse("fidonet", &revision_three_order),
+		Err(error) if matches!(error.kind, NodelistErrorKind::InvalidFlag)
+	));
+}
+
+#[test]
 fn pvt_is_exactly_the_absence_of_a_usable_contact_target() {
 	let key = STANDARD_NO_PAD.encode([7; 32]);
 	for (internet, email) in [
