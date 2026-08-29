@@ -3,10 +3,10 @@ TITH                                              THIS ISN'T THAT HARD
 **********************************************************************
 
 Publication:  TPS‑0001
-Revision:     2
+Revision:     3
 Title:        TITH Standards Process
 Author(s):    Stephen Hurd
-Date:         2026‑08‑22
+Date:         2026‑08‑28
 ══════════════════════════════════════════════════════════════════════
 
 Status of this document
@@ -378,6 +378,16 @@ Contents
   record, updates affected dependency records, and closes its tracking
   issue through the commit.
 
+  When that TSP‑NNNN identifier is occupied by an unrelated proposal
+  published before revision 2 of this process took effect, the revision
+  MAY instead be developed under an otherwise unassigned TSP identifier.
+  Its tracking issue, candidate, qualification record, and history MUST
+  identify both the alternate TSP and the TTS it revises.  The
+  publishing change removes the alternate candidate and leaves the
+  grandfathered proposal unchanged.  This exception does not permit an
+  alternate identifier when the matching TSP slot is available or is
+  occupied by a proposal to revise that TTS.
+
   An editorial revision MAY carry qualification evidence forward
   without rerunning unaffected tests.  Its new qualification record MUST
   contain the complete textual difference, the repository owner's
@@ -474,5 +484,9 @@ B. History
    allowed retired TSP numbers to be reused, reserved TTS‐numbered TSP
    slots for revisions to their matching standards, and permitted
    promotion to assign a different TTS number.
+
+   Rev.3, 2026‑08‑28: Allowed an alternate proposal identifier for a
+   TTS revision when its matching slot remains occupied by an unrelated
+   proposal grandfathered before revision 2.
 
 **********************************************************************
