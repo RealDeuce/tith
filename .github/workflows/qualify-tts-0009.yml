@@ -3,6 +3,7 @@ name: Qualify TTS-0009
 on:
   push:
     paths:
+      - "standards/TSP-0021.txt"
       - "standards/TSP-0024.txt"
       - "standards/TTS-0009.txt"
       - "standards/TTS-0010.txt"
