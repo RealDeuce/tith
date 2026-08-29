@@ -3,10 +3,10 @@ TITH                                              THIS ISN'T THAT HARD
 **********************************************************************
 
 Publication:  TTS‑0009
-Revision:     2
+Revision:     3
 Title:        Item Format
 Author(s):    Stephen Hurd
-Date:         2026‑08‑23
+Date:         2026‑08‑28
 ══════════════════════════════════════════════════════════════════════
 
 Status of this document
@@ -520,7 +520,7 @@ A. References
 
   [TTS‑0002] "Type Length Value Encoding", TITH, 2026‑08‑22.
 
-  [TTS‑0003] "Common TLV Types", TITH, 2026‑08‑22.
+  [TTS‑0003] "Common TLV Types", TITH, 2026‑08‑28.
 
   [TTS‑0004] "Node Addresses", TITH, 2026‑08‑22.
 
@@ -543,5 +543,12 @@ B. History
 
    TTS Rev.2, 2026‑08‑23: Carried the unchanged requirements forward
    with corrected dependency citations and revision labels.
+
+   TSP Rev.1, 2026‑08‑28: Updated the normative Common TLV Types
+   dependency for the Libhydrogen interoperability profile set.
+   Proposed as TTS‑0009 revision 3.
+
+   TTS Rev.3, 2026‑08‑28: Replaced TTS‑0009 revision 2 with alternate
+   candidate TSP‑0024 revision 1 without further technical changes.
 
 **********************************************************************

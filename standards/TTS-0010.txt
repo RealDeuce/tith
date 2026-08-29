@@ -2,8 +2,8 @@
 TITH                                              THIS ISN'T THAT HARD
 **********************************************************************
 
-Publication:  TSP‑0020
-Revision:     2
+Publication:  TTS‑0010
+Revision:     1
 Title:        Libhydrogen Version 1 Interoperability Profile
 Author(s):    Stephen Hurd
 Date:         2026‑08‑28
@@ -12,9 +12,10 @@ Date:         2026‑08‑28
 Status of this document
 ───────────────────────
 
-  This document is a TITH Standard Proposal (TSP) — it describes a
-  proposed specification which may change before acceptance as a TITH
-  Technical Standard.
+  This document is a TITH Technical Standard (TTS) — it specifies
+  the current technical requirements and recommendations for TITH
+  software developers, coordinators and sysops of the Fidonet network
+  and other networks using FTN technology.
 
   This document is released to the public domain, and may be used,
   copied or modified for any purpose whatever.
@@ -243,5 +244,8 @@ B. History
    TSP Rev.2, 2026‑08‑28: Changed the proposed standard assignment to
    the next available identifier, TTS‑0010.  The technical requirements
    are unchanged.
+
+   TTS Rev.1, 2026‑08‑28: Promoted TSP‑0020 revision 2 as TTS‑0010
+   revision 1 without technical changes.
 
 **********************************************************************

@@ -3,11 +3,11 @@ TITH                                              THIS ISN'T THAT HARD
 **********************************************************************
 
 Publication:  TTS‑5000
-Revision:     9
+Revision:     10
 Title:        The Distribution Nodelist
 Author(s):    FTSC Members, Administrator, Honoured Guests and
               Stephen Hurd
-Date:         2026‑08‑23
+Date:         2026‑08‑28
 ══════════════════════════════════════════════════════════════════════
 
 Status of this document
@@ -502,7 +502,7 @@ A. References
 
   [TTS‑0008] "Public Key Trust and Continuity", TITH, 2026‑08‑22.
 
-  [TTS‑0009] "Item Format", TITH, 2026‑08‑22.
+  [TTS‑0009] "Item Format", TITH, 2026‑08‑28.
 
   [TTS‑5001] "Nodelist Flags", TITH, 2026‑08‑22.
 
@@ -548,5 +548,12 @@ B. History
    comment grammar, usable‐contact Pvt state, hierarchy and segment
    context, and private keyword scope.  Removed legacy conversion,
    downstream routing, and duplicated flag requirements.
+
+   TSP Rev.1, 2026‑08‑28: Updated the normative Item Format dependency
+   for the Libhydrogen interoperability profile set.  Proposed as
+   TTS‑5000 revision 10.
+
+   TTS Rev.10, 2026‑08‑28: Replaced TTS‑5000 revision 9 with matching
+   candidate TSP‑5000 revision 1 without further technical changes.
 
 **********************************************************************

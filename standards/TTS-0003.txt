@@ -3,10 +3,10 @@ TITH                                              THIS ISN'T THAT HARD
 **********************************************************************
 
 Publication:  TTS‑0003
-Revision:     7
+Revision:     8
 Title:        Common TLV Types
 Author(s):    Stephen Hurd
-Date:         2026‑08‑22
+Date:         2026‑08‑28
 ══════════════════════════════════════════════════════════════════════
 
 Status of this document
@@ -89,9 +89,10 @@ Contents
 
   2.  Signature
       The value MUST be the 64 binary bytes of data output from the
-      Libhydrogen hydro_sign_create() or hydro_sign_final_create()
-      function.  The context parameter MUST be the eight bytes of the
-      C string "SignTLV", which is the code points U+53, U+69, U+67,
+      hydro_sign_create() or hydro_sign_final_create() function under
+      the TTS‑0010 Libhydrogen Version 1 Interoperability Profile.  The
+      context parameter MUST be the eight bytes of the C string
+      "SignTLV", which is the code points U+53, U+69, U+67,
       U+6E, U+54, U+4C, U+56, U+00.
 
       The definition of a type containing a Signature MUST specify the
@@ -220,10 +221,8 @@ A. References
   [FTA‑1006.002] "Key words to indicate requirement levels" FTSC,
   1998‑01‑17.
 
-  [Libhydrogen] Version 1, "Public key signatures", Git repository
-  https://github.com/jedisct1/libhydrogen.wiki.git, file
-  "Public-key-signatures.md" at commit
-  705149f9c8db1f400775477adb6f9c2254103dca, 2024‑05‑06.
+  [TTS‑0010] "Libhydrogen Version 1 Interoperability Profile", TITH,
+  2026‑08‑28.
 
   [POSIX] "The Open Group Base Specifications Issue 8"
   https://pubs.opengroup.org/onlinepubs/9799919799/
@@ -256,5 +255,17 @@ B. History
    Rev.7, 2026‑08‑22: Defined the Type 0 failure boundary, delegated
    SignedTLV error disposition to enclosing standards, and pinned the
    current normative dependencies.
+
+   TSP Rev.1, 2026‑08‑28: Bound signature behavior to the TTS‑0020
+   Libhydrogen Version 1 Interoperability Profile.  Proposed as
+   TTS‑0003 revision 8.
+
+   TSP Rev.2, 2026‑08‑28: Corrected the profile dependency assignment
+   from TTS‑0020 to the next available identifier, TTS‑0010.  No other
+   technical requirement changed.
+
+   TTS Rev.8, 2026‑08‑28: Replaced TTS‑0003 revision 7 with
+   alternate candidate TSP‑0021 revision 2 without further technical
+   changes.
 
 **********************************************************************

@@ -3,7 +3,7 @@ TITH                                              THIS ISN'T THAT HARD
 **********************************************************************
 
 Publication:  TSP‑0014
-Revision:     6
+Revision:     7
 Title:        Signed Mail From Legacy‐Only Systems
 Author(s):    Stephen Hurd
 Date:         2026‑08‑28
@@ -89,11 +89,10 @@ Contents
 
   Such a system needs the TTS‑0002 integer and TLV encodings, the
   TTS‑0003 common types, the TTS‑0009 Message child order and Signature
-  rules, the TSP‑0003 field mappings, and a TSP‑0020 conforming
+  rules, the TSP‑0003 field mappings, and a TTS‑0010 conforming
   Libhydrogen signing implementation.  That is a library, not a mailer.
-  It does not need
-  TTS‑0006 Bundle Exchange, a Bundle, a TITH listener, an assigned
-  service port, or a nodelist entry.
+  It does not need TTS‑0006 Bundle Exchange, a Bundle, a TITH listener,
+  an assigned service port, or a nodelist entry.
 
   The anonymous address defined by TTS‑0004 is not representable in the
   legacy address fields used here.  This document therefore does not
@@ -547,7 +546,7 @@ A. References
   [FTS‑5005.003] "Advanced BinkleyTerm Style Outbound flow and control",
   FTSC, 2016‑10‑31.
 
-  [TSP‑0020] "Libhydrogen Version 1 Interoperability Profile", TITH,
+  [TTS‑0010] "Libhydrogen Version 1 Interoperability Profile", TITH,
   2026‑08‑28.
 
   [RFC‑4648] "The Base16, Base32, and Base64 Data Encodings", IETF,
@@ -597,5 +596,8 @@ B. History
 
    Rev.6, 2026‑08‑28: Bound signing behavior to the Libhydrogen
    Version 1 Interoperability Profile.
+
+   Rev.7, 2026‑08‑28: Referred to the accepted TTS‑0010 profile after
+   its promotion.
 
 **********************************************************************

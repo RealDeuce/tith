@@ -3,10 +3,10 @@ TITH                                              THIS ISN'T THAT HARD
 **********************************************************************
 
 Publication:  TTS‑0006
-Revision:     13
+Revision:     14
 Title:        Bundle Exchange Protocol
 Author(s):    Stephen Hurd
-Date:         2026‑08‑23
+Date:         2026‑08‑28
 ══════════════════════════════════════════════════════════════════════
 
 Status of this document
@@ -279,13 +279,13 @@ A. References
 
   [TTS‑0008] "Public Key Trust and Continuity", TITH, 2026‑08‑23.
 
-  [TTS‑0009] "Item Format", TITH, 2026‑08‑23.
+  [TTS‑0009] "Item Format", TITH, 2026‑08‑28.
 
-  [TTS‑0003] "Common TLV Types", TITH, 2026‑08‑22.
+  [TTS‑0003] "Common TLV Types", TITH, 2026‑08‑28.
 
   [TTS‑0004] "Node Addresses", TITH, 2026‑08‑22.
 
-  [TTS‑0005] "Bundle Format", TITH, 2026‑08‑23.
+  [TTS‑0005] "Bundle Format", TITH, 2026‑08‑28.
 
 
 B. History
@@ -334,5 +334,13 @@ B. History
    Rev.13, 2026‑08‑23: Required an unavailable‐predecessor refusal to
    complete no response, produce no trust evidence, and end the bounded
    continuity‐recovery sequence.
+
+   TSP Rev.1, 2026‑08‑28: Updated the normative Bundle Format
+   dependency for the Libhydrogen interoperability profile set.
+   Proposed as TTS‑0006 revision 14.
+
+   TTS Rev.14, 2026‑08‑28: Replaced TTS‑0006 revision 13 with
+   alternate candidate TSP‑0023 revision 1 without further technical
+   changes.
 
 **********************************************************************
