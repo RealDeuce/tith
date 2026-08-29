@@ -246,6 +246,13 @@ mod tests {
 	}
 
 	#[test]
+	fn signing_convenience_uses_the_streaming_profile() {
+		let keys = SigningKeyPair::from_seed(&[11; 32]).unwrap();
+		let signature = sign_tlv(b"convenience", &keys.secret).unwrap();
+		assert!(verify_tlv(b"convenience", &signature, &keys.public).unwrap());
+	}
+
+	#[test]
 	fn deterministic_signing_and_streaming_verification_cover_the_exact_context() {
 		let keys = SigningKeyPair::from_seed(&[7; 32]).unwrap();
 		assert_eq!(keys.secret.public_key(), keys.public);

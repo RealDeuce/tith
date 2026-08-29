@@ -28,3 +28,18 @@ impl<'a> TryFrom<&'a [u8]> for PublicKey {
 		Ok(Self::from_bytes(bytes.try_into()?))
 	}
 }
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	#[test]
+	fn slices_require_the_exact_public_key_size() {
+		let bytes = [5; PUBLIC_KEY_BYTES];
+		assert_eq!(
+			PublicKey::try_from(bytes.as_slice()).unwrap().as_bytes(),
+			&bytes
+		);
+		assert!(PublicKey::try_from(&bytes[..PUBLIC_KEY_BYTES - 1]).is_err());
+	}
+}

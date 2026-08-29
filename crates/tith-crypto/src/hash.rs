@@ -110,10 +110,10 @@ mod tests {
 
 	#[test]
 	fn matches_the_pinned_libhydrogen_generic_hash_vector() {
-		assert_eq!(
-			hash_tlv(b"profile vector").unwrap().as_bytes(),
-			&hex::<HASH_BYTES>("0c05b0554d66d62773798ce7f53f14684eea2781b1e07566c963045cca8864ac",)
-		);
+		let expected =
+			hex::<HASH_BYTES>("0c05b0554d66d62773798ce7f53f14684eea2781b1e07566c963045cca8864ac");
+		assert_eq!(TlvHash::from_bytes(expected).as_bytes(), &expected);
+		assert_eq!(hash_tlv(b"profile vector").unwrap().as_bytes(), &expected);
 	}
 
 	#[test]

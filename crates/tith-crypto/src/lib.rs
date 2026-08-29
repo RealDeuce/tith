@@ -251,11 +251,8 @@ pub fn encrypt_ipc_line(
 			key.0.as_ptr(),
 		)
 	};
-	if result == 0 {
-		Ok(cipher)
-	} else {
-		Err(CryptoError::Operation)
-	}
+	signature::operation_result(result, CryptoError::Operation)?;
+	Ok(cipher)
 }
 
 pub fn decrypt_ipc_line(
@@ -318,6 +315,28 @@ mod tests {
 			)),
 		};
 		(client, server)
+	}
+
+	#[test]
+	fn key_accessors_and_random_output_cover_the_safe_api() {
+		let public = KxPublicKey::from_bytes([3; KX_PUBLIC_KEY_BYTES]);
+		let secret = KxSecretKey::from_bytes([4; KX_SECRET_KEY_BYTES]);
+		assert_eq!(public.as_bytes(), &[3; KX_PUBLIC_KEY_BYTES]);
+		assert_eq!(secret.as_bytes(), &[4; KX_SECRET_KEY_BYTES]);
+		let mut empty = [];
+		random_bytes(&mut empty).unwrap();
+		let mut bytes = [0; 16];
+		random_bytes(&mut bytes).unwrap();
+	}
+
+	#[test]
+	fn every_kk_authentication_failure_is_reported() {
+		let (client, server) = pinned_kx_keys();
+		assert!(KkInitiator::start(&client, &KxPublicKey::from_bytes([0; 32])).is_err());
+
+		let (state, _) = KkInitiator::start(&client, &server.public).unwrap();
+		assert!(state.finish(&[0; KX_PACKET_BYTES], &client).is_err());
+		assert!(kk_respond(&[0; KX_PACKET_BYTES], &server, &client.public).is_err());
 	}
 
 	#[test]
