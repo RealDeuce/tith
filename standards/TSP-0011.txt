@@ -3,10 +3,10 @@ TITH                                              THIS ISN'T THAT HARD
 **********************************************************************
 
 Publication:  TSP‑0011
-Revision:     8
+Revision:     9
 Title:        Durable Inbound Delivery Items
 Author(s):    Stephen Hurd
-Date:         2026‑08‑23
+Date:         2026‑08‑28
 ══════════════════════════════════════════════════════════════════════
 
 Status of this document
@@ -139,8 +139,9 @@ Contents
   the exact bytes it sent even when the enclosed item is Unsigned or
   has an invalid end‐to‐end Signature.
 
-  PayloadHash is the 32‑byte unkeyed libhydrogen generic hash of the
-  exact payload bytes.  Its context is the eight bytes of the C string
+  PayloadHash is the 32‑byte unkeyed Libhydrogen generic hash under the
+  TSP‑0020 interoperability profile of the exact payload bytes.  Its
+  context is the eight bytes of the C string
   "InItem1", including its trailing NUL, and its key is NULL.
 
 
@@ -476,8 +477,8 @@ Contents
 A. References
 ─────────────
 
-  [Libhydrogen] Version 1,
-  https://github.com/jedisct1/libhydrogen/wiki
+  [TSP‑0020] "Libhydrogen Version 1 Interoperability Profile", TITH,
+  2026‑08‑28.
 
   [TSP‑0002] "Routing and Distribution Configuration", TITH,
   2026‑08‑23.
@@ -536,5 +537,8 @@ B. History
    and acknowledgement, related stored authentication names to the
    routing predicate, and left operation and adapter mechanics to their
    owning proposals.
+
+   Rev.9, 2026‑08‑28: Bound PayloadHash behavior to the Libhydrogen
+   Version 1 Interoperability Profile.
 
 **********************************************************************

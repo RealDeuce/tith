@@ -3,14 +3,19 @@ name: Qualify TTS-0003
 on:
   push:
     paths:
+      - "standards/TSP-0021.txt"
       - "standards/TTS-0003.txt"
+      - "standards/TTS-0020.txt"
       - "standards/TTS-0002.txt"
       - "standards/TTS-0004.txt"
       - "Cargo.lock"
       - "rust-toolchain.toml"
       - ".github/workflows/rust.yml"
       - "crates/tith-crypto/src/public_key.rs"
+      - "crates/tith-crypto/src/raw.rs"
       - "crates/tith-crypto/src/signature.rs"
+      - "crates/tith-crypto/build.rs"
+      - "crates/tith-crypto/vendor/**"
       - "crates/tith-wire/src/address.rs"
       - "crates/tith-wire/src/bundle.rs"
       - "crates/tith-wire/src/common.rs"
@@ -26,7 +31,7 @@ on:
       - "crates/tith-wire/src/type_code.rs"
       - "crates/tith-wire/src/types.rs"
       - "qualification/check_source_line_coverage.py"
-      - "qualification/TTS-0003.007.md"
+      - "qualification/TTS-0003.008.md"
       - ".github/workflows/qualify-tts-0003.yml"
   workflow_dispatch:
 

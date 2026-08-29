@@ -3,7 +3,9 @@ name: Qualify TTS-0009
 on:
   push:
     paths:
+      - "standards/TSP-0024.txt"
       - "standards/TTS-0009.txt"
+      - "standards/TTS-0020.txt"
       - "standards/TTS-0002.txt"
       - "standards/TTS-0003.txt"
       - "standards/TTS-0004.txt"
@@ -12,7 +14,10 @@ on:
       - "rust-toolchain.toml"
       - ".github/workflows/rust.yml"
       - "crates/tith-crypto/src/public_key.rs"
+      - "crates/tith-crypto/src/raw.rs"
       - "crates/tith-crypto/src/signature.rs"
+      - "crates/tith-crypto/build.rs"
+      - "crates/tith-crypto/vendor/**"
       - "crates/tith-wire/src/address.rs"
       - "crates/tith-wire/src/common.rs"
       - "crates/tith-wire/src/error.rs"
@@ -35,7 +40,7 @@ on:
       - "crates/tithd/src/mail.rs"
       - "crates/tithd/src/submission.rs"
       - "qualification/check_source_line_coverage.py"
-      - "qualification/TTS-0009.002.md"
+      - "qualification/TTS-0009.003.md"
       - ".github/workflows/qualify-tts-0009.yml"
   workflow_dispatch:
 

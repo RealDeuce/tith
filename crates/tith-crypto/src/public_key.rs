@@ -2,7 +2,7 @@
 
 use std::array::TryFromSliceError;
 
-use libhydrogen_sys as hydro;
+use crate::raw as hydro;
 
 pub const PUBLIC_KEY_BYTES: usize = hydro::hydro_sign_PUBLICKEYBYTES as usize;
 

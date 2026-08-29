@@ -3,10 +3,10 @@ TITH                                              THIS ISN'T THAT HARD
 **********************************************************************
 
 Publication:  TSP‑0006
-Revision:     14
+Revision:     15
 Title:        Outbound Job Submission
 Author(s):    Stephen Hurd
-Date:         2026‑08‑23
+Date:         2026‑08‑28
 ══════════════════════════════════════════════════════════════════════
 
 Status of this document
@@ -575,7 +575,8 @@ Contents
 
   Expected-Size is the exact Source byte count.  Expected-Hash is the
   43‑character base 64 representation, without trailing Equals Sign,
-  of the 32‑byte libhydrogen generic hash of those bytes.  Its context
+  of the 32‑byte Libhydrogen generic hash under the TSP‑0020
+  interoperability profile.  Its context
   is the eight bytes of the C string "SubFile", including its trailing
   NUL, and its key is NULL.  A mismatch prevents Batch commitment.
 
@@ -774,7 +775,8 @@ Contents
 7. Idempotency, Lookup, and Batch Commitment
 ────────────────────────────────────────────
 
-  JobDigest is the 32‑byte libhydrogen generic hash of the exact
+  JobDigest is the 32‑byte Libhydrogen generic hash under the TSP‑0020
+  interoperability profile of the exact
   canonical bytes beginning with a Job line and ending with the Line
   Feed after that Job block's matching End.  Nested Attachment and File
   blocks are included.  The hash context is the eight bytes of the C
@@ -1252,8 +1254,8 @@ A. References
   [FSC‑0028.001] "FwdSpec — A Collection of Notes on Moving Files in
   FidoNet", FTSC, 1988‑12‑02.
 
-  [Libhydrogen] Version 1,
-  https://github.com/jedisct1/libhydrogen/wiki
+  [TSP‑0020] "Libhydrogen Version 1 Interoperability Profile", TITH,
+  2026‑08‑28.
 
   [RFC‑4648] "The Base16, Base32, and Base64 Data Encodings",
   S. Josefsson, 2006‑10.
@@ -1344,5 +1346,8 @@ B. History
    Rev.14, 2026‑08‑23: Assigned submission Features and exact routing
    failures, and made Forward claim validation and its recovery
    association independent of consumer operations and durable models.
+
+   Rev.15, 2026‑08‑28: Bound generic hashing behavior to the
+   Libhydrogen Version 1 Interoperability Profile.
 
 **********************************************************************

@@ -3,10 +3,10 @@ TITH                                              THIS ISN'T THAT HARD
 **********************************************************************
 
 Publication:  TSP‑0009
-Revision:     2
+Revision:     3
 Title:        Authenticated TCP IPC Binding
 Author(s):    Stephen Hurd
-Date:         2026‑08‑17
+Date:         2026‑08‑28
 ══════════════════════════════════════════════════════════════════════
 
 Status of this document
@@ -266,8 +266,8 @@ Contents
 A. References
 ─────────────
 
-  [Libhydrogen] Version 1,
-  https://github.com/jedisct1/libhydrogen/wiki
+  [TSP‑0020] "Libhydrogen Version 1 Interoperability Profile", TITH,
+  2026‑08‑28.
 
   [TSP‑0004] "Local IPC Format", TITH, 2026‑08‑17.
 
@@ -285,5 +285,8 @@ B. History
 
    Rev.2, 2026‑08‑17: Defined inbound payload presentation and
    item‐aware submission support.
+
+   Rev.3, 2026‑08‑28: Bound the KK key exchange and secretbox behavior
+   to the Libhydrogen Version 1 Interoperability Profile.
 
 **********************************************************************

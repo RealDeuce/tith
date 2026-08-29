@@ -4,7 +4,7 @@ use std::fmt;
 use std::mem::MaybeUninit;
 use std::sync::OnceLock;
 
-use libhydrogen_sys as hydro;
+use crate::raw as hydro;
 
 use crate::PublicKey;
 
@@ -220,6 +220,30 @@ pub fn verify_tlv(
 #[cfg(test)]
 mod tests {
 	use super::*;
+
+	fn hex<const N: usize>(encoded: &str) -> [u8; N] {
+		assert_eq!(encoded.len(), N * 2);
+		let mut bytes = [0; N];
+		for (index, byte) in bytes.iter_mut().enumerate() {
+			*byte = u8::from_str_radix(&encoded[index * 2..index * 2 + 2], 16).unwrap();
+		}
+		bytes
+	}
+
+	#[test]
+	fn verifies_the_pinned_libhydrogen_signature_vector() {
+		let public = PublicKey::from_bytes(hex(
+			"ec6a7d44462cdb3d3a997eec18eeffb974dd41f7694fcc53ec2f1e8291ea547f",
+		));
+		let signature = Signature::from_bytes(hex(
+			"075b81472225469c8ad109147c1b75456ad333d6e18a8ea94fbb60ba6c867826\
+			 7bb991685d43c20534c32469e088622248cb6122fea5b73fb90ff3cd00cca105"
+				.replace(' ', "")
+				.as_str(),
+		));
+		assert!(verify_tlv(b"profile vector", &signature, &public).unwrap());
+		assert!(!verify_tlv(b"profile vectors", &signature, &public).unwrap());
+	}
 
 	#[test]
 	fn deterministic_signing_and_streaming_verification_cover_the_exact_context() {

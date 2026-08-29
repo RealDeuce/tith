@@ -1,0 +1,14 @@
+Upstream: https://github.com/jedisct1/libhydrogen
+Commit: 9819a7cb39678d1e9d31874c238d5b8ce375ff4f
+Tree: 5d10835d85de96d38f68eb7f60806f8dbfcb329d
+Commit-Date: 2026-08-26T19:39:21Z
+Git-Archive-SHA256: 90c7767f335cfd1756d58b26a00fa78d9e52acfb3358660ef0ae0e434046890a
+
+The adjacent libhydrogen directory is the complete tree produced by:
+
+    git archive 9819a7cb39678d1e9d31874c238d5b8ce375ff4f
+
+It is vendored byte for byte and is built only by tith-crypto.  Update the
+source, this provenance record, TTS-0020, its interoperability evidence, and
+every dependent qualification record together.  Do not apply TITH-specific
+changes inside the vendored tree.

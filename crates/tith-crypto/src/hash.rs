@@ -2,7 +2,7 @@
 
 use std::mem::MaybeUninit;
 
-use libhydrogen_sys as hydro;
+use crate::raw as hydro;
 
 use crate::signature::{initialize, operation_result};
 use crate::{CryptoError, HASH_BYTES};
@@ -98,6 +98,23 @@ pub fn hash_submission_file(bytes: &[u8]) -> Result<TlvHash, CryptoError> {
 #[cfg(test)]
 mod tests {
 	use super::*;
+
+	fn hex<const N: usize>(encoded: &str) -> [u8; N] {
+		assert_eq!(encoded.len(), N * 2);
+		let mut bytes = [0; N];
+		for (index, byte) in bytes.iter_mut().enumerate() {
+			*byte = u8::from_str_radix(&encoded[index * 2..index * 2 + 2], 16).unwrap();
+		}
+		bytes
+	}
+
+	#[test]
+	fn matches_the_pinned_libhydrogen_generic_hash_vector() {
+		assert_eq!(
+			hash_tlv(b"profile vector").unwrap().as_bytes(),
+			&hex::<HASH_BYTES>("0c05b0554d66d62773798ce7f53f14684eea2781b1e07566c963045cca8864ac",)
+		);
+	}
 
 	#[test]
 	fn tlv_hash_is_stream_independent() {

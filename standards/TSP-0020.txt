@@ -1,0 +1,243 @@
+**********************************************************************
+TITH                                              THIS ISN'T THAT HARD
+**********************************************************************
+
+Publication:  TSP‑0020
+Revision:     1
+Title:        Libhydrogen Version 1 Interoperability Profile
+Author(s):    Stephen Hurd
+Date:         2026‑08‑28
+══════════════════════════════════════════════════════════════════════
+
+Status of this document
+───────────────────────
+
+  This document is a TITH Standard Proposal (TSP) — it describes a
+  proposed specification which may change before acceptance as a TITH
+  Technical Standard.
+
+  This document is released to the public domain, and may be used,
+  copied or modified for any purpose whatever.
+
+Abstract
+────────
+
+  TITH uses several operations from Libhydrogen Version 1.  That name
+  and API version do not select one immutable set of interoperable
+  behavior.  This profile selects exact upstream source and defines the
+  common behavior required wherever a TITH document depends on a
+  Libhydrogen cryptographic result.
+
+Contents
+────────
+
+  1.  Scope
+  2.  Profile Source
+  3.  Conformance
+  4.  Required Operations
+  5.  Key Exchange Finalization
+  6.  Test Vectors
+
+  A. References
+  B. History
+
+══════════════════════════════════════════════════════════════════════
+
+
+1. Scope
+────────
+
+  This profile applies when another TITH document requires an output,
+  state transition, verification result, or wire representation from a
+  Libhydrogen Version 1 operation.  It does not require an
+  implementation to use the Libhydrogen source or C API.
+
+  A document which uses only a Version 1 API constant, such as the byte
+  length of a public key, MAY cite the exact Version 1 API documentation
+  directly.  A document which depends on cryptographic behavior or
+  interoperable bytes MUST cite this profile.
+
+  This profile does not introduce algorithm negotiation, a fallback
+  version, or tolerance for output produced by another Libhydrogen
+  revision.
+
+
+2. Profile Source
+─────────────────
+
+  The reference source is the complete Libhydrogen repository tree at
+  Git commit 9819a7cb39678d1e9d31874c238d5b8ce375ff4f, whose Git tree
+  object is 5d10835d85de96d38f68eb7f60806f8dbfcb329d.  The repository is
+  identified in appendix A.
+
+  That commit is the behavioral definition where the public Version 1
+  documentation does not determine exact interoperable bytes or state
+  transitions.  A later upstream commit, branch name, package version,
+  wrapper release, or documentation revision does not change this
+  profile.
+
+
+3. Conformance
+──────────────
+
+  For each operation it implements, a conforming implementation MUST
+  produce the same successful output and accept or reject the same
+  input as the profile source for every input permitted by the calling
+  TITH document.  Its public and secret key bytes, signatures, hashes,
+  key‑exchange packets and session keys, and secretbox ciphertexts MUST
+  be interchangeable with those of the profile source.
+
+  An implementation MUST preserve the exact eight‑byte context supplied
+  by the calling document, including a trailing U+0000 where specified.
+  It MUST preserve the exact input length and bytes.  It MUST treat a
+  failed verification, decryption, or key exchange as failure and MUST
+  NOT act on unauthenticated output.
+
+  An implementation MAY provide different language bindings or a safe
+  wrapper.  Such a wrapper MUST NOT change a profile result, silently
+  substitute another algorithm, or use one profile operation's key for
+  a purpose prohibited by the calling document.
+
+
+4. Required Operations
+──────────────────────
+
+  The applicable subset of these Version 1 operations is selected by
+  the calling TITH document:
+
+    • generic hashing through hydro_hash_hash(), or the corresponding
+      init, update, and final sequence;
+
+    • public‑key signatures through hydro_sign_create() and
+      hydro_sign_verify(), or their streaming equivalents;
+
+    • static hydro_kx KK key exchange through hydro_kx_kk_1(),
+      hydro_kx_kk_2(), and hydro_kx_kk_3(); and
+
+    • authenticated encryption through hydro_secretbox_encrypt() and
+      hydro_secretbox_decrypt().
+
+  Constants, structures, inputs, outputs, return values, and operation
+  order are those of the profile source.  A calling TITH document may
+  further restrict them and defines the context, key purpose, message
+  identifier, signed bytes, hashed bytes, and protocol consequence.
+
+
+5. Key Exchange Finalization
+────────────────────────────
+
+  The profile source's hydro_kx initialization finalizes its transcript
+  hash by calling hydro_hash_final() with a null output pointer and an
+  output length of zero.  That call MUST succeed and MUST perform the
+  complete state finalization, including length encoding, XOF domain
+  padding, and the Gimli permutation.  It emits no output bytes.
+
+  Returning failure before that finalization, or continuing from the
+  unfinalized state, is nonconforming.  Two implementations which both
+  continue from the same nonconforming state are not evidence of
+  interoperability with this profile.
+
+
+6. Test Vectors
+───────────────
+
+  In this section hexadecimal text denotes consecutive bytes in the
+  usual most‑significant‑nibble‑first representation.  Spaces and line
+  breaks shown for layout are not bytes.
+
+  The 32‑byte unkeyed generic hash of the UTF‑8 bytes "profile vector"
+  with context bytes 48 61 73 68 54 4c 56 00 ("HashTLV" followed by
+  U+0000) is:
+
+    0c05b0554d66d62773798ce7f53f1468
+    4eea2781b1e07566c963045cca8864ac
+
+  With the same message and context bytes
+  53 69 67 6e 54 4c 56 00 ("SignTLV" followed by U+0000), this public
+  key:
+
+    ec6a7d44462cdb3d3a997eec18eeffb9
+    74dd41f7694fcc53ec2f1e8291ea547f
+
+  verifies this 64‑byte signature:
+
+    075b81472225469c8ad109147c1b7545
+    6ad333d6e18a8ea94fbb60ba6c867826
+    7bb991685d43c20534c32469e0886222
+    48cb6122fea5b73fb90ff3cd00cca105
+
+  Verification MUST fail after any message or signature byte is
+  changed.
+
+  The KK responder fixture uses this Client public key:
+
+    2f12b6f411373a823e1a9d14b25323f9
+    17564ae00035cce5ccb7a778f4684b5e
+
+  and this Server public and secret key pair, respectively:
+
+    d1724f0b3728b5c4917c955c8003f9cc
+    337dcac2b4acc1ef070f8bf0d4cd237d
+
+    8caae477be9d31fd195c237f44cbec92
+    46bd8d4526c6648989741c33bb039385
+
+  hydro_kx_kk_2() MUST accept this 48‑byte first packet:
+
+    8788f97243bb415742d75cfaa6a9d863
+    0fd3649e15dac99226d2040549333e2a
+    01d0e7b273a9c2648cd4370f728d0991
+
+  A fixed second packet is not specified because the responder creates
+  fresh ephemeral key material.  Tests MUST additionally establish
+  that each initiator transmit key equals the responder receive key and
+  each initiator receive key equals the responder transmit key when
+  opposite roles use the profile source and the tested wrapper.
+
+  With message identifier zero, context bytes
+  54 49 54 48 49 50 43 00 ("TITHIPC" followed by U+0000), and this
+  32‑byte secretbox key:
+
+    8caae477be9d31fd195c237f44cbec92
+    46bd8d4526c6648989741c33bb039385
+
+  this 49‑byte ciphertext MUST decrypt to the 13 bytes
+  43 61 70 61 62 69 6c 69 74 69 65 73 0a ("Capabilities" followed by
+  U+000A):
+
+    28f151837402b8d91d71831880db4322
+    28981e0ac3986ba8362b097e1be9618b
+    62c97bbe955470380d09bc2f7dacf0c7
+    31
+
+  Decryption MUST fail with message identifier one or after any
+  ciphertext byte is changed.
+
+
+A. References
+─────────────
+
+  [Libhydrogen] Version 1 source, Git repository
+  https://github.com/jedisct1/libhydrogen.git, commit
+  9819a7cb39678d1e9d31874c238d5b8ce375ff4f, tree
+  5d10835d85de96d38f68eb7f60806f8dbfcb329d, 2026‑08‑26.
+
+  [Libhydrogen API] Version 1 documentation, Git repository
+  https://github.com/jedisct1/libhydrogen.wiki.git, commit
+  705149f9c8db1f400775477adb6f9c2254103dca, 2024‑05‑06.
+
+  [TTS‑0002] "Type Length Value Encoding", TITH, 2026‑08‑22.
+
+  [FTA‑1006.002] "Key words to indicate requirement levels", FTSC,
+  1998‑01‑17.
+
+
+B. History
+──────────
+
+   TSP Rev.1, 2026‑08‑28: Selected one immutable Libhydrogen Version 1
+   source tree, defined behavioral conformance, made zero‑length hash
+   finalization explicit, and supplied independent interoperability
+   vectors.  Proposed as TTS‑0020 revision 1.
+
+**********************************************************************

@@ -3,10 +3,10 @@ TITH                                              THIS ISN'T THAT HARD
 **********************************************************************
 
 Publication:  TSP‑0014
-Revision:     5
+Revision:     6
 Title:        Signed Mail From Legacy‐Only Systems
 Author(s):    Stephen Hurd
-Date:         2026‑08‑22
+Date:         2026‑08‑28
 ══════════════════════════════════════════════════════════════════════
 
 Status of this document
@@ -89,8 +89,9 @@ Contents
 
   Such a system needs the TTS‑0002 integer and TLV encodings, the
   TTS‑0003 common types, the TTS‑0009 Message child order and Signature
-  rules, the TSP‑0003 field mappings, and a libhydrogen signing
-  implementation.  That is a library, not a mailer.  It does not need
+  rules, the TSP‑0003 field mappings, and a TSP‑0020 conforming
+  Libhydrogen signing implementation.  That is a library, not a mailer.
+  It does not need
   TTS‑0006 Bundle Exchange, a Bundle, a TITH listener, an assigned
   service port, or a nodelist entry.
 
@@ -546,8 +547,8 @@ A. References
   [FTS‑5005.003] "Advanced BinkleyTerm Style Outbound flow and control",
   FTSC, 2016‑10‑31.
 
-  [Libhydrogen] Version 1,
-  https://github.com/jedisct1/libhydrogen/wiki
+  [TSP‑0020] "Libhydrogen Version 1 Interoperability Profile", TITH,
+  2026‑08‑28.
 
   [RFC‑4648] "The Base16, Base32, and Base64 Data Encodings", IETF,
   2006‑10.
@@ -593,5 +594,8 @@ B. History
    Rev.5, 2026‑08‑22: Classified legacy channels as trust evidence
    inputs and left pin transitions and effective key resolution solely
    to TTS‑0008.
+
+   Rev.6, 2026‑08‑28: Bound signing behavior to the Libhydrogen
+   Version 1 Interoperability Profile.
 
 **********************************************************************

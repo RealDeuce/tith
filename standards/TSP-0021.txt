@@ -1,0 +1,262 @@
+**********************************************************************
+TITH                                              THIS ISN'T THAT HARD
+**********************************************************************
+
+Publication:  TSP‑0021
+Revision:     1
+Title:        Common TLV Types
+Author(s):    Stephen Hurd
+Date:         2026‑08‑28
+══════════════════════════════════════════════════════════════════════
+
+Status of this document
+───────────────────────
+
+  This document is a TITH Standard Proposal (TSP) — it describes a
+  proposed revision to an existing TITH Technical Standard.  Until
+  promoted, it is experimental and does not replace that standard.
+
+  This document is released to the public domain, and may be used,
+  copied or modified for any purpose whatever.
+
+Abstract
+────────
+
+  Overall, TITH uses a tagged TLV structure.  This document describes
+  how the types are assigned and used.
+
+Contents
+────────
+
+  1.  Introduction
+  2.  Reservation
+  3.  Defined Types
+
+  A. References
+  B. History
+
+══════════════════════════════════════════════════════════════════════
+
+
+1. Introduction
+───────────────
+
+  In TITH, data is encoded as a hierarchy of TLV values with every
+  value having a context‐specific meaning.  However, there's a few
+  general encodings that will be reused across different contexts, so
+  it's good to have a small number of well known types that won't be
+  redefined based on the context.
+
+
+2. Reservation
+──────────────
+
+  The first thirty‐two, numbered zero to thirty‐one are reserved for
+  types specified in this document.  These types can not be redefined
+  by any other TITH standard in any context.
+
+
+3. Defined Types
+────────────────
+
+  These are the defined types and their data format at the time of
+  this writing:
+
+  0.  Invalid
+      A producer MUST NOT emit a type of zero.  When a consumer
+      encounters one, the TLV sequence containing it is malformed.
+      The consumer MUST stop processing that sequence and MUST NOT
+      search for or resume processing at a later value.  The enclosing
+      standard defines the consequence for its object or transport.
+
+  1.  Origin
+      This type contains the 5D address as specified by TTS‑0004.
+      The enclosing standard defines what originated at that address
+      and whether it is also a reply address.  For an anonymous Origin,
+      where an enclosing standard permits it, an accompanying
+      PublicKey identifies its key.  For a non‐anonymous Origin, the
+      enclosing standard defines how its applicable public key is
+      obtained.  A supplied PublicKey MUST NOT override that key unless
+      the enclosing standard explicitly defines an authenticated
+      key‐continuity use.
+
+      When an enclosing standard permits SignedOrigin and no public
+      key is available for Origin, SignedOrigin selects the signing
+      key.  If a key is available for Origin, SignedOrigin is ignored
+      for key selection.  Failed verification with an Origin key MUST
+      NOT be retried using SignedOrigin.
+
+  2.  Signature
+      The value MUST be the 64 binary bytes of data output from the
+      hydro_sign_create() or hydro_sign_final_create() function under
+      the TTS‑0020 Libhydrogen Version 1 Interoperability Profile.  The
+      context parameter MUST be the eight bytes of the C string
+      "SignTLV", which is the code points U+53, U+69, U+67,
+      U+6E, U+54, U+4C, U+56, U+00.
+
+      The definition of a type containing a Signature MUST specify the
+      exact byte sequence that was signed and the Origin or permitted
+      SignedOrigin whose public key is applicable.  That byte sequence
+      MUST be verified using hydro_sign_verify(), or the equivalent
+      hydro_sign_init(), hydro_sign_update(), and
+      hydro_sign_final_verify() sequence.  The containing type also
+      defines the consequences of a missing or invalid Signature.
+
+  3.  SignedData
+      The value is binary data that can be validated by a Signature
+      that MUST accompany the data at the same level and the public
+      key of the Origin at either the same level or above.  That is to
+      say the most recently defined origin in the tree.  For example,
+      given data with the following structure:
+
+      OuterTLV
+       ├──🭬Origin1
+       ├──🭬GenericData1
+       ├─┬🭬Group1
+       │ ├──🭬Origin2
+       │ ├──🭬SignedData1
+       │ ╰──🭬Signature1
+       ├─┬🭬Group2
+       │ ├──🭬SignedData2
+       │ ╰──🭬Signature2
+       ╰─┬🭬Group3
+         ╰─┬🭬Group4
+           ╰─┬🭬Origin3
+             ╰─┬🭬Group4
+               ╰─┬🭬Origin4
+                 ╰─┬🭬Group5
+                   ├──🭬SignedData3
+                   ╰──🭬Signature3
+
+      SignedData1 will be signed using the public key of Origin2,
+      SignedData2 will be signed using the public key of Origin1, and
+      SignedData3 will be signed using the public key of Origin4.
+
+  4.  SignedTLV
+      The Value is a sequence of child TLV values containing one
+      SignedData followed by one Signature.  An Origin is optional.
+      When present, it MUST be the first encoded child.  If that
+      Origin is the anonymous address, it MUST be immediately followed
+      by one PublicKey.  For any other Origin, a PublicKey at this
+      position is prohibited.  When Origin is absent, PublicKey is
+      prohibited and an Origin established at a higher level applies.
+
+      Types not defined by this document or the enclosing standard do
+      not change the required order or cardinality.  The enclosing
+      standard specifies whether and where such values are permitted.
+      No other child type defined by this document is permitted unless
+      the enclosing standard explicitly includes it.
+
+      The data in the SignedData Value MUST be TLV encoded as described
+      in TTS‑0002.  The purpose of this type is to allow specifications
+      to permit some or all TLV values to be replaced by a SignedTLV
+      value.
+
+      The Signature signs the exact bytes in the Value field of the
+      SignedData.  Since that Value is TLV encoded, this includes the
+      Type, Length, and Value of every TLV contained in the SignedData;
+      only the Type and Length of the SignedData itself are excluded.
+      Its applicable Origin is the Origin in the SignedTLV, or the
+      most recently established Origin at a higher level if the
+      SignedTLV does not contain one.
+
+      A value which does not satisfy this grammar is malformed.  The
+      enclosing standard defines its disposition.  If the Signature
+      does not verify, the implementation MUST NOT process or act upon
+      any data from the SignedData field.  It MAY parse the SignedData
+      only as required by the enclosing protocol to identify request
+      and response values and generate error responses.  The enclosing
+      protocol defines every response, connection, logging, or
+      notification consequence.
+
+  5.  Timestamp
+      The value is encoded in the same manner as the Type and Length
+      parts of a TLV value.  The number encoded is the POSIX Seconds
+      Since the Epoch, defined in XBD4.19.  This is the value returned
+      by time(NULL) on POSIX systems.  A Timestamp MUST NOT represent
+      an instant before the Epoch.  Despite popular belief, this is NOT
+      the number of seconds since the beginning of January 1st, 1970
+      but rather the number of complete days since January 1st, 1970
+      times 86400, plus the number of seconds that have passed so far
+      in the current day.  That is to say that the existence of leap
+      seconds is pretended out of existence by this definition.
+
+  6.  Destination
+      This type contains the text representation of a 5D address as
+      specified by TTS‑0004.
+
+  7.  Address
+      This type contains the text representation of a 5D address as
+      specified by TTS‑0004.
+
+  8.  PublicKey
+      The value MUST contain a public key as defined in TTS‑0004: its
+      32 binary bytes with no additional encoding.  A PublicKey does
+      not by itself establish that its holder has been assigned an
+      address.  The enclosing standard defines the address with which
+      the key is associated and how the key is used.
+
+  9.  SignedOrigin
+      This type contains the 5D address specified by TTS‑0004 whose key
+      signed a value on behalf of an Origin for which no public key is
+      available.  It is permitted only where an enclosing standard
+      defines its placement and signature coverage.  It does not
+      replace Origin as the originating or reply address.
+
+      If SignedOrigin is the anonymous address, it MUST be immediately
+      followed by one PublicKey.  For any other SignedOrigin, a
+      PublicKey at that position is prohibited and the enclosing
+      standard defines how its applicable public key is obtained.
+      SignedOrigin never overrides an available Origin key.
+
+
+A. References
+─────────────
+
+  [TTS‑0002] "Type Length Value Encoding" TITH, 2026‑08‑22.
+
+  [TTS‑0004] "Node Addresses", TITH, 2026‑08‑22.
+
+  [FTA‑1006.002] "Key words to indicate requirement levels" FTSC,
+  1998‑01‑17.
+
+  [TTS‑0020] "Libhydrogen Version 1 Interoperability Profile", TITH,
+  2026‑08‑28.
+
+  [POSIX] "The Open Group Base Specifications Issue 8"
+  https://pubs.opengroup.org/onlinepubs/9799919799/
+
+  [XBD4.19] "Seconds Since the Epoch"
+  https://pubs.opengroup.org/onlinepubs/9799919799/basedefs/V1_chap04.html#tag_04_19
+
+
+B. History
+──────────
+
+   Rev.1, 2025‑11‑15: Initial Release.
+
+   Rev.2, 2026‑08‑17: Defined PublicKey placement for an anonymous
+   SignedTLV Origin and made the child grammar explicit.
+
+   Rev.3, 2026‑08‑18: Added SignedOrigin as the fallback signing‐key
+   identity when an Origin has no available public key.
+
+   Rev.4, 2026‑08‑20: Applied the effective key now defined by
+   TTS‑0008 consistently to non‐anonymous Origin and SignedOrigin
+   values.
+
+   Rev.5, 2026‑08‑21: Made PublicKey the TLV representation of the
+   public key defined by TTS‑0004.
+
+   Rev.6, 2026‑08‑22: Made enclosing standards own non‐anonymous key
+   selection and authenticated key‐continuity exceptions.
+
+   Rev.7, 2026‑08‑22: Defined the Type 0 failure boundary, delegated
+   SignedTLV error disposition to enclosing standards, and pinned the
+   current normative dependencies.
+
+   TSP Rev.1, 2026‑08‑28: Bound signature behavior to the TTS‑0020
+   Libhydrogen Version 1 Interoperability Profile.  Proposed as
+   TTS‑0003 revision 8.
+
+**********************************************************************

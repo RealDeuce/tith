@@ -148,16 +148,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3eaf3ede3fee6db1a4c2ee091bf8a8b4dccdc6d17f656fb07896ee72867612f2"
 
 [[package]]
-name = "libhydrogen-sys"
-version = "0.9.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "775d7d3bdc46473090d1845fe81ea7e86db697d0a67c72684778446242a05237"
-dependencies = [
- "bindgen",
- "cc",
-]
-
-[[package]]
 name = "libloading"
 version = "0.8.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -383,7 +373,8 @@ dependencies = [
 name = "tith-crypto"
 version = "0.1.0"
 dependencies = [
- "libhydrogen-sys",
+ "bindgen",
+ "cc",
 ]
 
 [[package]]

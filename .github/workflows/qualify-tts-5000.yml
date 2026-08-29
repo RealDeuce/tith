@@ -4,6 +4,7 @@ on:
   push:
     paths:
       - "standards/TSP-5001.txt"
+      - "standards/TSP-5000.txt"
       - "standards/TTS-5000.txt"
       - "standards/TTS-0004.txt"
       - "standards/TTS-0008.txt"
@@ -22,7 +23,7 @@ on:
       - "crates/tith/tests/support/request_processor.rs"
       - "crates/tith-adapter/src/srif.rs"
       - "qualification/check_source_line_coverage.py"
-      - "qualification/TTS-5000.009.md"
+      - "qualification/TTS-5000.010.md"
       - ".github/workflows/qualify-tts-5000.yml"
   workflow_dispatch:
 

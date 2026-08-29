@@ -7,8 +7,9 @@ license.workspace = true
 repository.workspace = true
 publish = false
 
-[dependencies]
-libhydrogen-sys.workspace = true
+[build-dependencies]
+bindgen.workspace = true
+cc.workspace = true
 
 [lints.rust]
 unsafe_code = "allow"

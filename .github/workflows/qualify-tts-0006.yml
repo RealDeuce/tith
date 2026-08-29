@@ -3,6 +3,7 @@ name: Qualify TTS-0006
 on:
   push:
     paths:
+      - "standards/TSP-0023.txt"
       - "standards/TTS-0005.txt"
       - "standards/TTS-0006.txt"
       - "standards/TTS-0008.txt"
@@ -23,7 +24,7 @@ on:
       - "crates/tithd/src/public_key_response.rs"
       - "crates/tithd/src/server_exchange.rs"
       - "qualification/check_source_line_coverage.py"
-      - "qualification/TTS-0006.013.md"
+      - "qualification/TTS-0006.014.md"
       - ".github/workflows/qualify-tts-0006.yml"
   workflow_dispatch:
 

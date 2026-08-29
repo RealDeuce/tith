@@ -1,0 +1,95 @@
+name: Qualify TTS-0020
+
+on:
+  push:
+    paths:
+      - "standards/TSP-0020.txt"
+      - "standards/TTS-0020.txt"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "rust-toolchain.toml"
+      - ".github/workflows/rust.yml"
+      - "crates/tith-crypto/**"
+      - "qualification/check_libhydrogen_snapshot.py"
+      - "qualification/libhydrogen_profile_fixture.c"
+      - "qualification/TTS-0020.001.md"
+      - ".github/workflows/qualify-tts-0020.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  interoperability:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2025]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - name: Install pinned Rust toolchain
+        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772
+        with:
+          toolchain: 1.97.1
+
+      - name: Verify the complete source snapshot
+        run: >-
+          python3 qualification/check_libhydrogen_snapshot.py
+          crates/tith-crypto/vendor/libhydrogen
+          crates/tith-crypto/vendor/libhydrogen.SHA256SUMS
+
+      - name: Exercise the wrapper interoperability fixtures
+        run: cargo test --package tith-crypto
+
+      - name: Exercise the source fixture
+        if: runner.os == 'Linux'
+        run: |
+          cc -std=c11 -Wall -Wextra -Werror \
+            -Icrates/tith-crypto/vendor/libhydrogen \
+            qualification/libhydrogen_profile_fixture.c \
+            crates/tith-crypto/vendor/libhydrogen/hydrogen.c \
+            -o /tmp/libhydrogen-profile-fixture
+          /tmp/libhydrogen-profile-fixture
+
+  coverage:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - name: Install pinned coverage toolchain
+        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772
+        with:
+          toolchain: nightly-2026-08-20
+          components: llvm-tools-preview
+
+      - name: Install pinned coverage driver
+        run: cargo install cargo-llvm-cov --version 0.9.0 --locked
+
+      - name: Exercise the complete reference implementation
+        run: cargo test --workspace
+
+      - name: Exercise the TTS-0020 conformance surface
+        run: |
+          cargo +nightly-2026-08-20 llvm-cov clean --workspace
+          cargo +nightly-2026-08-20 llvm-cov --branch \
+            --package tith-crypto --lib \
+            --json --output-path tts-0020-coverage.json
+
+      - name: Report source coverage
+        run: >-
+          cargo +nightly-2026-08-20 llvm-cov report --branch --text
+          --show-missing-lines
+
+      - name: Require complete conformance coverage
+        run: |
+          sha256sum tts-0020-coverage.json
+          python3 qualification/check_source_line_coverage.py \
+            tts-0020-coverage.json \
+            crates/tith-crypto/src/hash.rs \
+            crates/tith-crypto/src/lib.rs \
+            crates/tith-crypto/src/public_key.rs \
+            crates/tith-crypto/src/signature.rs

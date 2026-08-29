@@ -1,0 +1,529 @@
+**********************************************************************
+TITH                                              THIS ISN'T THAT HARD
+**********************************************************************
+
+Publication:  TSP‑0022
+Revision:     1
+Title:        Bundle Format
+Author(s):    Stephen Hurd
+Date:         2026‑08‑28
+══════════════════════════════════════════════════════════════════════
+
+Status of this document
+───────────────────────
+
+  This document is a TITH Standard Proposal (TSP) — it describes a
+  proposed revision to an existing TITH Technical Standard.  Until
+  promoted, it is experimental and does not replace that standard.
+
+  This document is released to the public domain, and may be used,
+  copied or modified for any purpose whatever.
+
+Abstract
+────────
+
+  This document describes how assets are placing into a bundle for
+  transfer to another system.
+
+Contents
+────────
+
+  1.  Introduction
+  2.  Encoding
+  3.  Types
+  4.  Request Correlation and Ancillary Types
+  5.  Error Handling
+  6.  Reply Bundles
+  7.  Duplicate Acceptance
+
+  A. References
+  B. History
+
+══════════════════════════════════════════════════════════════════════
+
+
+1. Introduction
+───────────────
+
+  One of the core capabilities needed for an FTN network is the
+  ability to transfer data from one node to another.  This standard
+  defines the format to be used for that transfer.
+
+
+2. Encoding
+───────────
+
+  Data to be transfered between two nodes is collected into a single
+  bundle for the transfer.  The entire bundle is TLV encoded as
+  defined in TTS‑0002.
+
+  The bundle as a whole is a sequence of TLV values as described in
+  TTS‑0003.
+
+  The first item MUST be an Origin as defined in TTS‑0003.  This Origin
+  is applicable to the SignedTLV values that follow.  If it is the
+  anonymous address defined in TTS‑0004, it MUST be immediately
+  followed by a PublicKey as defined in TTS‑0003.  Otherwise it MUST
+  NOT be followed by a PublicKey, except in the PublicKeyRequest reply
+  defined below.  For the anonymous address, this
+  PublicKey is the key applicable to the SignedTLV values that follow.
+  For any other Origin, the applicable key is the effective key
+  resolved under TTS‑0008, and a supplied PublicKey MUST NOT override
+  it.
+
+  A reply to a PublicKeyRequest is the sole exception for a non‐anonymous
+  Origin.  Its Origin MUST be immediately followed by the PublicKey
+  whose private key signs that reply.  The receiver MUST accept that
+  key only when it is the key requested in the original Header, or
+  when the request was an explicitly authorized first‑contact probe.
+
+  Ignoring permitted unknown values, the next item MUST be a SignedTLV
+  as defined in TTS‑0003.  This is the Header SignedTLV and MUST NOT
+  contain an Origin.  Its SignedData MUST contain one Destination,
+  followed by a PublicKey if the Destination is the anonymous address
+  or the Bundle requests continuity from a non‐anonymous predecessor key,
+  followed by one Timestamp, all as defined in
+  TTS‑0003.  A required PublicKey MUST be the encoded child immediately
+  after its Destination.  The PublicKey identifies the particular
+  anonymous system to which the Bundle is addressed.  For a non‐anonymous
+  Destination it identifies the already trusted predecessor key from
+  which a PublicKeyRequest asks for continuity.  A non‐anonymous
+  Destination PublicKey is permitted only when the Bundle's sole
+  request is one PublicKeyRequest.  The Timestamp
+  indicates when the bundling process started and is not updated when
+  another item is added to the Bundle.
+
+  After the Header SignedTLV is a sequence of payload SignedTLV values.
+  The SignedData in every payload SignedTLV MUST begin with a TLVHash
+  of the complete encoded Header SignedTLV, followed by a sequence of
+  the types defined in section 3 or one of the experimental reserved
+  values 32 to 63.  A missing or incorrect Header TLVHash is a data
+  error for the entire payload SignedTLV.  Payload SignedTLV values
+  SHOULD NOT contain an Origin.
+
+  In this document, “first” and “begins with” refer to the literal
+  first encoded child, including when unknown types are present.  This
+  applies to the Bundle Origin and the Header TLVHash that begins every
+  payload SignedData.  A PublicKey whose presence depends on the
+  immediately preceding address MUST be the next encoded sibling; an
+  unknown value cannot separate the pair.
+
+  After a required leading child and any conditional PublicKey,
+  unknown TLV values MAY occur between or after the remaining defined
+  children.  They do not change the relative order, cardinality, or
+  requirements of defined children.  An unknown value cannot satisfy
+  or replace a required child.  A type assigned by this document or
+  TTS‑0003 but used in a position not permitted by the applicable
+  grammar is a data error, not an unknown type.  Where a grammar does
+  not designate a literal leading child, unknown values MAY also
+  precede the first defined child.
+
+  Types 32 to 63 are reserved for experimental extensions to this
+  standard, and may be used by explicit agreement between the
+  operators of two nodes.  If the use is useful to other operators, it
+  is RECOMMENDED that it be added to this document with a new number,
+  and the software using it modified to use the new value.  Basically,
+  as soon as three node operators agree to use the same value, it
+  should be added to this document and the experimental value
+  abandoned.
+
+  It is RECOMMENDED that there be no more than two payload SignedTLV
+  values in each Bundle, with the first containing all FileRequest,
+  PollMessages, PollFiles, and PollFileRequests values, and the next
+  containing everything else.  If there are no FileRequest or Poll
+  values, a single payload SignedTLV SHOULD be used.  The reason for
+  this is to allow the destination node to validate the SignedTLV
+  containing the FileRequests and start sending them while any Files
+  or Messages are being sent from the Origin to the Destination.
+
+
+3. Types
+────────
+
+  The following types may be included in a Bundle.  TTS‑0009 defines
+  the canonical item sequences used as the Values of types 64 through
+  66 independently of this Bundle serialization.
+
+  64. Message
+  ───────────
+  The Value MUST be one Message Sequence as defined by TTS‑0009.  A
+  File child in that sequence uses type 65 and the embedded File
+  Sequence defined there.
+
+  65. File
+  ────────
+  The Value MUST be one File Sequence as defined by TTS‑0009.  A File
+  directly inside a payload SignedTLV uses the standalone form.  A File
+  child inside a Message uses the embedded form.
+
+  66. FileRequest
+  ───────────────
+  The Value MUST be one FileRequest Sequence as defined by TTS‑0009.
+
+  67. Rejected
+  ────────────
+  A Rejected value which contains a manditory RequestIdentifier as
+  defined in section 4, followed by a manditory TLVHash as defined in
+  section 4, followed by an optional Timestamp as defined by TTS‑0003,
+  followed by a manditory number encoded in the same manner as Type
+  and Length, optionally followed by a UTF‑8 string containing a
+  human‐readable description of why the request was rejected.
+
+  This is included because a Message, File, or FileRequest from
+  Destination to Origin was not accepted.
+
+  The RequestIdentifier is the the one that was in the original
+  Message, File, or FileRequest.
+
+  A Timestamp is permitted only with reason 3.  It indicates the
+  earliest expected time at which the receiver may accept the same
+  unchanged TLV value.  Its absence with reason 3 permits retry at the
+  next applicable opportunity.
+
+  The number may have one of the following values:
+
+  1 — Indicates that the fact preventing acceptance is not one which
+      the peer is permitted to change.  The TLV value has permanently
+      failed and MUST NOT be retried.  A Timestamp is prohibited.
+  2 — Indicates that a condition controlled by the peer was not met.
+      The TLV value MUST NOT be retried without modification.  A
+      Timestamp is prohibited.
+  3 — Indicates that the receiver is not willing to accept the TLV
+      value at this time, but expects the same unchanged value may be
+      accepted later.  The TLV value remains eligible for retry.  Its
+      optional Timestamp has the meaning specified above.
+
+  68. Accepted
+  ────────────
+  An Accepted value which contains a manditory RequestIdentifier as
+  defined in section 4, followed by a manditory TLVHash as defined in
+  section 4, and, only when accepting a PublicKeyRequest, followed by
+  exactly one PublicKey.  It indicates that the identified value has been
+  validated.  Except for PublicKeyRequest, it also indicates that the
+  value was either durably stored by the receiver or recognized as a
+  previously accepted duplicate as specified in section 7.  For a
+  PublicKeyRequest, the following PublicKey is the accepted result.
+
+  69. PollMessages
+  ────────────────
+  A PollMessages value contains a manditory RequestIdentifier and
+  requests held Messages committed to the Bundle Origin.
+
+  70. PollFiles
+  ─────────────
+  A PollFiles value contains a manditory RequestIdentifier and
+  requests held standalone Files committed to the Bundle Origin.
+
+  71. PollFileRequests
+  ────────────────────
+  A PollFileRequests value contains a manditory RequestIdentifier and
+  requests held FileRequests committed to the Bundle Origin.
+
+  72. PublicKeyRequest
+  ────────────────────
+  A PublicKeyRequest contains one manditory RequestIdentifier and no
+  other child.  It asks the non‐anonymous Destination for its current
+  public key.  It MUST be the only request in the Bundle and MUST be in
+  the only payload SignedTLV.  That SignedTLV MUST contain only its
+  leading Header TLVHash and the PublicKeyRequest.  It MUST NOT be
+  combined
+  with operational work or a Poll.
+
+  When the non‐anonymous Destination PublicKey is present in the
+  Header and its private key is available, the Server MUST sign a
+  successful reply with that exact key.  It MAY use a retained private
+  key for this reply even though that key is no longer current.  If the
+  requested private key is unavailable, the Server MUST instead send a
+  Rejected response with reason 1 and no Timestamp, signed by its
+  current key.  When the Header PublicKey is absent, the request is a
+  first‑contact probe and the Server signs with its current key.
+
+  When the Destination accepts a Poll value, it MUST atomically claim
+  every matching held value which is not already claimed for an active
+  exchange.  This complete claimed set is the poll snapshot.
+  Every value in the poll snapshot MUST be returned in the same
+  SignedTLV as the Accepted value as specified in section 6.  An empty
+  poll snapshot is accepted with no returned values.
+
+  A value committed after the atomic claim is not in that poll
+  snapshot and remains available for a later exchange.  A value
+  already claimed for an active exchange is likewise excluded and
+  remains claimed for that exchange.  The Destination MUST NOT select
+  only part of the otherwise available matching set.
+
+  A held value matches only when it is held for the authenticated
+  identity represented by the Bundle Origin.  For an anonymous Origin
+  this identity includes the top‐level PublicKey.
+
+  A node that holds a Message, File, or FileRequest for the anonymous
+  address MUST retain the associated PublicKey as local delivery
+  metadata.  When a Message is held for its ultimate Destination, this
+  is its Destination PublicKey.  When it is held for an anonymous next
+  hop, this is the next hop's PublicKey.  This local association is not
+  added to or substituted for any PublicKey in the held value.
+
+
+4. Request Correlation and Ancillary Types
+────────────────────────────────────────────────
+
+  TTS‑0009 assigns RequestIdentifier type 98 and defines its integer
+  encoding and placement in an item.  Every request value in one
+  payload SignedTLV MUST have a RequestIdentifier distinct from every
+  other request value in that SignedTLV.  These identifiers form the
+  request namespace for that SignedTLV in the direction in which its
+  Bundle is sent.
+
+  An Accepted or Rejected value does not allocate an identifier in the
+  reply direction.  It repeats the RequestIdentifier from the request
+  direction and combines it with the TLVHash of the payload SignedTLV
+  that contained that request.  A Message, File, or FileRequest
+  returned by a Poll or FileRequest is itself a new request in the
+  reverse direction and has a RequestIdentifier in that direction's
+  namespace.  Equal numbers in opposite‐direction namespaces have no
+  relationship.
+
+  99. TLVHash
+  ───────────
+  Contains a 32‑byte unkeyed hash generated by the Libhydrogen generic
+  hash functions under the TTS‑0020 interoperability profile.  The
+  context is the eight bytes of the C string "HashTLV", including the
+  trailing NUL, and the key is NULL.
+
+  The input to the hash is one complete encoded SignedTLV, beginning
+  with the first byte of its Type and ending with the final byte of its
+  Value.  This includes the encoded Type and Length of the SignedTLV
+  and all bytes of its value, including any Origin, SignedData, and
+  Signature values present.  The bytes MUST be hashed exactly as
+  transmitted and MUST NOT be decoded and re‐encoded before hashing.
+
+  A TLVHash at the beginning of a payload SignedData contains the hash
+  of the Header SignedTLV for that Bundle.  A TLVHash in an Accepted or
+  Rejected value contains the hash of the payload SignedTLV that
+  contained the original request.
+
+  Every Accepted or Rejected response to a request in the same
+  SignedTLV contains the same TLVHash.  The RequestIdentifier selects
+  the individual request within that SignedTLV.  Together these values
+  bind the response to the precise signed transmission and prevent a
+  response to a different SignedTLV from being replayed as its status.
+
+  100. Unassigned
+  ───────────────
+  This type is not supported and MUST NOT be generated.  Its number is
+  available for assignment by a future revision of this standard.
+
+
+5. Error Handling
+─────────────────
+  When processing a bundle, errors can fall into two categories,
+  framing and data.
+
+  A framing error occurs in the TLV parsing where the Type or Length
+  is not properly encoded, or the Value is not long enough.  When a
+  framing error occurs, the software MUST NOT attempt to process past
+  the offset in the bundle where the error occured, and if it occurs
+  inside a SignedTLV, the entire SignedTLV must be rejected.
+  Processing should be the same as if the SignedTLV (if any) and
+  everything after it was not present in the bundle.
+
+  A data error occures because a Value field contains an error.  If
+  this occurs before the first SignedTLV value, it MUST be handled as
+  a framing error.  If this occurs in a SignedTLV value, the
+  processing MUST be identical to processing the same Bundle without
+  the SignedTLV value that contains the error.  Missing required
+  values, and having values in the wrong order are data errors.
+
+  An unknown type in a position permitted by section 2 or TTS‑0009 is
+  not an error.  While it is encouraged to log a message indicating
+  that an unknown type is used, every permitted unknown value MUST be
+  ignored semantically and retained byte for byte.  The rule applies
+  only to values specified entirely as sequences of encoded TLV
+  children.  It does not cause bytes in a mixed grammar, such as the
+  raw integer and UTF‑8 string suffix of Rejected, to be interpreted as
+  TLV values.
+
+
+6.  Reply Bundles
+─────────────────
+
+  A Reply Bundle is generated in response to exactly one other Bundle.
+  Its top‐level Origin MUST be the Destination from the Header of the
+  Bundle to which it replies.  The Destination in its Header MUST be
+  the top‐level Origin of that Bundle.  When the Reply Bundle's Origin
+  is the anonymous address, it MUST be followed by the same PublicKey
+  that followed the Destination in the original Bundle's Header.  When
+  the Reply Bundle's Destination is the anonymous address, it MUST be
+  followed by the same PublicKey that followed the top‐level Origin of
+  the original Bundle.
+
+  For each value in the Bundle of the types Message, File, FileRequest,
+  PollMessages, PollFiles, PollFileRequests, and PublicKeyRequest,
+  exactly one Accepted or Rejected value is included.  These response
+  values may occur in any order.  Each response applies only to the
+  request identified by its TLVHash and RequestIdentifier.  Acceptance
+  or rejection of one request MUST NOT determine the response to
+  another request in the Bundle.
+
+  A PublicKeyRequest reply MUST use the non‐anonymous Origin PublicKey
+  rule in section 2 and MUST contain exactly one payload SignedTLV.  A
+  successful reply's Accepted value MUST contain the Server's current
+  PublicKey.  The unavailable‐predecessor response defined in section 3
+  contains Rejected instead.
+
+  When the original Header's non‐anonymous Destination is followed by
+  a PublicKey, a reply supplies an authenticated continuity proof only
+  after the receiver validates the complete reply using that exact
+  requested predecessor.  This includes the reversed Bundle identities,
+  RequestIdentifier, TLVHash, dedicated reply grammar, and the Header
+  and sole payload SignedTLV.  The proof binds the Destination address
+  and requested predecessor to the successor in Accepted.  It
+  establishes continuity only; it is not revocation of the predecessor
+  or evidence that the predecessor was not compromised.
+
+  A receiver which requested a predecessor key cannot authenticate the
+  unavailable‐predecessor response with that requested key.  It
+  therefore completes no response from that reply and obtains no trust
+  evidence from it.  The Rejected value permits a peer which already
+  trusts the current key through another channel to diagnose why the
+  continuity request failed; it does not make the current key a
+  successor to the unavailable predecessor.
+
+  When the original Header's non‐anonymous Destination is not followed
+  by a PublicKey, section 3 requires both the PublicKey immediately
+  following the Reply Bundle's Origin and the PublicKey in Accepted to
+  be the Server's current key.  A receiver can validate those
+  requirements by comparing the two values.  A completely validated
+  self‐signed reply supplies an observation of that key.  It does not by
+  itself bind the key to the intended address; only local authorization
+  of that exact contact can classify it as an authorized initial
+  observation under TTS‑0008.
+
+  When a Poll or FileRequest is Accepted, every value returned in
+  response to it MUST be in the same SignedTLV as its Accepted value.
+  Every such returned value MUST occur before that Accepted value.
+  Returned values and responses belonging to different requests need
+  not be contiguous and have no relative ordering requirement.  The
+  end of the SignedTLV therefore bounds the returned values; no count
+  is required.  In particular, an Accepted FileRequest does not
+  require exactly one File: zero or more Files may be returned.
+
+  The sender of the original Bundle therefore knows how many responses
+  to expect.  An Accepted or Rejected response is not complete until
+  its enclosing SignedTLV has been completely received and
+  authenticated.  Once this has occurred for the response to every such
+  value, the Reply Bundle is complete.
+
+
+7. Duplicate Acceptance
+───────────────────────
+
+  TTS‑0009 defines the stable signed‑item identity of a Message or
+  standalone File whose Signature validates.  When first accepting an
+  item, the receiver MUST make the item and its duplicate identity
+  durable before returning Accepted.  The receiver MUST retain the
+  identity and MUST NOT expire it automatically.  An explicit
+  administrative operation MAY remove retained identities; doing so
+  permits a later retransmission to be accepted as a new item.
+
+  When the receiver is presented with an identity it has already
+  accepted, it MUST NOT store, import, or forward the item again.  It
+  MUST return Accepted containing the RequestIdentifier and TLVHash
+  applicable to the current transmission.  This permits a sender to
+  retry an item whose earlier Accepted response was lost or was not
+  made durable locally.
+
+  A File inside a Message is covered by the Message identity.  Poll and
+  FileRequest values are repeatable requests and do not use
+  signed‑item duplicate identities.
+
+
+A. References
+─────────────
+
+  [FTA‑1006.002] "Key words to indicate requirement levels" FTSC,
+  1998‑01‑17.
+
+  [TTS‑0008] "Public Key Trust and Continuity", TITH, 2026‑08‑23.
+
+  [TTS‑0009] "Item Format", TITH, 2026‑08‑28.
+
+  [TTS‑0020] "Libhydrogen Version 1 Interoperability Profile", TITH,
+  2026‑08‑28.
+
+  [TTS‑0002] "Type Length Value Encoding", TITH, 2026‑08‑22.
+
+  [TTS‑0003] "Common TLV Types", TITH, 2026‑08‑28.
+
+  [TTS‑0004] "Node Addresses", TITH, 2026‑08‑22.
+
+
+B. History
+──────────
+
+   Rev.1, 2025‑11‑15: Initial Release.
+
+   Rev.2, 2026‑08‑17: Added exact anonymous identities to Via and
+   idempotent acceptance of duplicate signed items.
+
+   Rev.3, 2026‑08‑17: Defined complete atomic poll snapshots and
+   corrected PollFileRequests to return held FileRequests.
+
+   Rev.4, 2026‑08‑17: Defined extension placement relative to required
+   leading values and conditional PublicKeys, and generalized Rejected
+   descriptions and reason text.
+
+   Rev.5, 2026‑08‑18: Added signature‐covered SignedOrigin fallback key
+   selection while retaining Origin as the originating and reply
+   address, and based duplicate identity on the effective signer.
+
+   Rev.6, 2026‑08‑18: Permitted an authenticated payload SignedTLV to
+   carry a Message or standalone File without an end‐to‐end item
+   Signature and separated that state from invalid signatures.
+
+   Rev.7, 2026‑08‑19: Made an absent LegacyAttributes or
+   TimestampOffset the only representation of a zero value, moved
+   attachment presence entirely into the File children, and confined
+   TearLine and OriginLine to EchoMail.
+
+   Rev.8, 2026‑08‑19: Defined MessageText as paragraphs each terminated
+   by U+000A, with U+000A as the only line break.
+
+   Rev.9, 2026‑08‑20: Restricted LegacyAttributes to stable signed
+   facts, and added the dedicated PublicKeyRequest and its
+   predecessor‐signed current‐key response for non‐anonymous key discovery
+   and rotation continuity.
+
+   Rev.10, 2026‑08‑20: Distinguished anonymous address grammar from
+   listing status and applied the TTS‑0008 effective key to all item
+   signatures and duplicate identities.
+
+   Rev.11, 2026‑08‑21: Distinguished permanent, peer‐correctable
+   condition, and temporary rejection reasons, and prohibited
+   independent provenance on a File inside a Message.
+
+   Rev.12, 2026‑08‑21: Defined directional RequestIdentifier
+   namespaces, removed response ordering, and required returned values
+   to precede their Accepted response.
+
+   Rev.13, 2026‑08‑22: Moved the Message, File, and FileRequest child
+   sequences, item authentication, and signed‑item identity to
+   TTS‑0009 while retaining their outer Bundle type assignments and all
+   request, response, polling, and duplicate‑acceptance behaviour.
+
+   Rev.14, 2026‑08‑22: Confined rejection reasons 1 and 2 to their
+   shared retry semantics and left request‐specific applicability to
+   the exchange protocol.
+
+   Rev.15, 2026‑08‑22: Classified a completely validated
+   predecessor‐signed PublicKeyRequest reply as continuity evidence and
+   a self‐signed first‐contact result as an observation only.
+
+   Rev.16, 2026‑08‑23: Defined the permanent current‐key‐signed refusal
+   when a requested predecessor private key is unavailable, and pinned
+   the exact generic‐hashing dependency baseline.
+
+   TSP Rev.1, 2026‑08‑28: Bound generic hashing behavior to the
+   TTS‑0020 Libhydrogen Version 1 Interoperability Profile.  Proposed
+   as TTS‑0005 revision 17.
+
+**********************************************************************

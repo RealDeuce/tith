@@ -3,17 +3,22 @@ name: Qualify TTS-0005
 on:
   push:
     paths:
+      - "standards/TSP-0022.txt"
       - "standards/TTS-0002.txt"
       - "standards/TTS-0003.txt"
       - "standards/TTS-0004.txt"
       - "standards/TTS-0005.txt"
       - "standards/TTS-0008.txt"
       - "standards/TTS-0009.txt"
+      - "standards/TTS-0020.txt"
       - "Cargo.lock"
       - "rust-toolchain.toml"
       - ".github/workflows/rust.yml"
       - "crates/tith-crypto/src/hash.rs"
+      - "crates/tith-crypto/src/raw.rs"
       - "crates/tith-crypto/src/signature.rs"
+      - "crates/tith-crypto/build.rs"
+      - "crates/tith-crypto/vendor/**"
       - "crates/tith-wire/src/bundle.rs"
       - "crates/tith-wire/src/bundle_types.rs"
       - "crates/tith-wire/src/item_carrier.rs"
@@ -30,7 +35,7 @@ on:
       - "crates/tithd/src/mail.rs"
       - "crates/tithd/src/public_key_response.rs"
       - "qualification/check_source_line_coverage.py"
-      - "qualification/TTS-0005.016.md"
+      - "qualification/TTS-0005.017.md"
       - ".github/workflows/qualify-tts-0005.yml"
   workflow_dispatch:
 

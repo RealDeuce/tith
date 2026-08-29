@@ -1,0 +1,555 @@
+**********************************************************************
+TITH                                              THIS ISN'T THAT HARD
+**********************************************************************
+
+Publication:  TSP‑5000
+Revision:     1
+Title:        The Distribution Nodelist
+Author(s):    FTSC Members, Administrator, Honoured Guests and
+              Stephen Hurd
+Date:         2026‑08‑28
+══════════════════════════════════════════════════════════════════════
+
+Status of this document
+───────────────────────
+
+  This document is a TITH Standard Proposal (TSP) — it describes a
+  proposed revision to an existing TITH Technical Standard.  Until
+  promoted, it is experimental and does not replace that standard.
+
+  This document is released to the public domain, and may be used,
+  copied or modified for any purpose whatever.
+
+Abstract
+────────
+
+  Current practice for Fidonet Technology Networks (FTN) is to
+  maintain a nodelist used to store the details of the nodes in the
+  network, and the network structure.
+
+
+Contents
+────────
+
+  1.  Introduction
+  2.  Supersessions
+  3.  Purpose
+  4.  Publication and Distribution
+  5.  Content
+      5.1  Comment Lines
+      5.2  Data lines
+      5.3  Flag Relationships
+  6.  Segments
+
+  A.  References
+  B.  History
+
+══════════════════════════════════════════════════════════════════════
+
+
+1. Introduction
+───────────────
+
+  Fidonet is a peer‐to‐peer network utilising multiple different, and
+  often incompatible, communication technologies that are independent
+  of Fidonet itself, and is organised into a particular hierarchy for
+  both technical and management purposes.
+
+  For direct communication, it is necessary that the originating node
+  knows in advance the exact method and capabilities of the
+  destination node in order to determine if, when, and how a direct
+  mail session can be established.  For routing and management, the
+  stated hierarchy must also be known.
+
+  All this information is collected into a file called the "nodelist".
+
+  While nodelists of various flavours and completeness are in use, the
+  "Distribution Nodelist" is the official record of all Fidonet nodes,
+  their operators, their capabilities and their relation to each other
+  in the network hierarchy.  In essence, the nodelist defines Fidonet.
+
+
+2. Supersessions
+────────────────
+
+  FTS‑0005.003 superseded and replaced documents known under the names
+  of FSC‑0002, and FTS‑0002.
+
+  FTS‑5000.005 superseded and replaced the document known under the name
+  of FTS‑0005.003.
+
+  This document supersedes and replaces FTS‑5000.005.
+
+
+3. Purpose
+──────────
+
+  Along with the companion technical standard TTS‑5001, this
+  document defines the format and content of Fidonet's distribution
+  nodelist.
+
+  Unlike most TITH documents, the nodelist standards are not only
+  aimed at developers, but also at maintainers of Fidonet (and other
+  Fidonet Technology Networks) nodelist segments.  Both producers and
+  consumers MUST use the exact grammar in this document.  A consumer
+  MUST reject a data line which does not conform; compatibility with
+  an FTS‑5000.005 source belongs at an explicit conversion boundary.
+
+  Except where this document specifies a limit, a field or line has no
+  fixed maximum length.  Platform overflow checks, allocation failure,
+  and local resource policy remain valid reasons an implementation may
+  be unable to process a nodelist safely; such a failure does not make
+  otherwise conforming data malformed.
+
+  It is assumed you're already familiar with Fidonet structure and
+  addressing terminology.
+
+
+4. Publication and Distribution
+───────────────────────────────
+
+  The Distribution Nodelist uses the filename DDD-nodelist.nnn, where
+  DDD is the domain text and nnn is exactly three ASCII decimal digits
+  giving the Gregorian ordinal day of publication in the range 001–366.
+  U+002D HYPHEN-MINUS and U+002E FULL STOP are literal filename syntax.
+  Partial or alternate nodelists MUST use another base filename in
+  place of DDD-nodelist.
+
+  Distribution compresses the exact DDD-nodelist.nnn bytes as one
+  ordinary Zstandard frame conforming to RFC 8878.  The resulting file
+  is named DDD-nodelist.nnn.zst.  It is not an archive containing an
+  intermediate file format.
+
+  The frame MUST decode without a dictionary.  It MUST NOT be a
+  skippable frame and MUST NOT be followed by another frame or trailing
+  data.  Compression parameters may vary, and the RFC 8878 content
+  checksum may be present or absent.  Other representations may be
+  distributed, but they are not TTS‑5000 encodings.
+
+  Every node on a network SHOULD make its current nodelist available
+  by FileRequest under the name DDD-nodelist.zst.
+
+
+5. Content
+──────────
+
+  The nodelist is a flat text file containing any number of lines,
+  encoded in UTF‑8.
+
+  U+0000 through U+001F and U+007F through U+009F are prohibited.
+  U+0009 CHARACTER TABULATION is permitted only as the field separator
+  on a data line, and U+000A LINE FEED is permitted only as a line
+  terminator.  Every line MUST have that terminator.  Every other
+  Unicode scalar value is permitted unless a field grammar below
+  restricts it further.
+
+
+5.1. Comment Lines
+──────────────────
+
+  A comment line begins with U+003B SEMICOLON.  Its interest‐flag
+  prefix is the maximal consecutive run of ASCII letters U+0041
+  through U+005A and U+0061 through U+007A immediately following the
+  semicolon.  A program which processes the nodelist may use those
+  flags to determine the disposition of the comment.  The remainder
+  is uninterpreted free‐form text.
+
+  Five uppercase interest flags have assigned meanings.  Every other
+  ASCII letter remains valid but has no meaning assigned here.
+
+     ;S This comment is of particular interest to Sysops.
+
+     ;U This comment is of particular interest to BBS users.
+
+     ;F This comment should appear in any formatted "Fido List."
+
+     ;A This comment is of general interest (shorthand for ;SUF).
+
+     ;E This comment is an error message inserted by a nodelist
+        generating program.
+
+     ;  This comment may be ignored by a nodelist processor.
+
+  A nodelist has no header line.  The first line of a file is an
+  ordinary line of whichever kind it is, and no line carries a
+  meaning the same line would not carry elsewhere in the same file.
+
+  No value in the free‐form remainder is interpreted.  A processor
+  MUST NOT validate that text or refuse a nodelist because it resembles
+  metadata which does not match the file.
+
+
+5.2.  Data lines
+────────────────
+
+  A nodelist data line contains exactly eleven (11) variable length
+  fields separated by tabs (U+0009), defined below.  Each data line is
+  a record for an individual Fidonet node.
+
+  All scalar values permitted by section 5 are allowed in string fields
+  unless specified otherwise.
+
+  Field 1: Keyword
+
+    Type: string.
+
+    The keyword field defines the type of node, and will either be
+    empty or contain exactly one of the keywords defined below,
+    grouped by functional class.
+
+    No other keyword is valid in a Distribution Nodelist or TTS‑5000
+    segment.  A separately specified private format may reuse the
+    record shape and define other keywords, but that format and its
+    profile selection are outside TTS‑5000.  A TTS‑5000 consumer MUST
+    reject an unassigned keyword.
+
+    Full or Member Nodes — these are the system numbers of individual
+    Fidonet members.
+
+      <empty>
+        Defines an operational member having at least one usable
+        direct‐contact target.
+
+      Pvt
+        Defines an operational member having no usable direct‐contact
+        target.  A member represented by either the empty or Pvt
+        alternative MUST use Pvt if and only if it has no such target;
+        otherwise its keyword MUST be empty.
+
+        A usable direct‐contact target is any of:
+
+          • a nonempty telephone number in field 6;
+          • an Internet Protocol or IIH occurrence which, after the
+            TTS‑5001 resolution rules are applied, has both a server
+            and a usable port; or
+          • an Email Flag which carries an address directly or through
+            the addressed IEM rules in TTS‑5001.
+
+        INA alone, a port without a server, a server for a method having
+        no default or explicit port, a bare Email method, PSTN or ISDN
+        capability flags without a telephone number, and
+        `IIH:<PublicKey>` without an endpoint are not usable targets.
+        Pvt entries are permitted only as members of local networks.
+
+      Hold
+        Defines a node which is operational but cannot be publicly
+        contacted.  This is expected to be a temporary condition.
+
+      Down
+        Defines a node which is not operational.  This is expected to
+        be permanent or semipermanent.
+
+    Routing consequences of these states are outside this document.
+
+    Administrative Nodes — these nodes indicate the beginning of a
+    branch in the Fidonet addressing and management hierarchy.
+
+    Each branch may contain one or more administrative nodes of lower
+    tier, or any of the above member node types unless stated
+    otherwise.
+
+    Since the nodelist is a flat file, a branch is simply terminated
+    at the next administrative node of equal or higher tier (or EOF).
+
+    Member nodes are always part of an administrative branch, and may
+    never appear at the top level of the nodelist.
+
+    In order from highest to lowest:
+
+      Zone
+        Begins the definition of a geographic zone and defines its
+        coordinator.  A zone is also a logical region AND net.
+
+        Normal nodes immediately below a Zone node, and before any
+        other administrative nodes, are Zone Independent Nodes.
+
+      Region
+        Begins the definition of a geographic region and defines its
+        coordinator.  A region is also a logical net.
+
+        Normal nodes immediately below a Region node, and before any
+        other administrative nodes, are Region Independent Nodes.
+
+      Host
+        Begins the definition of a local network (net) and normally
+        defines its coordinator unless section 5.3 assigns that role
+        to another entry.
+
+      Hub
+        Begins the definition of a routing subunit within a multilevel
+        local network.
+
+    A nonempty Distribution Nodelist begins, after any comments, with a
+    Zone data line.  Before that line there is no active zone or net.
+    Zone supplies both its zone and logical‐net context.  Region
+    requires an active Zone and supplies its region and logical‐net
+    context.  Host requires an active Zone, may occur directly within
+    a Zone or Region branch, and starts a local net.  Hub requires an
+    active Host and starts a subunit of that Host's local net; it MUST
+    NOT occur directly within a Zone or Region branch.
+
+    Members immediately below Zone and Region are Zone Independent and
+    Region Independent Nodes respectively.  Members below Host or Hub
+    are members of that local net.  An administrative entry ends every
+    preceding branch of equal or lower tier.  Region and Host numbers
+    share one logical‐net address namespace within a zone.
+
+
+  Field 2: Node number
+
+     Type: integer;  Range: 1 to 32767.
+
+     The encoded value is one ASCII digit from U+0031 through U+0039
+     followed by zero or more ASCII digits from U+0030 through U+0039.
+     It contains no sign, whitespace, leading zero, or other code point.
+     The range therefore makes every valid encoding one through five
+     bytes without a separate length restriction.
+
+     For member nodes and Hubs (which are treated as member nodes as
+     far as addressing goes), this number is the node number, and must
+     be unique within their local network.
+
+     For a Zone entry, this number is the zone number.  A region and
+     net number of equal value is implied, and the node number is
+     zero.  Zone numbers must be unique across the entire network.
+
+     For a Region entry, this number is the region number.  A net
+     number of equal value is implied, and the node number is zero.
+     Region numbers must be unique within each zone.
+
+     For a Host entry, this number is the net number, and the node
+     number is zero.  As with Region numbers, net numbers must be
+     unique within each zone.
+
+     Because the node number zero is reserved for Zone, Region and
+     Host entries, the value "0" is strictly forbidden in this field.
+
+
+  Field 3: Node name
+
+     Type: string.
+
+     This is the name by which the system is known.
+
+
+  Field 4: Location
+
+     Type: string.
+
+     This is the physical location of the node.
+
+     Generally, this is expressed as the primary local area (town,
+     suburb, city, etc.) and where applicable, a comma and space,
+     followed by the abbreviation of the regional geopolitical
+     administrative district (state, province, department, county,
+     etc.).
+
+
+  Field 5: Sysop name
+
+     Type: string.
+
+     This is the name of the Fidonet member responsible for the node.
+
+     The name SHOULD be a valid user of the node.  That is to say that
+     netmail addressed to this name should reach a Sysop.
+
+
+  Field 6: Phone number (PSTN or ISDN)
+
+     Type: string;  Encoded length: zero or 3–29 bytes;  Characters:
+     ASCII digits and U+002D HYPHEN-MINUS.
+
+     This field is either empty, or contains two or more nonempty
+     subfields of ASCII digits separated by one U+002D HYPHEN-MINUS.
+     U+002D is literal syntax.  The first field is the country code.
+     Conventionally, the remaining components follow local practice.
+
+     The various parts of the phone number may be used to derive cost
+     and routing information, as well as what number is to be dialled.
+     A typical example of the data in a phone number field is
+     1-800-555-0100, corresponding to country 1 (USA), area 800 (area
+     code), exchange 555, and number 0100.
+
+     An empty field supplies no PSTN or ISDN direct-contact target.
+
+
+  Field 7: System Flags
+
+     Type: string.
+
+     Contains exactly the System Flags defined by TTS‑5001, separated
+     and ordered as that document specifies.
+
+  Field 8: PSTN and ISDN Flags
+
+     Type: string.
+
+     Contains exactly the PSTN and ISDN Flags defined by TTS‑5001,
+     separated and ordered as that document specifies.
+
+  Field 9: Internet Flags
+
+     Type: string.
+
+     Contains exactly the Internet Flags defined by TTS‑5001,
+     separated and ordered as that document specifies.  TTS‑5001 also
+     defines how INA supplies omitted servers and how repeated
+     endpoints retain preference order.
+
+     The PublicKey in an IIH flag is the key used to authenticate TITH
+     data whose Origin is this entry's address.  An item's SignedOrigin
+     cannot override this key; it is considered only when no Origin key
+     is available.
+
+     `IIH:<PublicKey>` publishes the key but no endpoint and therefore
+     remains valid on a Pvt entry; see field 1.
+
+     When a using context has accepted this nodelist as authoritative
+     for the address, the IIH PublicKey supplies the authoritative
+     external anchor defined by TTS‑0008.  That document determines
+     whether the anchor or an authenticated successor is the effective
+     key.  TTS‑5000 does not define how a nodelist publication is
+     authenticated or accepted.
+
+     When a node is first published following an application from the
+     anonymous address defined in TTS‑0004, this PublicKey MUST be
+     the same PublicKey that accompanied the Origin of the application
+     Message.
+
+  Field 10: Email Flags
+
+     Type: string.
+
+     Contains exactly the Email Flags defined by TTS‑5001, separated
+     and ordered as that document specifies.
+
+  Field 11: Other Flags
+
+     Type: string.
+
+     Contains exactly the Other Flags and extensions defined by
+     TTS‑5001, separated and ordered as that document specifies.
+
+
+5.3. Flag Relationships
+───────────────────────
+
+  On one data line, at most one of XA, XB, XC, XP, XR, XW, and XX may
+  occur.  CM MUST NOT occur with ICM, a Mail Period flag, or an Online
+  Period flag.  These constraints avoid contradictory statements; an
+  implementation MUST NOT infer or remove a redundant capability.
+
+  ZEC may occur on at most one entry in a Zone branch and identifies
+  that Zone's EchoMail Coordinator.  REC and RPK may each occur on at
+  most one entry in a Region branch and identify that Region's
+  EchoMail Coordinator and Pointlist Keeper respectively.
+
+  NEC and NPK may each occur on at most one entry in a logical net and
+  identify that net's EchoMail Coordinator and Pointlist Keeper
+  respectively.  NC may occur on at most one nonadministrative member
+  entry in a local net.  When present, it identifies that net's Network
+  Coordinator in place of the Host entry.  It MUST NOT occur on a Host,
+  Hub, Zone Independent Node, or Region Independent Node.
+
+
+6. Segments
+───────────
+
+  A segment is a partial nodelist containing one or more complete
+  branches.  Its first data line is the relevant Zone, Region, Host, or
+  Hub entry.  It uses the same record grammar and hierarchy transitions
+  as the Distribution Nodelist.
+
+  Parsing or producing a segment begins with an externally supplied
+  domain and, according to its first entry, these additional values:
+
+    • a Zone segment needs no initial zone or net;
+    • a Region or Host segment needs an initial zone; and
+    • a Hub segment needs an initial zone and local net.
+
+  Those initial values provide the omitted enclosing hierarchy only.
+  TTS‑5000 does not define how they are discovered or authenticated.
+
+  The format and structure is the same as the Distribution Nodelist,
+  with a base filename of local invention, usually derived from the
+  contents of the segment (e.g. fidonet-N712list.nnn or
+  fidonet-N712seg.nnn for a segment containing all the nodes in Net
+  712 of fidonet).
+
+  Segment transport, authentication, merge policy, conflict handling,
+  and administrative workflow are outside this document.  A compiled
+  Distribution Nodelist MUST independently satisfy every complete‐file
+  rule in sections 4 and 5.
+
+
+A. References
+─────────────
+
+  [FTS‑0005.003] "The Distribution Nodelist", Ben Baker, Rick Moore,
+  David Nugent.
+  1996‑02‑07. Obsoleted by this document.
+
+  [FTS‑5000.005] "The Distribution Nodelist", FTSC Members,
+  Administrator and Honoured Guests.  January 2014. Obsoleted by this
+  document.
+
+  [FTA‑1006.002] "Key words to indicate requirement levels"
+  FTSC, 1998‑01‑17.
+
+  [TTS‑0004] "Node Addresses", TITH, 2026‑08‑21.
+
+  [TTS‑0008] "Public Key Trust and Continuity", TITH, 2026‑08‑22.
+
+  [TTS‑0009] "Item Format", TITH, 2026‑08‑28.
+
+  [TTS‑5001] "Nodelist Flags", TITH, 2026‑08‑22.
+
+  [RFC 8878] "Zstandard Compression and the 'application/zstd' Media
+  Type", Y. Collet and M. Kucherawy, February 2021.
+
+
+B. History
+──────────
+
+   Rev.1, 2025‑11‑14: Initial Release. Slightly modified from
+   FTS‑5000.005
+
+   Rev.2, 2026‑08‑17: Defined unambiguous IIH endpoint syntax, default
+   address and port behaviour, IPv6 delimiters, and ordered repeated
+   endpoints.
+
+   Rev.3, 2026‑08‑18: Defined the nodelist key's precedence over an
+   item's SignedOrigin fallback.
+
+   Rev.4, 2026‑08‑19: Stated that a nodelist has no header line and
+   that a retained FTS‑5000.005 first line is an ordinary comment
+   whose contents are not interpreted.  Made the Private contact
+   information rule normative, excepted the endpointless IIH form
+   from it, and defined what a converter does with such an entry.
+
+   Rev.5, 2026‑08‑20: Distinguished publication in a nodelist from
+   observer‐relative listing and identified IIH as the external trust
+   anchor used by TTS‑0008 effective key resolution.
+
+   Rev.6, 2026‑08‑21: Made the empty Keyword and Phone alternatives
+   consistent with their field grammars, made the Phone length limit
+   exact, and defined the canonical Node number text encoding.
+
+   Rev.7, 2026‑08‑22: Referred the five flag categories to TTS‑5001,
+   retained nodelist‑specific trust and hierarchy rules here, and
+   defined contextual flag combinations and coordinator cardinality.
+
+   Rev.8, 2026‑08‑22: Classified the IIH PublicKey as the authoritative
+   external anchor supplied to TTS‑0008 effective key resolution.
+
+   Rev.9, 2026‑08‑23: Defined exact publication framing, character and
+   comment grammar, usable‐contact Pvt state, hierarchy and segment
+   context, and private keyword scope.  Removed legacy conversion,
+   downstream routing, and duplicated flag requirements.
+
+   TSP Rev.1, 2026‑08‑28: Updated the normative Item Format dependency
+   for the Libhydrogen interoperability profile set.  Proposed as
+   TTS‑5000 revision 10.
+
+**********************************************************************
