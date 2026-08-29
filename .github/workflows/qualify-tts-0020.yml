@@ -3,6 +3,7 @@ name: Qualify TTS-0020
 on:
   push:
     paths:
+      - ".gitattributes"
       - "standards/TSP-0020.txt"
       - "standards/TTS-0020.txt"
       - "Cargo.toml"
