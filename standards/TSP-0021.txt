@@ -3,7 +3,7 @@ TITH                                              THIS ISN'T THAT HARD
 **********************************************************************
 
 Publication:  TSP‑0021
-Revision:     1
+Revision:     2
 Title:        Common TLV Types
 Author(s):    Stephen Hurd
 Date:         2026‑08‑28
@@ -89,7 +89,7 @@ Contents
   2.  Signature
       The value MUST be the 64 binary bytes of data output from the
       hydro_sign_create() or hydro_sign_final_create() function under
-      the TTS‑0020 Libhydrogen Version 1 Interoperability Profile.  The
+      the TTS‑0010 Libhydrogen Version 1 Interoperability Profile.  The
       context parameter MUST be the eight bytes of the C string
       "SignTLV", which is the code points U+53, U+69, U+67,
       U+6E, U+54, U+4C, U+56, U+00.
@@ -220,7 +220,7 @@ A. References
   [FTA‑1006.002] "Key words to indicate requirement levels" FTSC,
   1998‑01‑17.
 
-  [TTS‑0020] "Libhydrogen Version 1 Interoperability Profile", TITH,
+  [TTS‑0010] "Libhydrogen Version 1 Interoperability Profile", TITH,
   2026‑08‑28.
 
   [POSIX] "The Open Group Base Specifications Issue 8"
@@ -258,5 +258,9 @@ B. History
    TSP Rev.1, 2026‑08‑28: Bound signature behavior to the TTS‑0020
    Libhydrogen Version 1 Interoperability Profile.  Proposed as
    TTS‑0003 revision 8.
+
+   TSP Rev.2, 2026‑08‑28: Corrected the profile dependency assignment
+   from TTS‑0020 to the next available identifier, TTS‑0010.  No other
+   technical requirement changed.
 
 **********************************************************************

@@ -1,4 +1,4 @@
-//! Private minimal ABI for the Libhydrogen snapshot owned by TTS-0020.
+//! Private minimal ABI for the Libhydrogen snapshot owned by TTS-0010.
 
 #![allow(non_upper_case_globals)]
 #![allow(non_camel_case_types)]

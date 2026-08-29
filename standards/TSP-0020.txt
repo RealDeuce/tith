@@ -3,7 +3,7 @@ TITH                                              THIS ISN'T THAT HARD
 **********************************************************************
 
 Publication:  TSP‑0020
-Revision:     1
+Revision:     2
 Title:        Libhydrogen Version 1 Interoperability Profile
 Author(s):    Stephen Hurd
 Date:         2026‑08‑28
@@ -239,5 +239,9 @@ B. History
    source tree, defined behavioral conformance, made zero‑length hash
    finalization explicit, and supplied independent interoperability
    vectors.  Proposed as TTS‑0020 revision 1.
+
+   TSP Rev.2, 2026‑08‑28: Changed the proposed standard assignment to
+   the next available identifier, TTS‑0010.  The technical requirements
+   are unchanged.
 
 **********************************************************************

@@ -5,7 +5,7 @@ on:
     paths:
       - "standards/TSP-0021.txt"
       - "standards/TTS-0003.txt"
-      - "standards/TTS-0020.txt"
+      - "standards/TTS-0010.txt"
       - "standards/TTS-0002.txt"
       - "standards/TTS-0004.txt"
       - "Cargo.lock"

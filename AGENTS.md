@@ -439,12 +439,28 @@ Read every directly related standard in full before changing normative text.
 Also check its references in the other local documents and the implementation's
 type assignments.
 
+- Unless the repository owner explicitly assigns a TTS identifier, use the
+  next available TTS number: the lowest positive four‐digit number which has
+  neither been assigned to a TTS nor reserved. TTS‑0001 remains reserved even
+  though no `TTS-0001.txt` is published. Before selecting a number, search
+  current documents, archived documents, repository history, and explicit
+  reservations; a gap, a convenient round number, or the candidate's TSP
+  number is not evidence that the TTS number is available. If the assignment
+  remains uncertain, stop and ask the owner.
 - Use `MUST`, `MUST NOT`, `SHOULD`, `SHOULD NOT`, and `MAY` deliberately.
 - State hierarchy, ordering, cardinality, and completion conditions explicitly.
   Words such as "followed by" must make clear whether values are siblings or
   children.
 - Preserve the plain-text document format, headings, box drawing characters,
   indentation, and approximately 72-column wrapping.
+- Reflow an edited prose paragraph as a whole so its lines remain even near the
+  existing width. Do not leave a newly short or long line in the middle of a
+  paragraph merely because only one phrase changed.
+- Insert actual line breaks in documents and issue text. Never introduce the
+  two literal characters `\n` as a formatting mechanism; retain them only when
+  they are intentionally part of quoted protocol syntax or source text. After
+  a scripted or bulk edit, search every affected text file for unintended
+  literal newline escapes and inspect the complete rendered diff.
 - Keep Contents entries, section numbers, type names, and cross-references in
   sync.
 - Do not assign a permanent TLV type casually.  Check TTS-0003, TTS-0005,
@@ -464,6 +480,21 @@ type assignments.
   pre-TPS TTS documents may be corrected until their first qualification;
   after qualification, do not publish a normative revision without its
   complete qualification record.
+
+## Commit Scope
+
+When the repository owner asks for one or a single atomic commit, that applies
+to the entire requested change, including implementation, tests, standards,
+qualification records, reference updates, and publication metadata. Do not
+make or push intermediate commits. Keep the work uncommitted until it is
+complete, validated, and approved.
+
+If required CI evidence cannot be obtained without first publishing a commit,
+explain that conflict and obtain direction before committing. Do not silently
+reinterpret "atomic" to mean only the final promotion or reference update. If
+an intermediate commit was already pushed, preserve published history unless
+the owner explicitly directs otherwise, and do not describe the overall work
+as a single atomic commit.
 
 ## Build and Validation
 

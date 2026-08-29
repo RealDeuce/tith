@@ -10,7 +10,7 @@ on:
       - "standards/TTS-0005.txt"
       - "standards/TTS-0008.txt"
       - "standards/TTS-0009.txt"
-      - "standards/TTS-0020.txt"
+      - "standards/TTS-0010.txt"
       - "Cargo.lock"
       - "rust-toolchain.toml"
       - ".github/workflows/rust.yml"

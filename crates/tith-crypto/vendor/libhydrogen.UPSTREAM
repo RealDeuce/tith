@@ -9,6 +9,6 @@ The adjacent libhydrogen directory is the complete tree produced by:
     git archive 9819a7cb39678d1e9d31874c238d5b8ce375ff4f
 
 It is vendored byte for byte and is built only by tith-crypto.  Update the
-source, this provenance record, TTS-0020, its interoperability evidence, and
+source, this provenance record, TTS-0010, its interoperability evidence, and
 every dependent qualification record together.  Do not apply TITH-specific
 changes inside the vendored tree.
