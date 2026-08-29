@@ -37,7 +37,7 @@ jobs:
 
       - name: Verify the complete source snapshot
         run: >-
-          python3 qualification/check_libhydrogen_snapshot.py
+          python qualification/check_libhydrogen_snapshot.py
           crates/tith-crypto/vendor/libhydrogen
           crates/tith-crypto/vendor/libhydrogen.SHA256SUMS
 
