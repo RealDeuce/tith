@@ -25,12 +25,12 @@ pub use signature::{
 	TlvSigner, sign_tlv, verify_tlv,
 };
 
-pub const HASH_BYTES: usize = hydro::hydro_hash_BYTES as usize;
-pub const KX_PUBLIC_KEY_BYTES: usize = hydro::hydro_kx_PUBLICKEYBYTES as usize;
-pub const KX_SECRET_KEY_BYTES: usize = hydro::hydro_kx_SECRETKEYBYTES as usize;
-pub const KX_PACKET_BYTES: usize = hydro::hydro_kx_KK_PACKET1BYTES as usize;
-pub const SESSION_KEY_BYTES: usize = hydro::hydro_kx_SESSIONKEYBYTES as usize;
-pub const SECRETBOX_HEADER_BYTES: usize = hydro::hydro_secretbox_HEADERBYTES as usize;
+pub const HASH_BYTES: usize = hydro::hydro_hash_BYTES;
+pub const KX_PUBLIC_KEY_BYTES: usize = hydro::hydro_kx_PUBLICKEYBYTES;
+pub const KX_SECRET_KEY_BYTES: usize = hydro::hydro_kx_SECRETKEYBYTES;
+pub const KX_PACKET_BYTES: usize = hydro::hydro_kx_KK_PACKET1BYTES;
+pub const SESSION_KEY_BYTES: usize = hydro::hydro_kx_SESSIONKEYBYTES;
+pub const SECRETBOX_HEADER_BYTES: usize = hydro::hydro_secretbox_HEADERBYTES;
 
 const TITH_IPC_CONTEXT: &[u8; 8] = b"TITHIPC\0";
 

@@ -8,7 +8,6 @@ repository.workspace = true
 publish = false
 
 [build-dependencies]
-bindgen.workspace = true
 cc.workspace = true
 
 [lints.rust]

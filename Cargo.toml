@@ -29,7 +29,6 @@ repository = "https://github.com/RealDeuce/tith"
 
 [workspace.dependencies]
 base64 = "=0.22.1"
-bindgen = "=0.71.1"
 cc = "=1.4.3"
 redb = "=4.2.0"
 same-file = "=1.0.6"

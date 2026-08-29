@@ -8,8 +8,8 @@ use crate::raw as hydro;
 
 use crate::PublicKey;
 
-pub const SECRET_KEY_BYTES: usize = hydro::hydro_sign_SECRETKEYBYTES as usize;
-pub const SIGNATURE_BYTES: usize = hydro::hydro_sign_BYTES as usize;
+pub const SECRET_KEY_BYTES: usize = hydro::hydro_sign_SECRETKEYBYTES;
+pub const SIGNATURE_BYTES: usize = hydro::hydro_sign_BYTES;
 
 const SIGN_TLV_CONTEXT: &[u8; 8] = b"SignTLV\0";
 
