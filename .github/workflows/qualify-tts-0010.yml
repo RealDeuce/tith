@@ -12,6 +12,7 @@ on:
       - ".github/workflows/rust.yml"
       - "crates/tith-crypto/**"
       - "qualification/check_libhydrogen_snapshot.py"
+      - "qualification/test_check_libhydrogen_snapshot.py"
       - "qualification/libhydrogen_profile_fixture.c"
       - "qualification/TTS-0010.001.md"
       - ".github/workflows/qualify-tts-0010.yml"
@@ -41,6 +42,9 @@ jobs:
           python qualification/check_libhydrogen_snapshot.py
           crates/tith-crypto/vendor/libhydrogen
           crates/tith-crypto/vendor/libhydrogen.SHA256SUMS
+
+      - name: Exercise snapshot-verifier failure paths
+        run: python -m unittest qualification/test_check_libhydrogen_snapshot.py
 
       - name: Exercise the wrapper interoperability fixtures
         run: cargo test --package tith-crypto
