@@ -282,7 +282,7 @@ mod tests {
 	use tith_store::{ClaimResult, ItemAuthentication, JobKind};
 	use tith_wire::bundle::Bundle;
 	use tith_wire::bundle::{BundleError, build_bundle, build_signed_tlv, verify_signed_tlv};
-	use tith_wire::integer::{decode_u64_prefix, encode_u64};
+	use tith_wire::integer::{decode_u64, encode_u64};
 	use tith_wire::item::{ItemKind, RejectionReason, accepted, rejected, validate_payload};
 	use tith_wire::tlv::{OwnedTlv, TlvReader, parse_sequence};
 	use tith_wire::types;
@@ -922,14 +922,12 @@ mod tests {
 			.unwrap()
 			.remove(0);
 		assert_eq!(item.kind, ItemKind::Rejected);
-		let mut suffix = item.raw.value.as_slice();
-		for _ in 0..2 {
-			let (_, type_bytes) = decode_u64_prefix(suffix).unwrap();
-			let (length, length_bytes) = decode_u64_prefix(&suffix[type_bytes..]).unwrap();
-			let used = type_bytes + length_bytes + usize::try_from(length).unwrap();
-			suffix = &suffix[used..];
-		}
-		decode_u64_prefix(suffix).unwrap().0
+		let children = parse_sequence(&item.raw.value).unwrap();
+		let reason = children
+			.iter()
+			.find(|child| child.type_code == types::REJECTION_REASON)
+			.unwrap();
+		decode_u64(&reason.value).unwrap()
 	}
 
 	#[test]

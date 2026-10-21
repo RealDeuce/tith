@@ -3,6 +3,8 @@ name: Qualify TTS-0006
 on:
   push:
     paths:
+      - "standards/TSP-0015.txt"
+      - "standards/TSP-0016.txt"
       - "standards/TSP-0021.txt"
       - "standards/TSP-0022.txt"
       - "standards/TSP-0023.txt"
@@ -19,6 +21,10 @@ on:
       - "crates/tith-exchange/src/receive.rs"
       - "crates/tith-exchange/src/response.rs"
       - "crates/tith-exchange/src/session.rs"
+      - "crates/tith-wire/src/bundle_types.rs"
+      - "crates/tith-wire/src/item_carrier.rs"
+      - "crates/tith-wire/src/item_carrier_tests.rs"
+      - "crates/tith-wire/src/types.rs"
       - "crates/tithd/src/client_exchange.rs"
       - "crates/tithd/src/deliver.rs"
       - "crates/tithd/src/framing.rs"
@@ -27,7 +33,7 @@ on:
       - "crates/tithd/src/public_key_response.rs"
       - "crates/tithd/src/server_exchange.rs"
       - "qualification/check_source_line_coverage.py"
-      - "qualification/TTS-0006.014.md"
+      - "qualification/TTS-0006.015.md"
       - ".github/workflows/qualify-tts-0006.yml"
   workflow_dispatch:
 

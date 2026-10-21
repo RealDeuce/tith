@@ -1158,7 +1158,10 @@ mod tests {
 			.unwrap()
 			.write_to(&mut value)
 			.unwrap();
-		value.extend_from_slice(&crate::integer::encode_u64(5));
+		OwnedTlv::new(types::REJECTION_REASON, crate::integer::encode_u64(5))
+			.unwrap()
+			.write_to(&mut value)
+			.unwrap();
 		let item = OwnedTlv::new(types::REJECTED, value).unwrap();
 		assert!(matches!(
 			validate_item(&item, &|_: &Address| None),
@@ -1599,6 +1602,14 @@ mod tests {
 		assert!(matches!(
 			read_reply_to(&reply),
 			Err(BundleError::Missing("ReplyTo Address"))
+		));
+		let truncated = OwnedTlv::new(types::REPLY_TO, vec![7, 3, b'a']).unwrap();
+		assert!(matches!(
+			read_reply_to(&truncated),
+			Err(BundleError::Framing(crate::tlv::FramingError::TruncatedValue {
+				expected: 3,
+				received: 1,
+			}))
 		));
 
 		assert_eq!(

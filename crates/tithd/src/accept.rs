@@ -628,15 +628,12 @@ mod tests {
 
 	fn rejection(response: &OwnedTlv) -> RejectionReason {
 		assert_eq!(response.type_code, types::REJECTED);
-		let mut suffix = response.value.as_slice();
-		for _ in 0..2 {
-			let (_, type_bytes) = tith_wire::integer::decode_u64_prefix(suffix).unwrap();
-			let (length, length_bytes) =
-				tith_wire::integer::decode_u64_prefix(&suffix[type_bytes..]).unwrap();
-			suffix = &suffix[type_bytes + length_bytes + usize::try_from(length).unwrap()..];
-		}
-		RejectionReason::from_code(tith_wire::integer::decode_u64_prefix(suffix).unwrap().0)
-			.unwrap()
+		let children = parse_sequence(&response.value).unwrap();
+		let reason = children
+			.iter()
+			.find(|child| child.type_code == types::REJECTION_REASON)
+			.unwrap();
+		RejectionReason::from_code(tith_wire::integer::decode_u64(&reason.value).unwrap()).unwrap()
 	}
 
 	fn stored_inbound(world: &World) -> bool {
