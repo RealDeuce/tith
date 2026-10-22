@@ -136,6 +136,13 @@ impl Outbound {
 			}
 			Ok((answers, returned, close_after_reply))
 		})();
+		if received.is_err() {
+			// TTS-0006 section 5: close the failed exchange before a caller
+			// attempts continuity recovery. A Poll otherwise leaves its write
+			// side open and can keep a serial peer from answering the probe.
+			// This also releases a writer if the peer has stopped reading.
+			drop(stream.shutdown(Shutdown::Both));
+		}
 		join_writer(writer)?;
 		let (answers, returned, close_after_reply) = received?;
 		if keep_open {
@@ -233,6 +240,22 @@ fn join_writer(
 		writer.join().map_err(|_| "Bundle writer panicked")??;
 	}
 	Ok(())
+}
+
+/// Performs a dedicated probe using one owned socket for its sequential I/O.
+/// The connection ends before the caller can persist or use the returned key.
+pub(super) fn request_public_key_reply(
+	stream: TcpStream,
+	request: &[u8],
+	resolver: &dyn KeyResolver,
+	expected: Option<PublicKey>,
+) -> Result<Bundle, Box<dyn Error>> {
+	let mut io = StreamIo(stream);
+	send_bundle(&mut io, request, false)?;
+	let reply = read_public_key_reply(&mut TlvReader::new(&mut io), resolver, expected)?;
+	// Completion is the authenticated response, never Server FIN.
+	drop(io.0.shutdown(Shutdown::Read));
+	Ok(reply)
 }
 
 /// Reads exactly through the authenticated payload which completes a
