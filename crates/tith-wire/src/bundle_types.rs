@@ -10,11 +10,16 @@ pub const POLL_FILES: u64 = 70;
 pub const POLL_FILE_REQUESTS: u64 = 71;
 pub const PUBLIC_KEY_REQUEST: u64 = 72;
 
+pub const REJECTION_REASON: u64 = 73;
+pub const REJECTION_DESCRIPTION: u64 = 74;
 pub const TLV_HASH: u64 = 99;
 
 #[must_use]
 pub const fn is_defined(type_code: u64) -> bool {
-	matches!(type_code, 64..=72 | TLV_HASH)
+	matches!(
+		type_code,
+		64..=72 | REJECTION_REASON | REJECTION_DESCRIPTION | TLV_HASH
+	)
 }
 
 #[must_use]
@@ -47,20 +52,24 @@ mod tests {
 				POLL_FILES,
 				POLL_FILE_REQUESTS,
 				PUBLIC_KEY_REQUEST,
+				REJECTION_REASON,
+				REJECTION_DESCRIPTION,
 				TLV_HASH,
 			],
-			[64, 65, 66, 67, 68, 69, 70, 71, 72, 99]
+			[64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 99]
 		);
-		for code in 64..=72 {
+		for code in 64..=74 {
 			assert!(is_defined(code));
 		}
 		assert!(is_defined(99));
 		assert!(!is_defined(63));
-		assert!(!is_defined(73));
+		assert!(!is_defined(75));
 		assert!(!is_defined(98));
 		assert!(!is_request(REJECTED));
 		assert!(!is_request(ACCEPTED));
 		assert!(!is_request(TLV_HASH));
+		assert!(!is_request(REJECTION_REASON));
+		assert!(!is_request(REJECTION_DESCRIPTION));
 		for code in [
 			MESSAGE,
 			FILE,

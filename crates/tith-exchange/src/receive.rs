@@ -351,13 +351,18 @@ mod tests {
 			Err(ExchangeError::Bundle(_))
 		));
 
-		let (_, origin, _, header_hash, payload, resolver) = fixture(vec![
-			OwnedTlv::new(types::TIMESTAMP, encode_u64(1)).unwrap(),
-		]);
-		assert!(matches!(
-			receive_payload(&payload, &origin, header_hash, &resolver),
-			Err(ExchangeError::UnexpectedPayloadValue)
-		));
+		for type_code in [
+			types::TIMESTAMP,
+			types::REJECTION_REASON,
+			types::REJECTION_DESCRIPTION,
+		] {
+			let (_, origin, _, header_hash, payload, resolver) =
+				fixture(vec![OwnedTlv::new(type_code, encode_u64(1)).unwrap()]);
+			assert!(matches!(
+				receive_payload(&payload, &origin, header_hash, &resolver),
+				Err(ExchangeError::UnexpectedPayloadValue)
+			));
+		}
 
 		let broken = OwnedTlv::new(types::SIGNED_TLV, Vec::new()).unwrap();
 		assert!(matches!(

@@ -95,15 +95,12 @@ fn validate_response(value: &OwnedTlv, accepted: bool) -> Result<ValidatedItem, 
 		});
 	}
 
-	// Rejected ends with a raw canonical reason number and an optional UTF-8
-	// description, so parse its leading TLVs without treating the tail as TLV.
-	let (request, used_request) = take_encoded_tlv(bytes)?;
-	if request.type_code != types::REQUEST_IDENTIFIER {
-		return Err(BundleError::Missing("Rejected RequestIdentifier"));
-	}
+	let children = children?;
+	let mut cursor = Cursor::new(&children);
+	let (_, request) = cursor.take(types::REQUEST_IDENTIFIER, "Rejected RequestIdentifier")?;
 	let request_identifier = decode_u64(&request.value)?;
-	let (hash, used_hash) = take_encoded_tlv(&bytes[used_request..])?;
-	if hash.type_code != types::TLV_HASH || hash.value.len() != 32 {
+	let (_, hash) = cursor.take(types::TLV_HASH, "Rejected TLVHash")?;
+	if hash.value.len() != 32 {
 		return Err(BundleError::WrongLength("Rejected TLVHash"));
 	}
 	let response_to = TlvHash::from_bytes(
@@ -112,15 +109,12 @@ fn validate_response(value: &OwnedTlv, accepted: bool) -> Result<ValidatedItem, 
 			.try_into()
 			.expect("length checked above"),
 	);
-	let mut offset = used_request + used_hash;
-	let mut retry_after = None;
-	if let Ok((timestamp, used_timestamp)) = take_encoded_tlv(&bytes[offset..])
-		&& timestamp.type_code == types::TIMESTAMP
-	{
-		retry_after = Some(decode_u64(&timestamp.value)?);
-		offset += used_timestamp;
-	}
-	let (reason, used_reason) = decode_u64_prefix(&bytes[offset..])?;
+	let retry_after = cursor
+		.optional(types::TIMESTAMP)
+		.map(|(_, value)| decode_u64(&value.value))
+		.transpose()?;
+	let (_, reason) = cursor.take(types::REJECTION_REASON, "Rejected RejectionReason")?;
+	let reason = decode_u64(&reason.value)?;
 	let reason =
 		RejectionReason::from_code(reason).ok_or(BundleError::Unexpected("Rejected reason"))?;
 	if retry_after.is_some() && reason != RejectionReason::Temporary {
@@ -128,10 +122,15 @@ fn validate_response(value: &OwnedTlv, accepted: bool) -> Result<ValidatedItem, 
 			"Rejected Timestamp for non-temporary reason",
 		));
 	}
-	offset += used_reason;
-	let description = std::str::from_utf8(&bytes[offset..])
-		.map_err(|_| BundleError::InvalidUtf8)?
-		.to_owned();
+	let description = cursor
+		.optional(types::REJECTION_DESCRIPTION)
+		.map(|(_, value)| text(value))
+		.transpose()?;
+	if description == Some("") {
+		return Err(BundleError::Unexpected("empty RejectionDescription"));
+	}
+	let description = description.unwrap_or_default().to_owned();
+	cursor.finish()?;
 	Ok(ValidatedItem {
 		kind: ItemKind::Rejected,
 		request_identifier,
@@ -222,8 +221,14 @@ pub fn rejected(
 			.write_to(&mut value)
 			.expect("Vec writes cannot fail");
 	}
-	value.extend_from_slice(&crate::integer::encode_u64(reason as u64));
-	value.extend_from_slice(description.as_bytes());
+	carrier_value(types::REJECTION_REASON, crate::integer::encode_u64(reason as u64))
+		.write_to(&mut value)
+		.expect("Vec writes cannot fail");
+	if !description.is_empty() {
+		carrier_value(types::REJECTION_DESCRIPTION, description.as_bytes().to_vec())
+			.write_to(&mut value)
+			.expect("Vec writes cannot fail");
+	}
 	Ok(carrier_value(types::REJECTED, value))
 }
 
@@ -279,6 +284,9 @@ pub fn validate_item(
 		types::POLL_FILES => simple_request(value, ItemKind::PollFiles).map(Some),
 		types::POLL_FILE_REQUESTS => simple_request(value, ItemKind::PollFileRequests).map(Some),
 		types::PUBLIC_KEY_REQUEST => validate_public_key_request(value).map(Some),
+		types::REJECTION_REASON | types::REJECTION_DESCRIPTION => {
+			Err(BundleError::Unexpected("Rejected child outside Rejected"))
+		}
 		_ => Ok(None),
 	}
 }

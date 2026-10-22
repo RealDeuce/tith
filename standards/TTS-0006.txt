@@ -3,10 +3,10 @@ TITH                                              THIS ISN'T THAT HARD
 **********************************************************************
 
 Publication:  TTS‑0006
-Revision:     14
+Revision:     15
 Title:        Bundle Exchange Protocol
 Author(s):    Stephen Hurd
-Date:         2026‑08‑28
+Date:         2026‑10‑21
 ══════════════════════════════════════════════════════════════════════
 
 Status of this document
@@ -285,7 +285,7 @@ A. References
 
   [TTS‑0004] "Node Addresses", TITH, 2026‑08‑22.
 
-  [TTS‑0005] "Bundle Format", TITH, 2026‑08‑28.
+  [TTS‑0005] Revision 18, "Bundle Format", TITH, 2026‑10‑21.
 
 
 B. History
@@ -341,6 +341,14 @@ B. History
 
    TTS Rev.14, 2026‑08‑28: Replaced TTS‑0006 revision 13 with
    alternate candidate TSP‑0023 revision 1 without further technical
+   changes.
+
+   TSP Rev.1, 2026‑10‑21: Proposed TTS‑0006 revision 15 as alternate
+   candidate TSP‑0016.  Selected the TTS‑0005 revision 18 child‐TLV
+   Rejected grammar from TSP‑0015 revision 1 (#145).
+
+   TTS Rev.15, 2026‑10‑21: Replaced TTS‑0006 revision 14 with
+   alternate candidate TSP‑0016 revision 1 without further technical
    changes.
 
 **********************************************************************
