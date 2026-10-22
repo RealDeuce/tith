@@ -419,10 +419,22 @@ impl Outbound {
 				.encode(),
 		)?;
 		let stream = self.connect_address(address, expected)?;
+		#[cfg(test)]
+		eprintln!("probe client {:?}: connected", stream.local_addr());
 		let mut io = StreamIo(stream.try_clone()?);
 		send_bundle(&mut io, &request, false)?;
+		#[cfg(test)]
+		eprintln!(
+			"probe client {:?}: request sent and write shut",
+			stream.local_addr()
+		);
 		let mut reader = TlvReader::new(stream.try_clone()?);
 		let reply = read_public_key_reply(&mut reader, self, expected)?;
+		#[cfg(test)]
+		eprintln!(
+			"probe client {:?}: reply authenticated",
+			stream.local_addr()
+		);
 		// The authenticated response completes the dedicated exchange.  The
 		// Client has already closed its write side and now actively finishes the
 		// connection without waiting for Server FIN.

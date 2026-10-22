@@ -53,9 +53,19 @@ pub(super) fn transaction(mut stream: TcpStream, mailer: &Mailer) -> Result<(), 
 		let (request_identifier, response_to) = probe
 			.public_key_request()?
 			.ok_or("classified PublicKeyRequest has no request")?;
+		#[cfg(test)]
+		eprintln!(
+			"probe server {:?}: waiting for request EOF",
+			writer.peer_addr()
+		);
 		if reader.read_next()?.is_some() {
 			return Err("PublicKeyRequest must be the sole request in its Bundle".into());
 		}
+		#[cfg(test)]
+		eprintln!(
+			"probe server {:?}: request EOF received",
+			writer.peer_addr()
+		);
 		return answer_public_key_request(
 			&mut writer,
 			&request,
@@ -109,8 +119,15 @@ fn answer_public_key_request(
 	let secret = &mailer.local_secret;
 	let retired = &mailer.retired_secrets;
 	let encoded = crate::public_key_response::build(local, secret, retired, parameters)?;
+	#[cfg(test)]
+	eprintln!("probe server {:?}: writing proof", writer.peer_addr());
 	writer.write_all(&encoded)?;
 	writer.flush()?;
+	#[cfg(test)]
+	eprintln!(
+		"probe server {:?}: proof written, shutting write",
+		writer.peer_addr()
+	);
 	writer.shutdown(Shutdown::Write)?;
 	Ok(())
 }
