@@ -12,7 +12,7 @@
 
 use std::error::Error;
 use std::io;
-use std::net::{Shutdown, TcpStream, ToSocketAddrs};
+use std::net::{TcpStream, ToSocketAddrs};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -20,7 +20,7 @@ use tith_config::{ConfigurationSet, IdentityRef, Schedule};
 use tith_crypto::{PublicKey, SecretKey, hash_tlv};
 use tith_exchange::{
 	ClientSession, CompletedResponse, OutstandingRequest, RequestKind, ResponseKind,
-	ResponseTracker, send_bundle,
+	ResponseTracker,
 };
 use tith_nodelist::Nodelist;
 use tith_router::selector_matches;
@@ -35,12 +35,10 @@ use tith_wire::integer::encode_u64;
 use tith_wire::item::{
 	Rejection, RejectionReason, set_request_identifier, validate_item, validate_payload,
 };
-use tith_wire::tlv::{OwnedTlv, TlvReader, parse_sequence};
+use tith_wire::tlv::{OwnedTlv, parse_sequence};
 use tith_wire::types;
 
-use crate::client_exchange::{
-	Exchange, FailureAction, StreamIo, failure_action, read_public_key_reply,
-};
+use crate::client_exchange::{Exchange, FailureAction, failure_action, request_public_key_reply};
 
 /// The most delivery copies one connection carries.
 ///
@@ -419,26 +417,7 @@ impl Outbound {
 				.encode(),
 		)?;
 		let stream = self.connect_address(address, expected)?;
-		#[cfg(test)]
-		eprintln!("probe client {:?}: connected", stream.local_addr());
-		let mut io = StreamIo(stream.try_clone()?);
-		send_bundle(&mut io, &request, false)?;
-		#[cfg(test)]
-		eprintln!(
-			"probe client {:?}: request sent and write shut",
-			stream.local_addr()
-		);
-		let mut reader = TlvReader::new(stream.try_clone()?);
-		let reply = read_public_key_reply(&mut reader, self, expected)?;
-		#[cfg(test)]
-		eprintln!(
-			"probe client {:?}: reply authenticated",
-			stream.local_addr()
-		);
-		// The authenticated response completes the dedicated exchange.  The
-		// Client has already closed its write side and now actively finishes the
-		// connection without waiting for Server FIN.
-		drop(stream.shutdown(Shutdown::Read));
+		let reply = request_public_key_reply(stream, &request, self, expected)?;
 		if reply.origin.address != *address || reply.destination != local.identity {
 			return Err("PublicKeyRequest reply has the wrong identities".into());
 		}
@@ -818,12 +797,14 @@ pub(crate) fn is_relay_delivery(
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use crate::client_exchange::read_public_key_reply;
 	use std::io::Cursor;
 	use std::io::Read;
 	use tith_crypto::{SigningKeyPair, TlvHash};
 	use tith_wire::address::Address;
 	use tith_wire::bundle::build_public_key_reply;
 	use tith_wire::item::{ItemProvenance, MessageData, build_originated_message};
+	use tith_wire::tlv::TlvReader;
 
 	/// A complete response followed by a connection which deliberately remains
 	/// open. Any read past the supplied bytes fails instead of returning EOF.

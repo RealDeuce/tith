@@ -242,6 +242,22 @@ fn join_writer(
 	Ok(())
 }
 
+/// Performs a dedicated probe using one owned socket for its sequential I/O.
+/// The connection ends before the caller can persist or use the returned key.
+pub(super) fn request_public_key_reply(
+	stream: TcpStream,
+	request: &[u8],
+	resolver: &dyn KeyResolver,
+	expected: Option<PublicKey>,
+) -> Result<Bundle, Box<dyn Error>> {
+	let mut io = StreamIo(stream);
+	send_bundle(&mut io, request, false)?;
+	let reply = read_public_key_reply(&mut TlvReader::new(&mut io), resolver, expected)?;
+	// Completion is the authenticated response, never Server FIN.
+	drop(io.0.shutdown(Shutdown::Read));
+	Ok(reply)
+}
+
 /// Reads exactly through the authenticated payload which completes a
 /// dedicated `PublicKeyRequest` reply.
 ///

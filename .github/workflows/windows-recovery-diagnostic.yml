@@ -22,7 +22,7 @@ jobs:
       - name: Verify the regression fails without the socket-close fix
         shell: pwsh
         run: |
-          git restore --source=f9ce8794e18cd085b8760e554880b897d452c969 -- crates/tithd/src/client_exchange.rs
+          git restore --source=f9ce8794e18cd085b8760e554880b897d452c969 -- crates/tithd/src/client_exchange.rs crates/tithd/src/deliver.rs
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo test --package tithd --no-run
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -46,7 +46,7 @@ jobs:
       - name: Repeat both recovery regressions on native Windows
         shell: pwsh
         run: |
-          1..20 | ForEach-Object {
+          1..50 | ForEach-Object {
             Write-Host "Recovery repetition $_"
             cargo test --package tithd mail::tests::authentication_failure_ -- --nocapture
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
