@@ -1358,10 +1358,37 @@ mod tests {
 		mailer: &Arc<Mailer>,
 	) -> std::thread::JoinHandle<()> {
 		let mailer = Arc::clone(mailer);
+		listener.set_nonblocking(true).unwrap();
 		std::thread::spawn(move || {
-			for connection in 0..3 {
-				let (stream, _) = listener.accept().unwrap();
+			for (connection, phase) in ["stale key", "predecessor probe", "operational retry"]
+				.into_iter()
+				.enumerate()
+			{
+				let deadline = std::time::Instant::now() + Duration::from_secs(30);
+				eprintln!("recovery fixture: waiting for {phase}");
+				let (stream, _) = loop {
+					match listener.accept() {
+						Ok(connection) => break connection,
+						Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+							assert!(
+								std::time::Instant::now() < deadline,
+								"timed out accepting {phase}"
+							);
+							std::thread::sleep(Duration::from_millis(5));
+						}
+						Err(error) => panic!("accepting {phase}: {error:?}"),
+					}
+				};
+				stream.set_nonblocking(false).unwrap();
+				stream
+					.set_read_timeout(Some(Duration::from_secs(30)))
+					.unwrap();
+				stream
+					.set_write_timeout(Some(Duration::from_secs(30)))
+					.unwrap();
+				eprintln!("recovery fixture: accepted {phase}");
 				let result = transaction(stream, &mailer);
+				eprintln!("recovery fixture: {phase}: {result:?}");
 				if connection == 0
 					&& result
 						.as_ref()
@@ -1369,7 +1396,7 @@ mod tests {
 				{
 					continue;
 				}
-				result.unwrap();
+				result.unwrap_or_else(|error| panic!("{phase} failed: {error:?}"));
 			}
 		})
 	}
@@ -1599,6 +1626,14 @@ mod tests {
 				now() + 3600,
 			)
 			.unwrap();
+		eprintln!(
+			"recovery fixture: client finished: connections={}, delivered={}, retained={}, failed={}, state={:?}",
+			summary.connections,
+			summary.delivered,
+			summary.retained,
+			summary.failed,
+			job_state(&sender, &job)
+		);
 		server.join().unwrap();
 
 		assert_eq!(summary.delivered, 1);
