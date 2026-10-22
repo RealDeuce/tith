@@ -1365,6 +1365,7 @@ mod tests {
 		mailer: &Arc<Mailer>,
 	) -> std::thread::JoinHandle<()> {
 		let mailer = Arc::clone(mailer);
+		// Bound every fixture phase so a missing close fails instead of hanging CI.
 		listener.set_nonblocking(true).unwrap();
 		std::thread::spawn(move || {
 			for (connection, phase) in ["stale key", "predecessor probe", "operational retry"]

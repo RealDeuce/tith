@@ -307,13 +307,7 @@ impl Write for StreamIo {
 
 impl ExchangeIo for StreamIo {
 	fn shutdown_write(&mut self) -> io::Result<()> {
-		let result = self.0.shutdown(Shutdown::Write);
-		#[cfg(test)]
-		eprintln!(
-			"client {:?}: shutdown write {result:?}",
-			self.0.local_addr()
-		);
-		normalize_shutdown(result)
+		normalize_shutdown(self.0.shutdown(Shutdown::Write))
 	}
 }
 
