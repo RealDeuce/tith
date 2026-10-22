@@ -22,7 +22,7 @@ jobs:
       - name: Verify the regression fails without the socket-close fix
         shell: pwsh
         run: |
-          git restore --source=f9ce8794e18cd085b8760e554880b897d452c969 -- crates/tithd/src/deliver.rs
+          git restore --source=f9ce8794e18cd085b8760e554880b897d452c969 -- crates/tithd/src/client_exchange.rs
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo test --package tithd --no-run
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -33,6 +33,7 @@ jobs:
             throw "Expected the unpatched Poll recovery to fail with its delivery deferred"
           }
           Write-Host "Confirmed: the same regression fails without the socket-close fix"
+          exit 0
 
   native-windows:
     runs-on: windows-latest

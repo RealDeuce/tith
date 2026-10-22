@@ -1355,6 +1355,7 @@ mod tests {
 				std::io::ErrorKind::ConnectionAborted
 					| std::io::ErrorKind::ConnectionReset
 					| std::io::ErrorKind::BrokenPipe
+					| std::io::ErrorKind::NotConnected
 			)
 		})
 	}
@@ -1409,6 +1410,9 @@ mod tests {
 
 	#[test]
 	fn expected_stale_close_recognises_a_wrapped_exchange_io_error() {
+		assert!(is_expected_stale_close(&std::io::Error::from(
+			std::io::ErrorKind::NotConnected
+		)));
 		let framed = tith_wire::tlv::FramingError::Io(std::io::Error::from(
 			std::io::ErrorKind::ConnectionReset,
 		));

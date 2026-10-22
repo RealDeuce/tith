@@ -585,12 +585,8 @@ impl Outbound {
 		let tracker = ResponseTracker::for_bundle(&bundle, self)?;
 		let mut session = ClientSession::new(tracker);
 		let mut stream = self.connect(destination)?;
-		let result = self.converse(&mut stream, &encoded, &mut session, local, destination);
-		// TTS-0006 section 5 requires a failed Header exchange to close. In
-		// particular, a Poll's open write side must not hold the peer's old
-		// transaction open while continuity recovery waits for a new one.
-		drop(stream);
-		let exchange = match result {
+		let exchange = match self.converse(&mut stream, &encoded, &mut session, local, destination)
+		{
 			Ok(exchange) => exchange,
 			Err(error) => match failure_action(
 				!session.responses().is_empty(),

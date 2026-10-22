@@ -136,6 +136,13 @@ impl Outbound {
 			}
 			Ok((answers, returned, close_after_reply))
 		})();
+		if received.is_err() {
+			// TTS-0006 section 5: close the failed exchange before a caller
+			// attempts continuity recovery. A Poll otherwise leaves its write
+			// side open and can keep a serial peer from answering the probe.
+			// This also releases a writer if the peer has stopped reading.
+			drop(stream.shutdown(Shutdown::Both));
+		}
 		join_writer(writer)?;
 		let (answers, returned, close_after_reply) = received?;
 		if keep_open {
