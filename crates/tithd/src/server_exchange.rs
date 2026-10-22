@@ -33,13 +33,9 @@ pub(super) struct PollHold {
 }
 
 pub(super) fn transaction(mut stream: TcpStream, mailer: &Mailer) -> Result<(), Box<dyn Error>> {
-	#[cfg(test)]
-	eprintln!("server {:?}: reading Header", stream.peer_addr());
 	let mut writer = stream.try_clone()?;
 	let mut reader = TlvReader::new(&mut stream as &mut dyn std::io::Read);
 	let request = read_header(&mut reader, None, mailer)?.ok_or("empty mail connection")?;
-	#[cfg(test)]
-	eprintln!("server {:?}: reading first payload", writer.peer_addr());
 	let first = reader
 		.read_next()?
 		.map(tith_wire::tlv::TlvValue::read_owned)
@@ -51,11 +47,6 @@ pub(super) fn transaction(mut stream: TcpStream, mailer: &Mailer) -> Result<(), 
 				&& data[0].type_code == types::TLV_HASH
 				&& data[1].type_code == types::PUBLIC_KEY_REQUEST
 		}) {
-		#[cfg(test)]
-		eprintln!(
-			"server {:?}: dedicated probe, checking EOF",
-			writer.peer_addr()
-		);
 		let mut encoded = request.prefix.clone();
 		encoded.extend_from_slice(&value.encode());
 		let probe = Bundle::parse(&encoded, mailer)?;
@@ -75,11 +66,6 @@ pub(super) fn transaction(mut stream: TcpStream, mailer: &Mailer) -> Result<(), 
 	}
 	let reply =
 		ServerReply::for_request(&request.bundle, &mailer.local, &mailer.local_secret, now())?;
-	#[cfg(test)]
-	eprintln!(
-		"server {:?}: writing operational Header",
-		writer.peer_addr()
-	);
 	writer.write_all(reply.prefix())?;
 	writer.flush()?;
 
@@ -93,21 +79,11 @@ pub(super) fn transaction(mut stream: TcpStream, mailer: &Mailer) -> Result<(), 
 		&mut holds,
 		first,
 	);
-	#[cfg(test)]
-	eprintln!(
-		"server {:?}: respond returned {result:?}",
-		writer.peer_addr()
-	);
 	// Whatever happened, every copy this connection claimed needs an outcome.
 	// TSP-0002 section 6: a request with no complete response remains eligible
 	// and does not invoke permanent failure policy.
 	release_holds(&holds, mailer)?;
 	result?;
-	#[cfg(test)]
-	eprintln!(
-		"server {:?}: shutting operational write side",
-		writer.peer_addr()
-	);
 	writer.shutdown(Shutdown::Write)?;
 	Ok(())
 }
@@ -133,18 +109,8 @@ fn answer_public_key_request(
 	let secret = &mailer.local_secret;
 	let retired = &mailer.retired_secrets;
 	let encoded = crate::public_key_response::build(local, secret, retired, parameters)?;
-	#[cfg(test)]
-	eprintln!(
-		"server {:?}: writing complete key proof",
-		writer.peer_addr()
-	);
 	writer.write_all(&encoded)?;
 	writer.flush()?;
-	#[cfg(test)]
-	eprintln!(
-		"server {:?}: shutting key-proof write side",
-		writer.peer_addr()
-	);
 	writer.shutdown(Shutdown::Write)?;
 	Ok(())
 }

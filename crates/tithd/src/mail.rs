@@ -1342,6 +1342,12 @@ mod tests {
 					Some(tith_exchange::ExchangeError::Io(error)) => Some(error.kind()),
 					_ => None,
 				},
+			)
+			.or_else(
+				|| match error.downcast_ref::<tith_wire::tlv::FramingError>() {
+					Some(tith_wire::tlv::FramingError::Io(error)) => Some(error.kind()),
+					_ => None,
+				},
 			);
 		kind.is_some_and(|kind| {
 			matches!(
@@ -1403,6 +1409,13 @@ mod tests {
 
 	#[test]
 	fn expected_stale_close_recognises_a_wrapped_exchange_io_error() {
+		let framed = tith_wire::tlv::FramingError::Io(std::io::Error::from(
+			std::io::ErrorKind::ConnectionReset,
+		));
+		assert!(is_expected_stale_close(&framed));
+		assert!(!is_expected_stale_close(
+			&tith_wire::tlv::FramingError::InvalidType
+		));
 		let wrapped = tith_exchange::ExchangeError::Io(std::io::Error::new(
 			std::io::ErrorKind::ConnectionAborted,
 			"the Client actively closed",
@@ -1584,6 +1597,15 @@ mod tests {
 
 	#[test]
 	fn authentication_failure_probes_the_predecessor_and_retries_once() {
+		stale_key_recovery(false);
+	}
+
+	#[test]
+	fn authentication_failure_closes_a_poll_before_probing_the_predecessor() {
+		stale_key_recovery(true);
+	}
+
+	fn stale_key_recovery(with_polls: bool) {
 		let sender_keys = SigningKeyPair::from_seed(&[53; 32]).unwrap();
 		let retired = SigningKeyPair::from_seed(&[54; 32]).unwrap();
 		let retired_public = retired.public;
@@ -1597,7 +1619,11 @@ mod tests {
 		let port = listener.local_addr().unwrap().port();
 
 		let mut receiver = node(
-			"rotate-receiver",
+			if with_polls {
+				"rotate-poll-receiver"
+			} else {
+				"rotate-receiver"
+			},
 			"fidonet#1/2",
 			receiver_keys,
 			"Peer sender\nAddress fidonet#1\nEnd\n",
@@ -1611,7 +1637,11 @@ mod tests {
 		let server = accept_stale_key_retry(listener, &receiver.mailer);
 
 		let sender = node(
-			"rotate-sender",
+			if with_polls {
+				"rotate-poll-sender"
+			} else {
+				"rotate-sender"
+			},
 			"fidonet#1",
 			sender_keys,
 			&format!("Peer remote\nAddress fidonet#1/2\nEndpoint 127.0.0.1 {port}\nEnd\n"),
@@ -1619,13 +1649,22 @@ mod tests {
 			&list,
 		);
 		let job = submit(&sender, "fidonet#1/2", "Active \"@remote\"", "rotated");
-		let summary = driver(&sender)
-			.run_pass(
-				&schedule(&sender.mailer.local_ref, Vec::new()),
+		let summary = if with_polls {
+			let (_, pass) = driver(&sender).run_polls(
+				&schedule(&sender.mailer.local_ref, vec!["remote".to_owned()]),
 				now(),
 				now() + 3600,
-			)
-			.unwrap();
+			);
+			pass
+		} else {
+			driver(&sender)
+				.run_pass(
+					&schedule(&sender.mailer.local_ref, Vec::new()),
+					now(),
+					now() + 3600,
+				)
+				.unwrap()
+		};
 		eprintln!(
 			"recovery fixture: client finished: connections={}, delivered={}, retained={}, failed={}, state={:?}",
 			summary.connections,

@@ -419,17 +419,10 @@ impl Outbound {
 				.encode(),
 		)?;
 		let stream = self.connect_address(address, expected)?;
-		#[cfg(test)]
-		eprintln!("discovery {:?}: sending key probe", stream.local_addr());
 		let mut io = StreamIo(stream.try_clone()?);
 		send_bundle(&mut io, &request, false)?;
 		let mut reader = TlvReader::new(stream.try_clone()?);
 		let reply = read_public_key_reply(&mut reader, self, expected)?;
-		#[cfg(test)]
-		eprintln!(
-			"discovery {:?}: authenticated complete key proof",
-			stream.local_addr()
-		);
 		// The authenticated response completes the dedicated exchange.  The
 		// Client has already closed its write side and now actively finishes the
 		// connection without waiting for Server FIN.
@@ -479,8 +472,6 @@ impl Outbound {
 		let outcomes = match self.exchange(local, group, now, next_attempt) {
 			Ok(outcomes) => outcomes,
 			Err(error) => {
-				#[cfg(test)]
-				eprintln!("delivery exchange failed: {error:?}");
 				// A connection which never completed leaves every copy eligible;
 				// TSP-0002 section 6 keeps permanent policy for a real response.
 				let result = format!("delivery attempt failed: {error}");
@@ -594,8 +585,12 @@ impl Outbound {
 		let tracker = ResponseTracker::for_bundle(&bundle, self)?;
 		let mut session = ClientSession::new(tracker);
 		let mut stream = self.connect(destination)?;
-		let exchange = match self.converse(&mut stream, &encoded, &mut session, local, destination)
-		{
+		let result = self.converse(&mut stream, &encoded, &mut session, local, destination);
+		// TTS-0006 section 5 requires a failed Header exchange to close. In
+		// particular, a Poll's open write side must not hold the peer's old
+		// transaction open while continuity recovery waits for a new one.
+		drop(stream);
+		let exchange = match result {
 			Ok(exchange) => exchange,
 			Err(error) => match failure_action(
 				!session.responses().is_empty(),
@@ -603,8 +598,6 @@ impl Outbound {
 				&*error,
 			) {
 				FailureAction::RecoverContinuity => {
-					#[cfg(test)]
-					eprintln!("recovery: stale Header, starting predecessor probe");
 					let key = self.discover_key(
 						local,
 						&destination.address,

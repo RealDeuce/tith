@@ -1,4 +1,4 @@
-name: Diagnose Windows key recovery
+name: Verify Windows key recovery
 
 on:
   push:
@@ -9,37 +9,30 @@ permissions:
   contents: read
 
 jobs:
-  unmodified-windows:
+  regression-control:
     runs-on: windows-latest
-    timeout-minutes: 6
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          ref: f9ce8794e18cd085b8760e554880b897d452c969
+          fetch-depth: 0
       - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772
         with:
           toolchain: 1.97.1
-      - name: Build the unmodified publishing commit
-        run: cargo test --package tithd --no-run
-      - name: Repeat unmodified recovery and concurrent daemon tests
+      - name: Verify the regression fails without the socket-close fix
         shell: pwsh
         run: |
-          function Invoke-BoundedTest([string[]] $TestArguments) {
-            $test = Start-Process cargo -ArgumentList $TestArguments -NoNewWindow -PassThru
-            if (-not $test.WaitForExit(90000)) {
-              taskkill /PID $test.Id /T /F
-              throw "Unmodified test exceeded 90 seconds: $TestArguments"
-            }
-            if ($test.ExitCode -ne 0) { exit $test.ExitCode }
+          git restore --source=f9ce8794e18cd085b8760e554880b897d452c969 -- crates/tithd/src/deliver.rs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --package tithd --no-run
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --package tithd mail::tests::authentication_failure_closes_a_poll_before_probing_the_predecessor -- --exact --nocapture 2>&1 | Tee-Object -FilePath regression-control.log
+          $testExit = $LASTEXITCODE
+          $log = Get-Content -Raw regression-control.log
+          if ($testExit -ne 101 -or -not $log.Contains('state=Deferred')) {
+            throw "Expected the unpatched Poll recovery to fail with its delivery deferred"
           }
-          1..20 | ForEach-Object {
-            Write-Host "Unmodified isolated recovery repetition $_"
-            Invoke-BoundedTest @('test', '--package', 'tithd', 'mail::tests::authentication_failure_probes_the_predecessor_and_retries_once', '--', '--exact', '--nocapture')
-          }
-          1..5 | ForEach-Object {
-            Write-Host "Unmodified concurrent daemon repetition $_"
-            Invoke-BoundedTest @('test', '--package', 'tithd', '--', '--nocapture')
-          }
+          Write-Host "Confirmed: the same regression fails without the socket-close fix"
 
   native-windows:
     runs-on: windows-latest
@@ -49,12 +42,12 @@ jobs:
       - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772
         with:
           toolchain: 1.97.1
-      - name: Repeat isolated recovery on native Windows
+      - name: Repeat both recovery regressions on native Windows
         shell: pwsh
         run: |
           1..20 | ForEach-Object {
-            Write-Host "Isolated recovery repetition $_"
-            cargo test --package tithd mail::tests::authentication_failure_probes_the_predecessor_and_retries_once -- --exact --nocapture
+            Write-Host "Recovery repetition $_"
+            cargo test --package tithd mail::tests::authentication_failure_ -- --nocapture
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           }
       - name: Repeat concurrent daemon tests on native Windows
